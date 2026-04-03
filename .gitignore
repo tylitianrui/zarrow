@@ -1,3 +1,31 @@
-.zig-cache/
-zig-out/
+# Zig build cache and generated outputs
+/.zig-cache/
+/zig-out/
+
+# Native build artifacts
 *.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local scratch and archive files
+*.log
+*.tmp
+*.bak
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.7z
+
