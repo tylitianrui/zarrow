@@ -55,7 +55,7 @@ pub const MutableBuffer = struct {
     // Allocate a zero-initialized writable buffer with Arrow-style alignment.
     pub fn init(allocator: std.mem.Allocator, capacity: usize) !MutableBuffer {
         const actualCapacity = alignedSize(if (capacity == 0) ALIGNMENT else capacity);
-        const data = try allocator.alignedAlloc(u8, ALIGNMENT, actualCapacity);
+        const data = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(ALIGNMENT), actualCapacity);
         @memset(data, 0);
         return .{ .data = data, .allocator = allocator };
     }
@@ -88,7 +88,7 @@ pub const MutableBuffer = struct {
     // Reallocate the buffer while preserving the overlapping byte range.
     pub fn resize(self: *MutableBuffer, newSize: usize) !void {
         const actualSize = alignedSize(newSize);
-        const newData = try self.allocator.alignedAlloc(u8, ALIGNMENT, actualSize);
+        const newData = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(ALIGNMENT), actualSize);
         const copySize = @min(self.data.len, actualSize);
         @memcpy(newData[0..copySize], self.data[0..copySize]);
         if (actualSize > copySize) @memset(newData[copySize..], 0);
