@@ -25,6 +25,7 @@ pub fn PrimitiveArray(comptime T: type) type {
         }
 
         pub fn values(self: Self) []const T {
+            // Primitive arrays require [validity] and [values] buffers.
             std.debug.assert(self.data.buffers.len >= 2);
             const raw = self.data.buffers[1].typedSlice(T);
             return raw[self.data.offset .. self.data.offset + self.data.length];
@@ -58,6 +59,7 @@ fn ensureBitmapCapacity(buf: *MutableBuffer, bit_len: usize) !void {
 }
 
 /// Generic builder for fixed-width primitive arrays.
+/// The caller must specify the data type and handle validity bits as needed.
 pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
     return struct {
         allocator: std.mem.Allocator,

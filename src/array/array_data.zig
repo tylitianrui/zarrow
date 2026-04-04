@@ -7,6 +7,16 @@ pub const Buffer = buffer.Buffer;
 pub const ValidityBitmap = bitmap.ValidityBitmap;
 pub const DataType = datatype.DataType;
 
+pub const ValidationError = error{
+    InvalidBufferCount,
+    BufferTooSmall,
+    InvalidOffsetBuffer,
+    InvalidOffsets,
+    InvalidNullCount,
+    MissingDictionary,
+    InvalidChildren,
+};
+
 /// Core Arrow array metadata and buffers.
 ///
 /// Field semantics:
@@ -102,6 +112,165 @@ pub const ArrayData = struct {
         self.null_count = @intCast(count);
         return count;
     }
+
+    fn fixedWidthByteSize(dt: DataType) ?usize {
+        return switch (dt) {
+            .bool => 1,
+            .uint8, .int8 => 1,
+            .uint16, .int16 => 2,
+            .uint32, .int32 => 4,
+            .uint64, .int64 => 8,
+            .half_float => 2,
+            .float => 4,
+            .double => 8,
+            .date32 => 4,
+            .date64 => 8,
+            .time32 => 4,
+            .time64 => 8,
+            .timestamp => 8,
+            .duration => 8,
+            .interval_months => 4,
+            .interval_day_time => 8,
+            .interval_month_day_nano => 16,
+            .decimal32 => 4,
+            .decimal64 => 8,
+            .decimal128 => 16,
+            .decimal256 => 32,
+            .fixed_size_binary => |fsb| @intCast(fsb.byte_width),
+            else => null,
+        };
+    }
+
+    fn offsetByteWidth(dt: DataType) ?usize {
+        return switch (dt) {
+            .string, .binary, .list, .list_view, .map => 4,
+            .large_string, .large_binary, .large_list, .large_list_view => 8,
+            else => null,
+        };
+    }
+
+    fn validateOffsetsI32(offsets: []const i32, total_len: usize, data_len: usize) ValidationError!void {
+        if (offsets.len < total_len + 1) return error.BufferTooSmall;
+        var prev: i32 = offsets[0];
+        if (prev < 0) return error.InvalidOffsets;
+        var i: usize = 1;
+        while (i < total_len + 1) : (i += 1) {
+            const cur = offsets[i];
+            if (cur < prev or cur < 0) return error.InvalidOffsets;
+            prev = cur;
+        }
+        if (@as(usize, @intCast(prev)) > data_len) return error.InvalidOffsets;
+    }
+
+    fn validateOffsetsI64(offsets: []const i64, total_len: usize, data_len: usize) ValidationError!void {
+        if (offsets.len < total_len + 1) return error.BufferTooSmall;
+        var prev: i64 = offsets[0];
+        if (prev < 0) return error.InvalidOffsets;
+        var i: usize = 1;
+        while (i < total_len + 1) : (i += 1) {
+            const cur = offsets[i];
+            if (cur < prev or cur < 0) return error.InvalidOffsets;
+            prev = cur;
+        }
+        if (@as(usize, @intCast(prev)) > data_len) return error.InvalidOffsets;
+    }
+
+    pub fn validateLayout(self: Self) ValidationError!void {
+        if (self.null_count < -1) return error.InvalidNullCount;
+
+        const total_len = self.offset + self.length;
+        if (self.buffers.len > 0 and !self.buffers[0].isEmpty()) {
+            const needed = bitmap.byteLength(total_len);
+            if (self.buffers[0].len() < needed) return error.BufferTooSmall;
+        }
+
+        switch (self.data_type) {
+            .null => {},
+            .bool => {
+                if (self.buffers.len < 2) return error.InvalidBufferCount;
+                const needed = bitmap.byteLength(total_len);
+                if (self.buffers[1].len() < needed) return error.BufferTooSmall;
+            },
+            .string, .binary, .list, .list_view, .map, .large_string, .large_binary, .large_list, .large_list_view => {
+                if (self.buffers.len < 2) return error.InvalidBufferCount;
+                const offset_width = offsetByteWidth(self.data_type).?;
+                if (self.buffers[1].len() % offset_width != 0) return error.InvalidOffsetBuffer;
+                if (self.buffers.len < 3 and (self.data_type == .string or self.data_type == .binary or self.data_type == .large_string or self.data_type == .large_binary)) {
+                    return error.InvalidBufferCount;
+                }
+
+                const data_len = if (self.buffers.len >= 3) self.buffers[2].len() else 0;
+                if (offset_width == 4) {
+                    const offsets = self.buffers[1].typedSlice(i32);
+                    try validateOffsetsI32(offsets, total_len, data_len);
+                } else {
+                    const offsets = self.buffers[1].typedSlice(i64);
+                    try validateOffsetsI64(offsets, total_len, data_len);
+                }
+
+                if (self.data_type == .list or self.data_type == .list_view or self.data_type == .large_list or self.data_type == .large_list_view or self.data_type == .map) {
+                    if (self.children.len != 1) return error.InvalidChildren;
+                }
+            },
+            .fixed_size_list, .struct_ => {
+                if (self.buffers.len < 1) return error.InvalidBufferCount;
+                const expected = switch (self.data_type) {
+                    .fixed_size_list => 1,
+                    .struct_ => |st| st.fields.len,
+                    else => 0,
+                };
+                if (self.children.len != expected) return error.InvalidChildren;
+            },
+            .dictionary => |dict| {
+                if (self.buffers.len < 2) return error.InvalidBufferCount;
+                const byte_width = dict.index_type.bit_width / 8;
+                if (byte_width == 0) return error.InvalidOffsetBuffer;
+                if (self.buffers[1].len() < total_len * byte_width) return error.BufferTooSmall;
+                if (self.dictionary == null) return error.MissingDictionary;
+            },
+            .sparse_union => |uni| {
+                if (self.buffers.len < 1) return error.InvalidBufferCount;
+                if (self.children.len != uni.fields.len) return error.InvalidChildren;
+            },
+            .dense_union => |uni| {
+                if (self.buffers.len < 2) return error.InvalidBufferCount;
+                if (self.children.len != uni.fields.len) return error.InvalidChildren;
+            },
+            .run_end_encoded => {
+                if (self.buffers.len < 1) return error.InvalidBufferCount;
+                if (self.children.len != 1) return error.InvalidChildren;
+            },
+            else => {
+                if (fixedWidthByteSize(self.data_type)) |byte_width| {
+                    if (self.buffers.len < 2) return error.InvalidBufferCount;
+                    if (byte_width == 0) return error.InvalidOffsetBuffer;
+                    if (self.buffers[1].len() < total_len * byte_width) return error.BufferTooSmall;
+                }
+            },
+        }
+    }
+
+    pub fn validateFull(self: Self) ValidationError!void {
+        try self.validateLayout();
+
+        if (self.null_count < -1) return error.InvalidNullCount;
+        if (self.null_count > 0) {
+            if (self.buffers.len == 0 or self.buffers[0].isEmpty()) return error.InvalidNullCount;
+        }
+
+        if (self.null_count >= 0 and self.buffers.len > 0 and !self.buffers[0].isEmpty()) {
+            const validity_bitmap = ValidityBitmap.fromBuffer(self.buffers[0], self.offset + self.length);
+            var count: usize = 0;
+            var i: usize = 0;
+            while (i < self.length) : (i += 1) {
+                if (!validity_bitmap.isValid(self.offset + i)) count += 1;
+            }
+            if (count != @as(usize, @intCast(self.null_count))) return error.InvalidNullCount;
+        }
+
+        for (self.children) |child| try child.validateFull();
+        if (self.dictionary) |dict| try dict.validateFull();
+    }
 };
 
 test "array data slice updates offset and length" {
@@ -161,4 +330,37 @@ test "array data slice on unknown null count" {
     try std.testing.expectEqual(@as(usize, 3), sliced.length);
     try std.testing.expectEqual(@as(usize, 3), sliced.offset);
     try std.testing.expectEqual(@as(isize, -1), sliced.null_count);
+}
+
+test "array data validateLayout accepts primitive" {
+    const dtype = DataType{ .int32 = {} };
+    var values_bytes: [3 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(values_bytes[0..], std.mem.sliceAsBytes(&[_]i32{ 1, 2, 3 }));
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 3,
+        .null_count = 0,
+        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(values_bytes[0..]) },
+    };
+
+    try data.validateLayout();
+    try data.validateFull();
+}
+
+test "array data validateLayout catches invalid offsets" {
+    const dtype = DataType{ .binary = {} };
+    const offsets = [_]i32{ 0, 4, 2 };
+    var offset_bytes: [offsets.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(offset_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 2,
+        .buffers = &[_]Buffer{
+            Buffer.empty,
+            Buffer.fromSlice(offset_bytes[0..]),
+            Buffer.fromSlice("zzzz"),
+        },
+    };
+
+    try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
 }
