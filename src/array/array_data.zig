@@ -31,7 +31,7 @@ pub const DataType = datatype.DataType;
 /// - Map: [validity], [i32 offsets], children[0] = struct of (key, item).
 /// - RunEndEncoded: [run_ends], children[0] = values.
 pub const ArrayData = struct {
-    data_type: *const DataType,
+    data_type: DataType,
     length: usize,
     offset: usize = 0,
     null_count: isize = -1, // -1 means unknown; 0 means no nulls
@@ -39,24 +39,56 @@ pub const ArrayData = struct {
     children: []const ArrayData = &.{},
     dictionary: ?*const ArrayData = null,
 
-    pub fn validity(self: ArrayData) ?ValidityBitmap {
+    const Self = @This();
+
+    pub fn validity(self: Self) ?ValidityBitmap {
         if (self.buffers.len == 0) return null;
         if (self.buffers[0].isEmpty()) return null;
         return ValidityBitmap.fromBuffer(self.buffers[0], self.length + self.offset);
     }
 
-    pub fn isNull(self: ArrayData, i: usize) bool {
+    pub fn isNull(self: Self, i: usize) bool {
         std.debug.assert(i < self.length);
         if (self.null_count == 0) return false;
         const validity_bitmap = self.validity() orelse return false;
         return !validity_bitmap.isValid(self.offset + i);
     }
 
-    pub fn isValid(self: ArrayData, i: usize) bool {
+    pub fn isValid(self: Self, i: usize) bool {
         return !self.isNull(i);
     }
 
-    pub fn nullCount(self: *ArrayData) usize {
+    pub fn hasNulls(self: Self) bool {
+        if (self.null_count == 0) return false;
+        if (self.null_count > 0) return true;
+        const validity_bitmap = self.validity() orelse return false;
+        return validity_bitmap.countNulls() > 0;
+    }
+
+    pub fn setNullCountUnknown(self: *Self) void {
+        self.null_count = -1;
+    }
+
+    pub fn setNullCountKnown(self: *Self, count: usize) void {
+        self.null_count = @intCast(count);
+    }
+
+    pub fn slice(self: Self, offset: usize, length: usize) Self {
+        std.debug.assert(offset <= self.length);
+        std.debug.assert(offset + length <= self.length);
+
+        return .{
+            .data_type = self.data_type,
+            .length = length,
+            .offset = self.offset + offset,
+            .null_count = if (self.null_count == 0) 0 else -1,
+            .buffers = self.buffers,
+            .children = self.children,
+            .dictionary = self.dictionary,
+        };
+    }
+
+    pub fn nullCount(self: *Self) usize {
         if (self.null_count >= 0) return @intCast(self.null_count);
         const validity_bitmap = self.validity() orelse {
             self.null_count = 0;
@@ -71,3 +103,62 @@ pub const ArrayData = struct {
         return count;
     }
 };
+
+test "array data slice updates offset and length" {
+    const dtype = DataType{ .int32 = {} };
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 10,
+        .offset = 2,
+        .null_count = 0,
+        .buffers = &[_]Buffer{Buffer.empty},
+    };
+
+    const sliced = data.slice(3, 4);
+    try std.testing.expectEqual(@as(usize, 4), sliced.length);
+    try std.testing.expectEqual(@as(usize, 5), sliced.offset);
+    try std.testing.expectEqual(@as(isize, 0), sliced.null_count);
+}
+
+test "array data nullCount caches when unknown" {
+    const dtype = DataType{ .int32 = {} };
+    var validity: [1]u8 = .{0b0000_1101};
+    var data = ArrayData{
+        .data_type = dtype,
+        .length = 4,
+        .null_count = -1,
+        .buffers = &[_]Buffer{Buffer.fromSlice(validity[0..])},
+    };
+
+    try std.testing.expectEqual(@as(usize, 1), data.nullCount());
+    try std.testing.expectEqual(@as(isize, 1), data.null_count);
+    try std.testing.expect(data.hasNulls());
+}
+
+test "array data hasNulls handles no validity" {
+    const dtype = DataType{ .int32 = {} };
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 3,
+        .null_count = -1,
+        .buffers = &[_]Buffer{Buffer.empty},
+    };
+
+    try std.testing.expect(!data.hasNulls());
+}
+
+test "array data slice on unknown null count" {
+    const dtype = DataType{ .int32 = {} };
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 6,
+        .offset = 1,
+        .null_count = -1,
+        .buffers = &[_]Buffer{Buffer.empty},
+    };
+
+    const sliced = data.slice(2, 3);
+    try std.testing.expectEqual(@as(usize, 3), sliced.length);
+    try std.testing.expectEqual(@as(usize, 3), sliced.offset);
+    try std.testing.expectEqual(@as(isize, -1), sliced.null_count);
+}

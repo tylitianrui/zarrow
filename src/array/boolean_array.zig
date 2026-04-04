@@ -126,7 +126,7 @@ pub const BooleanBuilder = struct {
         self.buffers[1] = self.values.toBuffer(bitmap.byteLength(self.len));
         return BooleanArray{
             .data = ArrayData{
-                .data_type = &BOOL_TYPE,
+                .data_type = BOOL_TYPE,
                 .length = self.len,
                 .null_count = self.null_count,
                 .buffers = self.buffers[0..],

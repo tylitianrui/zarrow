@@ -130,7 +130,7 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
             self.buffers[1] = self.values.toBuffer(self.len * @sizeOf(T));
             return PrimitiveArray(T){
                 .data = ArrayData{
-                    .data_type = &TYPE,
+                    .data_type = TYPE,
                     .length = self.len,
                     .null_count = self.null_count,
                     .buffers = self.buffers[0..],

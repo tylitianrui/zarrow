@@ -143,7 +143,7 @@ pub const StringBuilder = struct {
         self.buffers[2] = self.data.toBuffer(self.data_len);
         return StringArray{
             .data = ArrayData{
-                .data_type = &STRING_TYPE,
+                .data_type = STRING_TYPE,
                 .length = self.len,
                 .null_count = self.null_count,
                 .buffers = self.buffers[0..],
@@ -159,7 +159,7 @@ test "string array reads slices" {
     var offset_bytes: [offsets.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
     @memcpy(offset_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
     const data = ArrayData{
-        .data_type = &dtype,
+        .data_type = dtype,
         .length = 2,
         .buffers = &[_]Buffer{
             Buffer.empty,

@@ -36,7 +36,7 @@ test "binary array reads slices" {
     var offset_bytes: [offsets.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
     @memcpy(offset_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
     const data = ArrayData{
-        .data_type = &dtype,
+        .data_type = dtype,
         .length = 2,
         .buffers = &[_]Buffer{
             Buffer.empty,
