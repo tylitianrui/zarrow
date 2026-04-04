@@ -1,8 +1,8 @@
 const std = @import("std");
-const root = @import("zarrow");
+const zarrow = @import("zarrow");
 
 pub fn main() !void {
-    var builder = try root.Int32Builder.init(std.heap.page_allocator, 3);
+    var builder = try zarrow.Int32Builder.init(std.heap.page_allocator, 3);
     defer builder.deinit();
 
     try builder.append(10);
@@ -11,7 +11,7 @@ pub fn main() !void {
 
     const array = builder.finish();
 
-    std.debug.print("len={d}, value_0={d}, isNull_1={any}, value_2={d}\n", .{
+    std.debug.print("examples/primitive_builder.zig | type=Int32Builder | length={d}, value0={d}, isNull1={any}, value2={d}\n", .{
         array.len(),
         array.value(0),
         array.isNull(1),
