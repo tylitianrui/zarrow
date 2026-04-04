@@ -63,6 +63,7 @@ pub const StringArray = array.StringArray;
 pub const BinaryArray = array.BinaryArray;
 pub const BooleanBuilder = array.BooleanBuilder;
 pub const StringBuilder = array.StringBuilder;
+pub const BinaryBuilder = array.BinaryBuilder;
 
 // Pull buffer tests into the root test target.
 test {

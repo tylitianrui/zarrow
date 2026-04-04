@@ -29,3 +29,4 @@ pub const BooleanBuilder = @import("boolean_array.zig").BooleanBuilder;
 pub const StringArray = @import("string_array.zig").StringArray;
 pub const StringBuilder = @import("string_array.zig").StringBuilder;
 pub const BinaryArray = @import("binary_array.zig").BinaryArray;
+pub const BinaryBuilder = @import("binary_array.zig").BinaryBuilder;
