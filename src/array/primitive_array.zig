@@ -2,6 +2,7 @@ const std = @import("std");
 const bitmap = @import("../bitmap.zig");
 const buffer = @import("../buffer.zig");
 const array_ref = @import("array_ref.zig");
+const builder_state = @import("builder_state.zig");
 const datatype = @import("../datatype.zig");
 const array_data = @import("array_data.zig");
 
@@ -10,6 +11,7 @@ pub const OwnedBuffer = buffer.OwnedBuffer;
 pub const DataType = datatype.DataType;
 pub const ArrayData = array_data.ArrayData;
 pub const ArrayRef = array_ref.ArrayRef;
+pub const BuilderState = builder_state.BuilderState;
 
 /// Generic array view for fixed-width primitive types.
 pub fn PrimitiveArray(comptime T: type) type {
@@ -70,11 +72,11 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
         buffers: [2]SharedBuffer = undefined,
         len: usize = 0,
         null_count: isize = 0,
-        finished: bool = false,
+        state: BuilderState = .ready,
 
         const Self = @This();
 
-        const BuilderError = error{AlreadyFinished};
+        const BuilderError = error{ AlreadyFinished, NotFinished };
 
         const TYPE: DataType = dtype;
 
@@ -90,19 +92,21 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
             if (self.validity) |*valid| valid.deinit();
         }
 
-        pub fn reset(self: *Self) void {
+        pub fn reset(self: *Self) BuilderError!void {
+            if (self.state != .finished) return BuilderError.NotFinished;
             self.len = 0;
             self.null_count = 0;
-            self.finished = false;
+            self.state = .ready;
         }
 
-        pub fn clear(self: *Self) void {
+        pub fn clear(self: *Self) BuilderError!void {
+            if (self.state != .finished) return BuilderError.NotFinished;
             self.values.deinit();
             if (self.validity) |*valid| valid.deinit();
             self.validity = null;
             self.len = 0;
             self.null_count = 0;
-            self.finished = false;
+            self.state = .ready;
         }
 
         fn ensureValuesCapacity(self: *Self, new_len: usize) !void {
@@ -133,7 +137,7 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
         }
 
         pub fn append(self: *Self, value: T) !void {
-            if (self.finished) return BuilderError.AlreadyFinished;
+            if (self.state == .finished) return BuilderError.AlreadyFinished;
             const next_len = self.len + 1;
             try self.ensureValuesCapacity(next_len);
             const slice = std.mem.bytesAsSlice(T, self.values.data);
@@ -143,7 +147,7 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
         }
 
         pub fn appendNull(self: *Self) !void {
-            if (self.finished) return BuilderError.AlreadyFinished;
+            if (self.state == .finished) return BuilderError.AlreadyFinished;
             const next_len = self.len + 1;
             try self.ensureValuesCapacity(next_len);
             try self.ensureValidityForNull(next_len);
@@ -151,7 +155,7 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
         }
 
         pub fn finish(self: *Self) !ArrayRef {
-            if (self.finished) return BuilderError.AlreadyFinished;
+            if (self.state == .finished) return BuilderError.AlreadyFinished;
             const validity_buf = if (self.validity) |*buf| try buf.toShared(bitmap.byteLength(self.len)) else SharedBuffer.empty;
             self.buffers[0] = validity_buf;
             self.buffers[1] = try self.values.toShared(self.len * @sizeOf(T));
@@ -167,13 +171,13 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
                 .buffers = buffers,
             };
 
-            self.finished = true;
+            self.state = .finished;
             return ArrayRef.fromOwned(self.allocator, data);
         }
 
         pub fn finishReset(self: *Self) !ArrayRef {
             const finished_ref = try self.finish();
-            self.reset();
+            try self.reset();
             return finished_ref;
         }
     };

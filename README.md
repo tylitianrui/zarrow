@@ -93,7 +93,7 @@ This is an advanced API. If unsure, prefer `fromOwned()` or `fromBorrowed()`.
 `ArrayRef.slice()` is zero-copy.
 
 - buffers are retained, not copied
-- child refs are retained
+- child refs are retained (and some types perform deeper, type-aware slicing)
 - dictionary refs are retained
 
 The returned value is another `ArrayRef` and must also be released.
@@ -104,7 +104,7 @@ The current implementation is still incomplete and some semantics are intentiona
 
 Known limitations currently include:
 
-- `ArrayRef.slice()` is currently a shallow slice for nested/reference-based structures
+- `ArrayRef.slice()` is shallow for run-end-encoded and list-view arrays
 - high-level array/builders are currently focused on primitive, boolean, string, and binary paths
 - some Arrow physical layouts are validated before full high-level array APIs exist for them
 - unsafe construction paths rely on caller correctness
