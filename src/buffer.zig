@@ -10,12 +10,18 @@ pub fn alignedSize(size: usize) usize {
     return (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
 }
 
+// Internal ref-counted storage backing shared buffers.
 const BufferStorage = struct {
+    // Allocator used to create and free this storage.
     allocator: std.mem.Allocator,
+    // Aligned buffer bytes owned by this storage.
     data: []align(ALIGNMENT) u8,
+    // Shared reference count for all SharedBuffer views.
     ref_count: std.atomic.Value(u32),
+    // Custom release hook for external/FFI-managed memory.
     release_fn: *const fn (*BufferStorage) void,
 
+    // Default release: free the data and destroy the control block.
     fn releaseDefault(storage: *BufferStorage) void {
         storage.allocator.free(storage.data);
         storage.allocator.destroy(storage);
@@ -78,8 +84,6 @@ pub const SharedBuffer = struct {
     }
 };
 
-pub const Buffer = SharedBuffer;
-
 // OwnedBuffer is a mutable, uniquely owned buffer for builders.
 pub const OwnedBuffer = struct {
     data: []align(ALIGNMENT) u8,
@@ -134,8 +138,6 @@ pub const OwnedBuffer = struct {
         self.data = newData;
     }
 };
-
-pub const MutableBuffer = OwnedBuffer;
 
 test "buffer exposes immutable view" {
     const data = "arrow";

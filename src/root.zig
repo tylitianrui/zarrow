@@ -7,8 +7,6 @@ const array = @import("array/array.zig");
 
 pub const SharedBuffer = buffer.SharedBuffer;
 pub const OwnedBuffer = buffer.OwnedBuffer;
-pub const Buffer = buffer.Buffer;
-pub const MutableBuffer = buffer.MutableBuffer;
 pub const ValidityBitmap = bitmap.ValidityBitmap;
 pub const MutableValidityBitmap = bitmap.MutableValidityBitmap;
 pub const DataType = datatype.DataType;

@@ -1,6 +1,6 @@
 const std = @import("std");
-const Buffer = @import("buffer.zig").Buffer;
-const MutableBuffer = @import("buffer.zig").MutableBuffer;
+const SharedBuffer = @import("buffer.zig").SharedBuffer;
+const OwnedBuffer = @import("buffer.zig").OwnedBuffer;
 
 // Return the number of bytes required to store the requested bit count.
 pub fn byteLength(bit_length: usize) usize {
@@ -74,7 +74,7 @@ pub const ValidityBitmap = struct {
     bit_len: usize,
 
     // Build a validity bitmap view from a buffer and logical length.
-    pub fn fromBuffer(buf: Buffer, bit_len: usize) ValidityBitmap {
+    pub fn fromBuffer(buf: SharedBuffer, bit_len: usize) ValidityBitmap {
         return .{ .data = buf.data, .bit_len = bit_len };
     }
     // Read the validity bit for an index.
@@ -99,7 +99,7 @@ pub const ValidityBitmap = struct {
 // MutableValidityBitmap owns writable storage for building or editing Arrow validity bits.
 // Mutable Arrow validity bitmap with owned storage.
 pub const MutableValidityBitmap = struct {
-    buf: MutableBuffer,
+    buf: OwnedBuffer,
     bit_len: usize,
 
     // Allocate a bitmap with all values marked valid.
@@ -114,7 +114,7 @@ pub const MutableValidityBitmap = struct {
 
     fn initFilled(allocator: std.mem.Allocator, bit_len: usize, valid: bool) !MutableValidityBitmap {
         const used_bytes = byteLength(bit_len);
-        var buf = try MutableBuffer.init(allocator, used_bytes);
+        var buf = try OwnedBuffer.init(allocator, used_bytes);
         if (used_bytes > 0) {
             @memset(buf.data[0..used_bytes], if (valid) 0xFF else 0x00);
             clearTrailingBits(buf.data[0..used_bytes], bit_len, valid);
@@ -177,8 +177,8 @@ pub const MutableValidityBitmap = struct {
     }
 
     // Expose the logical bitmap bytes as a borrowed shared buffer view.
-    pub fn toBuffer(self: MutableValidityBitmap) Buffer {
-        return Buffer.init(self.buf.data[0..byteLength(self.bit_len)]);
+    pub fn toBuffer(self: MutableValidityBitmap) SharedBuffer {
+        return SharedBuffer.init(self.buf.data[0..byteLength(self.bit_len)]);
     }
 };
 

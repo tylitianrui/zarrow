@@ -5,7 +5,6 @@ const array_ref = @import("array_ref.zig");
 const datatype = @import("../datatype.zig");
 
 pub const SharedBuffer = buffer.SharedBuffer;
-pub const Buffer = buffer.Buffer;
 pub const ValidityBitmap = bitmap.ValidityBitmap;
 pub const DataType = datatype.DataType;
 pub const ArrayRef = array_ref.ArrayRef;
