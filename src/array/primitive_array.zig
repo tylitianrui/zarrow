@@ -172,7 +172,7 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
             };
 
             self.state = .finished;
-            return ArrayRef.fromOwned(self.allocator, data);
+            return ArrayRef.fromOwnedUnsafe(self.allocator, data);
         }
 
         pub fn finishReset(self: *Self) !ArrayRef {

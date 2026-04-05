@@ -193,7 +193,7 @@ pub const BinaryBuilder = struct {
         };
 
         self.state = .finished;
-        return ArrayRef.fromOwned(self.allocator, data);
+        return ArrayRef.fromOwnedUnsafe(self.allocator, data);
     }
 
     pub fn finishReset(self: *BinaryBuilder) !ArrayRef {

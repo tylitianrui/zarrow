@@ -6,15 +6,6 @@ const datatype = @import("../datatype.zig");
 pub const ArrayData = array_data.ArrayData;
 pub const SharedBuffer = buffer.SharedBuffer;
 
-const empty_buffers: [0]SharedBuffer = .{};
-const empty_children: [0]ArrayRef = .{};
-
-fn isOwnedLayout(layout: ArrayData) bool {
-    if (layout.buffers.len == 0 and @intFromPtr(layout.buffers.ptr) == @intFromPtr(empty_buffers[0..].ptr)) return false;
-    if (layout.children.len == 0 and @intFromPtr(layout.children.ptr) == @intFromPtr(empty_children[0..].ptr)) return false;
-    return true;
-}
-
 const ArrayNode = struct {
     allocator: std.mem.Allocator,
     ref_count: std.atomic.Value(u32),
@@ -85,28 +76,22 @@ pub const ArrayRef = struct {
 
         var dict_ref: ?ArrayRef = null;
         if (sliced.dictionary) |dict| dict_ref = dict.retain();
+        errdefer if (dict_ref) |*owned| owned.release();
 
         switch (sliced.data_type) {
             .list, .large_list, .map => {
-                const total_offset = self.node.data.offset + offset;
-                const total_end = total_offset + length;
-                const offsets_buf = self.node.data.buffers[1];
+                // Keep child shared for now.
+                // Parent slice remains shallow: offsets are interpreted in the original child coordinate space.
+
                 const child = self.node.data.children[0];
-                const start: usize = if (sliced.data_type == .large_list)
-                    @intCast(offsets_buf.typedSlice(i64)[total_offset])
-                else
-                    @intCast(offsets_buf.typedSlice(i32)[total_offset]);
-                const end: usize = if (sliced.data_type == .large_list)
-                    @intCast(offsets_buf.typedSlice(i64)[total_end])
-                else
-                    @intCast(offsets_buf.typedSlice(i32)[total_end]);
-                children[0] = try child.slice(start, end - start);
+                children[0] = child.retain();
                 child_count = 1;
             },
             .struct_ => {
+                const total_offset = self.node.data.offset + offset;
                 var i: usize = 0;
                 while (i < sliced.children.len) : (i += 1) {
-                    children[i] = try sliced.children[i].slice(offset, length);
+                    children[i] = try sliced.children[i].slice(total_offset, length);
                     child_count += 1;
                 }
             },
@@ -130,18 +115,14 @@ pub const ArrayRef = struct {
         sliced.children = children;
         sliced.dictionary = dict_ref;
 
-        return ArrayRef.fromOwned(allocator, sliced);
+        return ArrayRef.fromOwnedUnsafe(allocator, sliced);
     }
 
-    /// Create an ArrayRef that takes ownership of the ArrayData layout.
+    /// Create an ArrayRef by wrapping an owned ArrayData layout.
     ///
-    /// Requirements:
-    /// - buffers/children/dictionary must be allocator-owned and releasable.
-    /// - Use `fromBorrowed` if the layout borrows or uses stack/static slices.
-    /// - This is an unsafe entry point for callers who already normalized slices.
+    /// This is a minimal wrapper. Callers must ensure the layout is safe to
+    /// release with the provided allocator.
     pub fn fromOwnedUnsafe(allocator: std.mem.Allocator, layout: ArrayData) !ArrayRef {
-        std.debug.assert(isOwnedLayout(layout));
-
         const node = try allocator.create(ArrayNode);
         node.* = .{
             .allocator = allocator,
@@ -154,14 +135,17 @@ pub const ArrayRef = struct {
     /// Create an ArrayRef that owns the layout and normalizes empty slices.
     pub fn fromOwned(allocator: std.mem.Allocator, layout: ArrayData) !ArrayRef {
         var owned = layout;
-        if (owned.buffers.len == 0 and @intFromPtr(owned.buffers.ptr) == @intFromPtr(empty_buffers[0..].ptr)) {
-            owned.buffers = try allocator.alloc(SharedBuffer, 0);
-        }
-        if (owned.children.len == 0 and @intFromPtr(owned.children.ptr) == @intFromPtr(empty_children[0..].ptr)) {
-            owned.children = try allocator.alloc(ArrayRef, 0);
-        }
-        std.debug.assert(owned.buffers.len != 0 or @intFromPtr(owned.buffers.ptr) != @intFromPtr(empty_buffers[0..].ptr));
-        std.debug.assert(owned.children.len != 0 or @intFromPtr(owned.children.ptr) != @intFromPtr(empty_children[0..].ptr));
+
+        const buffers = try allocator.alloc(SharedBuffer, owned.buffers.len);
+        errdefer allocator.free(buffers);
+        @memcpy(buffers, owned.buffers);
+
+        const children = try allocator.alloc(ArrayRef, owned.children.len);
+        errdefer allocator.free(children);
+        @memcpy(children, owned.children);
+
+        owned.buffers = buffers;
+        owned.children = children;
         return fromOwnedUnsafe(allocator, owned);
     }
 
@@ -185,7 +169,7 @@ pub const ArrayRef = struct {
         owned.children = children;
         owned.dictionary = dict_ref;
 
-        return ArrayRef.fromOwned(allocator, owned);
+        return ArrayRef.fromOwnedUnsafe(allocator, owned);
     }
 };
 
@@ -199,51 +183,28 @@ test "array ref release handles empty slices" {
         .children = &[_]ArrayRef{},
     };
 
-    var array_ref = try ArrayRef.fromOwned(allocator, layout);
+    var array_ref = try ArrayRef.fromOwnedUnsafe(allocator, layout);
     array_ref.release();
 }
 
-test "array ref owned layout check rejects static empties" {
-    const dtype = array_data.DataType{ .int32 = {} };
-    const layout = ArrayData{
-        .data_type = dtype,
-        .length = 0,
-        .buffers = empty_buffers[0..],
-        .children = empty_children[0..],
-    };
-
-    try std.testing.expect(!isOwnedLayout(layout));
-}
-
-test "array ref owned layout check accepts allocator empties" {
+test "array ref fromOwned handles static empty containers safely" {
     const allocator = std.testing.allocator;
     const dtype = array_data.DataType{ .int32 = {} };
-    const buffers = try allocator.alloc(SharedBuffer, 0);
-    const children = try allocator.alloc(ArrayRef, 0);
-    defer allocator.free(buffers);
-    defer allocator.free(children);
-
+    const static_buffers = &[_]SharedBuffer{};
+    const static_children = &[_]ArrayRef{};
     const layout = ArrayData{
         .data_type = dtype,
         .length = 0,
-        .buffers = buffers,
-        .children = children,
+        .buffers = static_buffers,
+        .children = static_children,
     };
 
-    try std.testing.expect(isOwnedLayout(layout));
-}
+    var array_ref = try ArrayRef.fromOwned(allocator, layout);
+    defer array_ref.release();
 
-test "array ref fromOwnedUnsafe requires owned layout" {
-    const dtype = array_data.DataType{ .int32 = {} };
-    const layout = ArrayData{
-        .data_type = dtype,
-        .length = 0,
-        .buffers = empty_buffers[0..],
-        .children = empty_children[0..],
-    };
-
-    // In debug builds, fromOwnedUnsafe asserts on non-owned layouts.
-    try std.testing.expect(!isOwnedLayout(layout));
+    const owned = array_ref.data();
+    try std.testing.expect(owned.buffers.len == 0);
+    try std.testing.expect(owned.children.len == 0);
 }
 
 test "array ref slice retains buffers" {
@@ -265,7 +226,7 @@ test "array ref slice retains buffers" {
         .buffers = buffers,
     };
 
-    var array_ref = try ArrayRef.fromOwned(allocator, layout);
+    var array_ref = try ArrayRef.fromOwnedUnsafe(allocator, layout);
     defer array_ref.release();
 
     var sliced = try array_ref.slice(0, 1);
@@ -312,13 +273,13 @@ test "array ref releases children and dictionary" {
     const child_buffers = try allocator.alloc(SharedBuffer, 1);
     child_buffers[0] = shared.retain();
     const child_layout = ArrayData{ .data_type = dtype, .length = 1, .buffers = child_buffers };
-    var child_ref = try ArrayRef.fromOwned(allocator, child_layout);
+    var child_ref = try ArrayRef.fromOwnedUnsafe(allocator, child_layout);
     var child_hold = child_ref.retain();
 
     const dict_buffers = try allocator.alloc(SharedBuffer, 1);
     dict_buffers[0] = shared.retain();
     const dict_layout = ArrayData{ .data_type = dtype, .length = 1, .buffers = dict_buffers };
-    var dict_ref = try ArrayRef.fromOwned(allocator, dict_layout);
+    var dict_ref = try ArrayRef.fromOwnedUnsafe(allocator, dict_layout);
     var dict_hold = dict_ref.retain();
 
     const children = try allocator.alloc(ArrayRef, 1);
