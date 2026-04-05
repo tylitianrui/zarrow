@@ -9,7 +9,9 @@ pub fn main() !void {
     try builder.appendNull();
     try builder.append(30);
 
-    const array = builder.finish();
+    var array_ref = try builder.finish();
+    defer array_ref.release();
+    const array = zarrow.Int32Array{ .data = array_ref.data() };
 
     std.debug.print("examples/primitive_builder.zig | type=Int32Builder | length={d}, value0={d}, isNull1={any}, value2={d}\n", .{
         array.len(),

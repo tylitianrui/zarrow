@@ -1,7 +1,12 @@
 const datatype = @import("../datatype.zig");
+const buffer = @import("../buffer.zig");
+
+pub const SharedBuffer = buffer.SharedBuffer;
+pub const OwnedBuffer = buffer.OwnedBuffer;
 
 pub const DataType = datatype.DataType;
 pub const ArrayData = @import("array_data.zig").ArrayData;
+pub const ArrayRef = @import("array_ref.zig").ArrayRef;
 pub const PrimitiveArray = @import("primitive_array.zig").PrimitiveArray;
 pub const PrimitiveBuilder = @import("primitive_array.zig").PrimitiveBuilder;
 pub const Int8Array = PrimitiveArray(i8);

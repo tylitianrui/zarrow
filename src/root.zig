@@ -5,6 +5,8 @@ const datatype = @import("datatype.zig");
 const schema = @import("schema.zig");
 const array = @import("array/array.zig");
 
+pub const SharedBuffer = buffer.SharedBuffer;
+pub const OwnedBuffer = buffer.OwnedBuffer;
 pub const Buffer = buffer.Buffer;
 pub const MutableBuffer = buffer.MutableBuffer;
 pub const ValidityBitmap = bitmap.ValidityBitmap;
@@ -36,6 +38,7 @@ pub const RunEndEncodedType = datatype.RunEndEncodedType;
 pub const ExtensionType = datatype.ExtensionType;
 pub const Schema = schema.Schema;
 pub const ArrayData = array.ArrayData;
+pub const ArrayRef = array.ArrayRef;
 pub const PrimitiveArray = array.PrimitiveArray;
 pub const PrimitiveBuilder = array.PrimitiveBuilder;
 pub const Int8Array = array.Int8Array;

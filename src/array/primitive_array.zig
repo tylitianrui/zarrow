@@ -1,18 +1,20 @@
 const std = @import("std");
 const bitmap = @import("../bitmap.zig");
 const buffer = @import("../buffer.zig");
+const array_ref = @import("array_ref.zig");
 const datatype = @import("../datatype.zig");
 const array_data = @import("array_data.zig");
 
-pub const Buffer = buffer.Buffer;
-pub const MutableBuffer = buffer.MutableBuffer;
+pub const SharedBuffer = buffer.SharedBuffer;
+pub const OwnedBuffer = buffer.OwnedBuffer;
 pub const DataType = datatype.DataType;
 pub const ArrayData = array_data.ArrayData;
+pub const ArrayRef = array_ref.ArrayRef;
 
 /// Generic array view for fixed-width primitive types.
 pub fn PrimitiveArray(comptime T: type) type {
     return struct {
-        data: ArrayData,
+        data: *const ArrayData,
 
         const Self = @This();
 
@@ -38,9 +40,9 @@ pub fn PrimitiveArray(comptime T: type) type {
     };
 }
 
-fn initValidityAllValid(allocator: std.mem.Allocator, bit_len: usize) !MutableBuffer {
+fn initValidityAllValid(allocator: std.mem.Allocator, bit_len: usize) !OwnedBuffer {
     const used_bytes = bitmap.byteLength(bit_len);
-    var buf = try MutableBuffer.init(allocator, used_bytes);
+    var buf = try OwnedBuffer.init(allocator, used_bytes);
     if (used_bytes > 0) {
         @memset(buf.data[0..used_bytes], 0xFF);
         const remainder = bit_len & 7;
@@ -52,7 +54,7 @@ fn initValidityAllValid(allocator: std.mem.Allocator, bit_len: usize) !MutableBu
     return buf;
 }
 
-fn ensureBitmapCapacity(buf: *MutableBuffer, bit_len: usize) !void {
+fn ensureBitmapCapacity(buf: *OwnedBuffer, bit_len: usize) !void {
     const needed = bitmap.byteLength(bit_len);
     if (needed <= buf.len()) return;
     try buf.resize(needed);
@@ -63,9 +65,9 @@ fn ensureBitmapCapacity(buf: *MutableBuffer, bit_len: usize) !void {
 pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
     return struct {
         allocator: std.mem.Allocator,
-        values: MutableBuffer,
-        validity: ?MutableBuffer = null,
-        buffers: [2]Buffer = undefined,
+        values: OwnedBuffer,
+        validity: ?OwnedBuffer = null,
+        buffers: [2]SharedBuffer = undefined,
         len: usize = 0,
         null_count: isize = 0,
 
@@ -76,7 +78,7 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
         pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
             return .{
                 .allocator = allocator,
-                .values = try MutableBuffer.init(allocator, capacity * @sizeOf(T)),
+                .values = try OwnedBuffer.init(allocator, capacity * @sizeOf(T)),
             };
         }
 
@@ -128,18 +130,23 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
             self.len = next_len;
         }
 
-        pub fn finish(self: *Self) PrimitiveArray(T) {
-            const validity_buf = if (self.validity) |buf| buf.toBuffer(bitmap.byteLength(self.len)) else Buffer.empty;
+        pub fn finish(self: *Self) !ArrayRef {
+            const validity_buf = if (self.validity) |*buf| try buf.toShared(bitmap.byteLength(self.len)) else SharedBuffer.empty;
             self.buffers[0] = validity_buf;
-            self.buffers[1] = self.values.toBuffer(self.len * @sizeOf(T));
-            return PrimitiveArray(T){
-                .data = ArrayData{
-                    .data_type = TYPE,
-                    .length = self.len,
-                    .null_count = self.null_count,
-                    .buffers = self.buffers[0..],
-                },
+            self.buffers[1] = try self.values.toShared(self.len * @sizeOf(T));
+
+            const buffers = try self.allocator.alloc(SharedBuffer, 2);
+            buffers[0] = self.buffers[0];
+            buffers[1] = self.buffers[1];
+
+            const data = ArrayData{
+                .data_type = TYPE,
+                .length = self.len,
+                .null_count = self.null_count,
+                .buffers = buffers,
             };
+
+            return ArrayRef.fromOwned(self.allocator, data);
         }
     };
 }
@@ -152,7 +159,9 @@ test "primitive builder appends values and nulls" {
     try builder.appendNull();
     try builder.append(30);
 
-    const built = builder.finish();
+    var array_handle = try builder.finish();
+    defer array_handle.release();
+    const built = PrimitiveArray(i32){ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
     try std.testing.expectEqual(@as(i32, 30), built.value(2));

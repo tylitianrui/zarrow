@@ -9,7 +9,9 @@ pub fn main() !void {
     try builder.append(false);
     try builder.appendNull();
 
-    const array = builder.finish();
+    var array_ref = try builder.finish();
+    defer array_ref.release();
+    const array = root.BooleanArray{ .data = array_ref.data() };
 
     std.debug.assert(array.len() == 3);
     std.debug.assert(array.value(0) == true);

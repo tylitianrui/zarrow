@@ -9,7 +9,9 @@ pub fn main() !void {
     try builder.appendNull();
     try builder.append("arrow");
 
-    const array = builder.finish();
+    var array_ref = try builder.finish();
+    defer array_ref.release();
+    const array = zarrow.StringArray{ .data = array_ref.data() };
 
     std.debug.assert(array.len() == 3);
     std.debug.assert(std.mem.eql(u8, array.value(0), "zig"));

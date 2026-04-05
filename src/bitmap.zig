@@ -176,9 +176,9 @@ pub const MutableValidityBitmap = struct {
         return countUnsetBit(self.buf.data, self.bit_len);
     }
 
-    // Expose the logical bitmap bytes as an immutable buffer view.
+    // Expose the logical bitmap bytes as a borrowed shared buffer view.
     pub fn toBuffer(self: MutableValidityBitmap) Buffer {
-        return self.buf.toBuffer(byteLength(self.bit_len));
+        return Buffer.init(self.buf.data[0..byteLength(self.bit_len)]);
     }
 };
 

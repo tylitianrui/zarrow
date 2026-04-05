@@ -1,19 +1,21 @@
 const std = @import("std");
 const bitmap = @import("../bitmap.zig");
 const buffer = @import("../buffer.zig");
+const array_ref = @import("array_ref.zig");
 const datatype = @import("../datatype.zig");
 const array_data = @import("array_data.zig");
 
-pub const Buffer = buffer.Buffer;
-pub const MutableBuffer = buffer.MutableBuffer;
+pub const SharedBuffer = buffer.SharedBuffer;
+pub const OwnedBuffer = buffer.OwnedBuffer;
 pub const ArrayData = array_data.ArrayData;
 pub const DataType = datatype.DataType;
+pub const ArrayRef = array_ref.ArrayRef;
 
 const BOOL_TYPE = DataType{ .bool = {} };
 
 /// Bit-packed boolean array view.
 pub const BooleanArray = struct {
-    data: ArrayData,
+    data: *const ArrayData,
     const Self = @This();
 
     pub fn len(self: Self) usize {
@@ -31,9 +33,9 @@ pub const BooleanArray = struct {
     }
 };
 
-fn initValidityAllValid(allocator: std.mem.Allocator, bit_len: usize) !MutableBuffer {
+fn initValidityAllValid(allocator: std.mem.Allocator, bit_len: usize) !OwnedBuffer {
     const used_bytes = bitmap.byteLength(bit_len);
-    var buf = try MutableBuffer.init(allocator, used_bytes);
+    var buf = try OwnedBuffer.init(allocator, used_bytes);
     if (used_bytes > 0) {
         @memset(buf.data[0..used_bytes], 0xFF);
         const remainder = bit_len & 7;
@@ -45,7 +47,7 @@ fn initValidityAllValid(allocator: std.mem.Allocator, bit_len: usize) !MutableBu
     return buf;
 }
 
-fn ensureBitmapCapacity(buf: *MutableBuffer, bit_len: usize) !void {
+fn ensureBitmapCapacity(buf: *OwnedBuffer, bit_len: usize) !void {
     const needed = bitmap.byteLength(bit_len);
     if (needed <= buf.len()) return;
     try buf.resize(needed);
@@ -54,9 +56,9 @@ fn ensureBitmapCapacity(buf: *MutableBuffer, bit_len: usize) !void {
 /// Builder for bit-packed boolean arrays with optional validity.
 pub const BooleanBuilder = struct {
     allocator: std.mem.Allocator,
-    values: MutableBuffer,
-    validity: ?MutableBuffer = null,
-    buffers: [2]Buffer = undefined,
+    values: OwnedBuffer,
+    validity: ?OwnedBuffer = null,
+    buffers: [2]SharedBuffer = undefined,
     len: usize = 0,
     null_count: isize = 0,
 
@@ -65,7 +67,7 @@ pub const BooleanBuilder = struct {
     pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
         return .{
             .allocator = allocator,
-            .values = try MutableBuffer.init(allocator, bitmap.byteLength(capacity)),
+            .values = try OwnedBuffer.init(allocator, bitmap.byteLength(capacity)),
         };
     }
 
@@ -120,18 +122,23 @@ pub const BooleanBuilder = struct {
         self.len = next_len;
     }
 
-    pub fn finish(self: *Self) BooleanArray {
-        const validity_buf = if (self.validity) |buf| buf.toBuffer(bitmap.byteLength(self.len)) else Buffer.empty;
+    pub fn finish(self: *Self) !ArrayRef {
+        const validity_buf = if (self.validity) |*buf| try buf.toShared(bitmap.byteLength(self.len)) else SharedBuffer.empty;
         self.buffers[0] = validity_buf;
-        self.buffers[1] = self.values.toBuffer(bitmap.byteLength(self.len));
-        return BooleanArray{
-            .data = ArrayData{
-                .data_type = BOOL_TYPE,
-                .length = self.len,
-                .null_count = self.null_count,
-                .buffers = self.buffers[0..],
-            },
+        self.buffers[1] = try self.values.toShared(bitmap.byteLength(self.len));
+
+        const buffers = try self.allocator.alloc(SharedBuffer, 2);
+        buffers[0] = self.buffers[0];
+        buffers[1] = self.buffers[1];
+
+        const data = ArrayData{
+            .data_type = BOOL_TYPE,
+            .length = self.len,
+            .null_count = self.null_count,
+            .buffers = buffers,
         };
+
+        return ArrayRef.fromOwned(self.allocator, data);
     }
 };
 
@@ -143,7 +150,9 @@ test "boolean builder appends values" {
     try builder.append(false);
     try builder.appendNull();
 
-    const built = builder.finish();
+    var array_handle = try builder.finish();
+    defer array_handle.release();
+    const built = BooleanArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.value(0));
     try std.testing.expect(!built.value(1));

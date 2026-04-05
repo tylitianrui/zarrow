@@ -1,11 +1,14 @@
 const std = @import("std");
 const bitmap = @import("../bitmap.zig");
 const buffer = @import("../buffer.zig");
+const array_ref = @import("array_ref.zig");
 const datatype = @import("../datatype.zig");
 
+pub const SharedBuffer = buffer.SharedBuffer;
 pub const Buffer = buffer.Buffer;
 pub const ValidityBitmap = bitmap.ValidityBitmap;
 pub const DataType = datatype.DataType;
+pub const ArrayRef = array_ref.ArrayRef;
 
 pub const ValidationError = error{
     InvalidBufferCount,
@@ -46,9 +49,9 @@ pub const ArrayData = struct {
     length: usize,
     offset: usize = 0,
     null_count: isize = -1, // -1 means unknown; 0 means no nulls
-    buffers: []const Buffer,
-    children: []const ArrayData = &.{},
-    dictionary: ?*const ArrayData = null,
+    buffers: []const SharedBuffer,
+    children: []const ArrayRef = &.{},
+    dictionary: ?ArrayRef = null,
 
     const Self = @This();
 
@@ -163,6 +166,7 @@ pub const ArrayData = struct {
         if (@as(usize, @intCast(prev)) > data_len) return error.InvalidOffsets;
     }
 
+    // ListView offsets/sizes are per-element views into the child array.
     fn validateOffsetsSizesI32(offsets: []const i32, sizes: []const i32, total_len: usize, child_len: usize) ValidationError!void {
         if (offsets.len < total_len) return error.BufferTooSmall;
         if (sizes.len < total_len) return error.BufferTooSmall;
@@ -189,6 +193,7 @@ pub const ArrayData = struct {
         if (@as(usize, @intCast(prev)) > data_len) return error.InvalidOffsets;
     }
 
+    // Run ends must be strictly increasing and cover the logical length.
     fn validateRunEndsSigned(comptime T: type, run_ends: []const T, total_len: usize) ValidationError!void {
         if (total_len == 0) {
             if (run_ends.len != 0) return error.InvalidOffsets;
@@ -219,6 +224,7 @@ pub const ArrayData = struct {
         if (prev < @as(u64, @intCast(total_len))) return error.InvalidOffsets;
     }
 
+    // LargeListView offsets/sizes use 64-bit indices.
     fn validateOffsetsSizesI64(offsets: []const i64, sizes: []const i64, total_len: usize, child_len: usize) ValidationError!void {
         if (offsets.len < total_len) return error.BufferTooSmall;
         if (sizes.len < total_len) return error.BufferTooSmall;
@@ -256,7 +262,9 @@ pub const ArrayData = struct {
                 if (self.buffers[1].len() % offset_width != 0) return error.InvalidOffsetBuffer;
                 if (self.buffers[2].len() % offset_width != 0) return error.InvalidOffsetBuffer;
 
-                const child_len = self.children[0].length + self.children[0].offset;
+                // Views are validated against the child logical length.
+                const child_data = self.children[0].data();
+                const child_len = child_data.length + child_data.offset;
                 if (offset_width == 4) {
                     const offsets = self.buffers[1].typedSlice(i32);
                     const sizes = self.buffers[2].typedSlice(i32);
@@ -323,8 +331,9 @@ pub const ArrayData = struct {
                 if (byte_width == 0) return error.InvalidOffsetBuffer;
                 if (self.buffers[0].len() % byte_width != 0) return error.InvalidOffsetBuffer;
 
+                // One run end per value in the values child.
                 const run_count = self.buffers[0].len() / byte_width;
-                if (self.children[0].length != run_count) return error.InvalidChildren;
+                if (self.children[0].data().length != run_count) return error.InvalidChildren;
 
                 switch (byte_width) {
                     1 => if (self.data_type.run_end_encoded.run_end_type.signed)
@@ -374,8 +383,8 @@ pub const ArrayData = struct {
             if (count != @as(usize, @intCast(self.null_count))) return error.InvalidNullCount;
         }
 
-        for (self.children) |child| try child.validateFull();
-        if (self.dictionary) |dict| try dict.validateFull();
+        for (self.children) |child| try child.data().validateFull();
+        if (self.dictionary) |dict| try dict.data().validateFull();
     }
 };
 
@@ -386,7 +395,7 @@ test "array data slice updates offset and length" {
         .length = 10,
         .offset = 2,
         .null_count = 0,
-        .buffers = &[_]Buffer{Buffer.empty},
+        .buffers = &[_]SharedBuffer{SharedBuffer.empty},
     };
 
     const sliced = data.slice(3, 4);
@@ -402,7 +411,7 @@ test "array data nullCount caches when unknown" {
         .data_type = dtype,
         .length = 4,
         .null_count = -1,
-        .buffers = &[_]Buffer{Buffer.fromSlice(validity[0..])},
+        .buffers = &[_]SharedBuffer{SharedBuffer.fromSlice(validity[0..])},
     };
 
     try std.testing.expectEqual(@as(usize, 1), data.nullCount());
@@ -416,7 +425,7 @@ test "array data hasNulls handles no validity" {
         .data_type = dtype,
         .length = 3,
         .null_count = -1,
-        .buffers = &[_]Buffer{Buffer.empty},
+        .buffers = &[_]SharedBuffer{SharedBuffer.empty},
     };
 
     try std.testing.expect(!data.hasNulls());
@@ -429,7 +438,7 @@ test "array data slice on unknown null count" {
         .length = 6,
         .offset = 1,
         .null_count = -1,
-        .buffers = &[_]Buffer{Buffer.empty},
+        .buffers = &[_]SharedBuffer{SharedBuffer.empty},
     };
 
     const sliced = data.slice(2, 3);
@@ -446,7 +455,7 @@ test "array data validateLayout accepts primitive" {
         .data_type = dtype,
         .length = 3,
         .null_count = 0,
-        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(values_bytes[0..]) },
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(values_bytes[0..]) },
     };
 
     try data.validateLayout();
@@ -461,10 +470,10 @@ test "array data validateLayout catches invalid offsets" {
     const data = ArrayData{
         .data_type = dtype,
         .length = 2,
-        .buffers = &[_]Buffer{
-            Buffer.empty,
-            Buffer.fromSlice(offset_bytes[0..]),
-            Buffer.fromSlice("zzzz"),
+        .buffers = &[_]SharedBuffer{
+            SharedBuffer.empty,
+            SharedBuffer.fromSlice(offset_bytes[0..]),
+            SharedBuffer.fromSlice("zzzz"),
         },
     };
 
@@ -482,8 +491,15 @@ test "array data validateLayout accepts list_view" {
         .data_type = value_type,
         .length = 5,
         .null_count = 0,
-        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(child_values[0..]) },
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child_values[0..]) },
     };
+    var child_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child);
+    defer child_ref.release();
+    const children = &[_]ArrayRef{child_ref.retain()};
+    defer {
+        var owned = children[0];
+        owned.release();
+    }
 
     const offsets = [_]i32{ 0, 2 };
     const sizes = [_]i32{ 2, 3 };
@@ -495,8 +511,8 @@ test "array data validateLayout accepts list_view" {
     const data = ArrayData{
         .data_type = list_view_type,
         .length = 2,
-        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(offset_bytes[0..]), Buffer.fromSlice(size_bytes[0..]) },
-        .children = &[_]ArrayData{child},
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(offset_bytes[0..]), SharedBuffer.fromSlice(size_bytes[0..]) },
+        .children = children,
     };
 
     try data.validateLayout();
@@ -513,8 +529,15 @@ test "array data validateLayout rejects large_list_view sizes beyond child" {
         .data_type = value_type,
         .length = 5,
         .null_count = 0,
-        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(child_values[0..]) },
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child_values[0..]) },
     };
+    var child_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child);
+    defer child_ref.release();
+    const children = &[_]ArrayRef{child_ref.retain()};
+    defer {
+        var owned = children[0];
+        owned.release();
+    }
 
     const offsets = [_]i64{ 2, 3 };
     const sizes = [_]i64{ 4, 3 };
@@ -526,8 +549,8 @@ test "array data validateLayout rejects large_list_view sizes beyond child" {
     const data = ArrayData{
         .data_type = list_view_type,
         .length = 2,
-        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(offset_bytes[0..]), Buffer.fromSlice(size_bytes[0..]) },
-        .children = &[_]ArrayData{child},
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(offset_bytes[0..]), SharedBuffer.fromSlice(size_bytes[0..]) },
+        .children = children,
     };
 
     try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
@@ -544,8 +567,15 @@ test "array data validateLayout accepts run_end_encoded" {
         .data_type = value_type,
         .length = 2,
         .null_count = 0,
-        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(child_values[0..]) },
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child_values[0..]) },
     };
+    var child_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child);
+    defer child_ref.release();
+    const children = &[_]ArrayRef{child_ref.retain()};
+    defer {
+        var owned = children[0];
+        owned.release();
+    }
 
     const run_ends = [_]i32{ 2, 5 };
     var run_end_bytes: [run_ends.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
@@ -554,8 +584,8 @@ test "array data validateLayout accepts run_end_encoded" {
     const data = ArrayData{
         .data_type = ree_type,
         .length = 5,
-        .buffers = &[_]Buffer{Buffer.fromSlice(run_end_bytes[0..])},
-        .children = &[_]ArrayData{child},
+        .buffers = &[_]SharedBuffer{SharedBuffer.fromSlice(run_end_bytes[0..])},
+        .children = children,
     };
 
     try data.validateLayout();
@@ -572,8 +602,15 @@ test "array data validateLayout rejects run_end_encoded nonmonotonic" {
         .data_type = value_type,
         .length = 2,
         .null_count = 0,
-        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(child_values[0..]) },
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child_values[0..]) },
     };
+    var child_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child);
+    defer child_ref.release();
+    const children = &[_]ArrayRef{child_ref.retain()};
+    defer {
+        var owned = children[0];
+        owned.release();
+    }
 
     const run_ends = [_]i32{ 3, 2 };
     var run_end_bytes: [run_ends.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
@@ -582,8 +619,8 @@ test "array data validateLayout rejects run_end_encoded nonmonotonic" {
     const data = ArrayData{
         .data_type = ree_type,
         .length = 5,
-        .buffers = &[_]Buffer{Buffer.fromSlice(run_end_bytes[0..])},
-        .children = &[_]ArrayData{child},
+        .buffers = &[_]SharedBuffer{SharedBuffer.fromSlice(run_end_bytes[0..])},
+        .children = children,
     };
 
     try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
