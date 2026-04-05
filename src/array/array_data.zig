@@ -33,13 +33,14 @@ pub const ValidationError = error{
 /// - Boolean: [validity], [bit-packed values].
 /// - String/Binary: [validity], [i32 offsets], [data bytes].
 /// - List: [validity], [i32 offsets], children[0] = values.
+/// - ListView: [validity], [i32 offsets], [i32 sizes], children[0] = values.
 /// - FixedSizeList: [validity], children[0] = values.
 /// - Struct: [validity], children = fields in order.
 /// - Dictionary: [validity], [indices], dictionary = values array.
 /// - Union (sparse): [type_ids], children = fields; no offsets buffer.
 /// - Union (dense): [type_ids], [offsets], children = fields.
 /// - Map: [validity], [i32 offsets], children[0] = struct of (key, item).
-/// - RunEndEncoded: [run_ends], children[0] = values.
+/// - RunEndEncoded: [run_ends], children[0] = values (length == run count).
 pub const ArrayData = struct {
     data_type: DataType,
     length: usize,
@@ -162,6 +163,19 @@ pub const ArrayData = struct {
         if (@as(usize, @intCast(prev)) > data_len) return error.InvalidOffsets;
     }
 
+    fn validateOffsetsSizesI32(offsets: []const i32, sizes: []const i32, total_len: usize, child_len: usize) ValidationError!void {
+        if (offsets.len < total_len) return error.BufferTooSmall;
+        if (sizes.len < total_len) return error.BufferTooSmall;
+        var i: usize = 0;
+        while (i < total_len) : (i += 1) {
+            const off = offsets[i];
+            const size = sizes[i];
+            if (off < 0 or size < 0) return error.InvalidOffsets;
+            const end = @as(usize, @intCast(off)) + @as(usize, @intCast(size));
+            if (end > child_len) return error.InvalidOffsets;
+        }
+    }
+
     fn validateOffsetsI64(offsets: []const i64, total_len: usize, data_len: usize) ValidationError!void {
         if (offsets.len < total_len + 1) return error.BufferTooSmall;
         var prev: i64 = offsets[0];
@@ -173,6 +187,49 @@ pub const ArrayData = struct {
             prev = cur;
         }
         if (@as(usize, @intCast(prev)) > data_len) return error.InvalidOffsets;
+    }
+
+    fn validateRunEndsSigned(comptime T: type, run_ends: []const T, total_len: usize) ValidationError!void {
+        if (total_len == 0) {
+            if (run_ends.len != 0) return error.InvalidOffsets;
+            return;
+        }
+        if (run_ends.len == 0) return error.BufferTooSmall;
+        var prev: i64 = 0;
+        for (run_ends) |end| {
+            const val: i64 = @intCast(end);
+            if (val <= prev) return error.InvalidOffsets;
+            prev = val;
+        }
+        if (prev < @as(i64, @intCast(total_len))) return error.InvalidOffsets;
+    }
+
+    fn validateRunEndsUnsigned(comptime T: type, run_ends: []const T, total_len: usize) ValidationError!void {
+        if (total_len == 0) {
+            if (run_ends.len != 0) return error.InvalidOffsets;
+            return;
+        }
+        if (run_ends.len == 0) return error.BufferTooSmall;
+        var prev: u64 = 0;
+        for (run_ends) |end| {
+            const val: u64 = @intCast(end);
+            if (val <= prev) return error.InvalidOffsets;
+            prev = val;
+        }
+        if (prev < @as(u64, @intCast(total_len))) return error.InvalidOffsets;
+    }
+
+    fn validateOffsetsSizesI64(offsets: []const i64, sizes: []const i64, total_len: usize, child_len: usize) ValidationError!void {
+        if (offsets.len < total_len) return error.BufferTooSmall;
+        if (sizes.len < total_len) return error.BufferTooSmall;
+        var i: usize = 0;
+        while (i < total_len) : (i += 1) {
+            const off = offsets[i];
+            const size = sizes[i];
+            if (off < 0 or size < 0) return error.InvalidOffsets;
+            const end = @as(usize, @intCast(off)) + @as(usize, @intCast(size));
+            if (end > child_len) return error.InvalidOffsets;
+        }
     }
 
     pub fn validateLayout(self: Self) ValidationError!void {
@@ -191,7 +248,26 @@ pub const ArrayData = struct {
                 const needed = bitmap.byteLength(total_len);
                 if (self.buffers[1].len() < needed) return error.BufferTooSmall;
             },
-            .string, .binary, .list, .list_view, .map, .large_string, .large_binary, .large_list, .large_list_view => {
+            .list_view, .large_list_view => {
+                if (self.buffers.len < 3) return error.InvalidBufferCount;
+                if (self.children.len != 1) return error.InvalidChildren;
+
+                const offset_width = offsetByteWidth(self.data_type).?;
+                if (self.buffers[1].len() % offset_width != 0) return error.InvalidOffsetBuffer;
+                if (self.buffers[2].len() % offset_width != 0) return error.InvalidOffsetBuffer;
+
+                const child_len = self.children[0].length + self.children[0].offset;
+                if (offset_width == 4) {
+                    const offsets = self.buffers[1].typedSlice(i32);
+                    const sizes = self.buffers[2].typedSlice(i32);
+                    try validateOffsetsSizesI32(offsets, sizes, total_len, child_len);
+                } else {
+                    const offsets = self.buffers[1].typedSlice(i64);
+                    const sizes = self.buffers[2].typedSlice(i64);
+                    try validateOffsetsSizesI64(offsets, sizes, total_len, child_len);
+                }
+            },
+            .string, .binary, .list, .map, .large_string, .large_binary, .large_list => {
                 if (self.buffers.len < 2) return error.InvalidBufferCount;
                 const offset_width = offsetByteWidth(self.data_type).?;
                 if (self.buffers[1].len() % offset_width != 0) return error.InvalidOffsetBuffer;
@@ -208,7 +284,7 @@ pub const ArrayData = struct {
                     try validateOffsetsI64(offsets, total_len, data_len);
                 }
 
-                if (self.data_type == .list or self.data_type == .list_view or self.data_type == .large_list or self.data_type == .large_list_view or self.data_type == .map) {
+                if (self.data_type == .list or self.data_type == .large_list or self.data_type == .map) {
                     if (self.children.len != 1) return error.InvalidChildren;
                 }
             },
@@ -239,6 +315,36 @@ pub const ArrayData = struct {
             .run_end_encoded => {
                 if (self.buffers.len < 1) return error.InvalidBufferCount;
                 if (self.children.len != 1) return error.InvalidChildren;
+
+                const byte_width = switch (self.data_type) {
+                    .run_end_encoded => |ree| ree.run_end_type.bit_width / 8,
+                    else => 0,
+                };
+                if (byte_width == 0) return error.InvalidOffsetBuffer;
+                if (self.buffers[0].len() % byte_width != 0) return error.InvalidOffsetBuffer;
+
+                const run_count = self.buffers[0].len() / byte_width;
+                if (self.children[0].length != run_count) return error.InvalidChildren;
+
+                switch (byte_width) {
+                    1 => if (self.data_type.run_end_encoded.run_end_type.signed)
+                        try validateRunEndsSigned(i8, self.buffers[0].typedSlice(i8), total_len)
+                    else
+                        try validateRunEndsUnsigned(u8, self.buffers[0].typedSlice(u8), total_len),
+                    2 => if (self.data_type.run_end_encoded.run_end_type.signed)
+                        try validateRunEndsSigned(i16, self.buffers[0].typedSlice(i16), total_len)
+                    else
+                        try validateRunEndsUnsigned(u16, self.buffers[0].typedSlice(u16), total_len),
+                    4 => if (self.data_type.run_end_encoded.run_end_type.signed)
+                        try validateRunEndsSigned(i32, self.buffers[0].typedSlice(i32), total_len)
+                    else
+                        try validateRunEndsUnsigned(u32, self.buffers[0].typedSlice(u32), total_len),
+                    8 => if (self.data_type.run_end_encoded.run_end_type.signed)
+                        try validateRunEndsSigned(i64, self.buffers[0].typedSlice(i64), total_len)
+                    else
+                        try validateRunEndsUnsigned(u64, self.buffers[0].typedSlice(u64), total_len),
+                    else => return error.InvalidOffsetBuffer,
+                }
             },
             else => {
                 if (fixedWidthByteSize(self.data_type)) |byte_width| {
@@ -360,6 +466,124 @@ test "array data validateLayout catches invalid offsets" {
             Buffer.fromSlice(offset_bytes[0..]),
             Buffer.fromSlice("zzzz"),
         },
+    };
+
+    try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
+}
+
+test "array data validateLayout accepts list_view" {
+    const value_type = DataType{ .int32 = {} };
+    const field = datatype.Field{ .name = "item", .data_type = &value_type, .nullable = true };
+    const list_view_type = DataType{ .list_view = .{ .value_field = field } };
+
+    var child_values: [5 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child_values[0..], std.mem.sliceAsBytes(&[_]i32{ 1, 2, 3, 4, 5 }));
+    const child = ArrayData{
+        .data_type = value_type,
+        .length = 5,
+        .null_count = 0,
+        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(child_values[0..]) },
+    };
+
+    const offsets = [_]i32{ 0, 2 };
+    const sizes = [_]i32{ 2, 3 };
+    var offset_bytes: [offsets.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    var size_bytes: [sizes.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(offset_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
+    @memcpy(size_bytes[0..], std.mem.sliceAsBytes(sizes[0..]));
+
+    const data = ArrayData{
+        .data_type = list_view_type,
+        .length = 2,
+        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(offset_bytes[0..]), Buffer.fromSlice(size_bytes[0..]) },
+        .children = &[_]ArrayData{child},
+    };
+
+    try data.validateLayout();
+}
+
+test "array data validateLayout rejects large_list_view sizes beyond child" {
+    const value_type = DataType{ .int32 = {} };
+    const field = datatype.Field{ .name = "item", .data_type = &value_type, .nullable = true };
+    const list_view_type = DataType{ .large_list_view = .{ .value_field = field } };
+
+    var child_values: [5 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child_values[0..], std.mem.sliceAsBytes(&[_]i32{ 1, 2, 3, 4, 5 }));
+    const child = ArrayData{
+        .data_type = value_type,
+        .length = 5,
+        .null_count = 0,
+        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(child_values[0..]) },
+    };
+
+    const offsets = [_]i64{ 2, 3 };
+    const sizes = [_]i64{ 4, 3 };
+    var offset_bytes: [offsets.len * @sizeOf(i64)]u8 align(buffer.ALIGNMENT) = undefined;
+    var size_bytes: [sizes.len * @sizeOf(i64)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(offset_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
+    @memcpy(size_bytes[0..], std.mem.sliceAsBytes(sizes[0..]));
+
+    const data = ArrayData{
+        .data_type = list_view_type,
+        .length = 2,
+        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(offset_bytes[0..]), Buffer.fromSlice(size_bytes[0..]) },
+        .children = &[_]ArrayData{child},
+    };
+
+    try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
+}
+
+test "array data validateLayout accepts run_end_encoded" {
+    const value_type = DataType{ .int32 = {} };
+    const run_end_type = datatype.IntType{ .bit_width = 32, .signed = true };
+    const ree_type = DataType{ .run_end_encoded = .{ .run_end_type = run_end_type, .value_type = &value_type } };
+
+    var child_values: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child_values[0..], std.mem.sliceAsBytes(&[_]i32{ 10, 20 }));
+    const child = ArrayData{
+        .data_type = value_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(child_values[0..]) },
+    };
+
+    const run_ends = [_]i32{ 2, 5 };
+    var run_end_bytes: [run_ends.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(run_end_bytes[0..], std.mem.sliceAsBytes(run_ends[0..]));
+
+    const data = ArrayData{
+        .data_type = ree_type,
+        .length = 5,
+        .buffers = &[_]Buffer{Buffer.fromSlice(run_end_bytes[0..])},
+        .children = &[_]ArrayData{child},
+    };
+
+    try data.validateLayout();
+}
+
+test "array data validateLayout rejects run_end_encoded nonmonotonic" {
+    const value_type = DataType{ .int32 = {} };
+    const run_end_type = datatype.IntType{ .bit_width = 32, .signed = true };
+    const ree_type = DataType{ .run_end_encoded = .{ .run_end_type = run_end_type, .value_type = &value_type } };
+
+    var child_values: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child_values[0..], std.mem.sliceAsBytes(&[_]i32{ 10, 20 }));
+    const child = ArrayData{
+        .data_type = value_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]Buffer{ Buffer.empty, Buffer.fromSlice(child_values[0..]) },
+    };
+
+    const run_ends = [_]i32{ 3, 2 };
+    var run_end_bytes: [run_ends.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(run_end_bytes[0..], std.mem.sliceAsBytes(run_ends[0..]));
+
+    const data = ArrayData{
+        .data_type = ree_type,
+        .length = 5,
+        .buffers = &[_]Buffer{Buffer.fromSlice(run_end_bytes[0..])},
+        .children = &[_]ArrayData{child},
     };
 
     try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
