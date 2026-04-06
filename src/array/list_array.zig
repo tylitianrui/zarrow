@@ -205,6 +205,8 @@ pub const ListBuilder = struct {
         if (self.state == .finished) return BuilderError.AlreadyFinished;
         if (values.data().length != self.values_len) return BuilderError.InvalidChildLength;
 
+        try self.ensureOffsetsCapacity(self.len + 1);
+
         const validity_buf = if (self.validity) |*buf| try buf.toShared(bitmap.byteLength(self.len)) else SharedBuffer.empty;
         self.buffers[0] = validity_buf;
         self.buffers[1] = try self.offsets.toShared((self.len + 1) * @sizeOf(i32));
@@ -237,8 +239,9 @@ pub const ListBuilder = struct {
             .children = children,
         };
 
+        const finished_ref = try ArrayRef.fromOwnedUnsafe(self.allocator, data);
         self.state = .finished;
-        return ArrayRef.fromOwnedUnsafe(self.allocator, data);
+        return finished_ref;
     }
 
     pub fn finishReset(self: *ListBuilder, values: ArrayRef) !ArrayRef {
@@ -361,6 +364,8 @@ pub const LargeListBuilder = struct {
         if (self.state == .finished) return BuilderError.AlreadyFinished;
         if (values.data().length != self.values_len) return BuilderError.InvalidChildLength;
 
+        try self.ensureOffsetsCapacity(self.len + 1);
+
         const validity_buf = if (self.validity) |*buf| try buf.toShared(bitmap.byteLength(self.len)) else SharedBuffer.empty;
         self.buffers[0] = validity_buf;
         self.buffers[1] = try self.offsets.toShared((self.len + 1) * @sizeOf(i64));
@@ -393,8 +398,9 @@ pub const LargeListBuilder = struct {
             .children = children,
         };
 
+        const finished_ref = try ArrayRef.fromOwnedUnsafe(self.allocator, data);
         self.state = .finished;
-        return ArrayRef.fromOwnedUnsafe(self.allocator, data);
+        return finished_ref;
     }
 
     pub fn finishReset(self: *LargeListBuilder, values: ArrayRef) !ArrayRef {
