@@ -140,6 +140,13 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             self.state = .ready;
         }
 
+        pub fn reserve(self: *Self, additional: usize) !void {
+            try self.ensureOffsetsCapacity(self.len + additional + 1);
+            if (self.validity) |*valid| {
+                try ensureBitmapCapacity(valid, self.len + additional);
+            }
+        }
+
         fn ensureOffsetsCapacity(self: *Self, needed_len: usize) !void {
             const capacity = self.offsets.len() / @sizeOf(OffsetsT);
             if (needed_len <= capacity) return;
@@ -187,6 +194,35 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             self.values_len = next_offset;
         }
 
+        pub fn appendLens(self: *Self, lengths: []const usize) !void {
+            if (self.state == .finished) return BuilderError.AlreadyFinished;
+            if (lengths.len == 0) return;
+
+            const next_len = self.len + lengths.len;
+            try self.ensureOffsetsCapacity(next_len + 1);
+
+            var validity_bytes: []u8 = &.{};
+            if (self.validity) |*valid| {
+                try ensureBitmapCapacity(valid, next_len);
+                validity_bytes = valid.data[0..bitmap.byteLength(next_len)];
+            }
+
+            const offsets_slice = std.mem.bytesAsSlice(OffsetsT, self.offsets.data);
+            var index = self.len;
+            for (lengths) |value_len| {
+                const next_offset = self.values_len + value_len;
+                const cast_offset = std.math.cast(OffsetsT, next_offset) orelse return BuilderError.OffsetOverflow;
+                offsets_slice[index + 1] = cast_offset;
+                if (validity_bytes.len > 0) {
+                    bitmap.setBit(validity_bytes, index);
+                }
+                index += 1;
+                self.values_len = next_offset;
+            }
+
+            self.len = next_len;
+        }
+
         pub fn appendNull(self: *Self) !void {
             if (self.state == .finished) return BuilderError.AlreadyFinished;
             const next_len = self.len + 1;
@@ -194,6 +230,33 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             const offsets_slice = std.mem.bytesAsSlice(OffsetsT, self.offsets.data);
             offsets_slice[next_len] = std.math.cast(OffsetsT, self.values_len) orelse return BuilderError.OffsetOverflow;
             try self.ensureValidityForNull(next_len);
+            self.len = next_len;
+        }
+
+        pub fn appendNulls(self: *Self, count: usize) !void {
+            if (self.state == .finished) return BuilderError.AlreadyFinished;
+            if (count == 0) return;
+
+            const next_len = self.len + count;
+            try self.ensureOffsetsCapacity(next_len + 1);
+
+            const cast_offset = std.math.cast(OffsetsT, self.values_len) orelse return BuilderError.OffsetOverflow;
+            const offsets_slice = std.mem.bytesAsSlice(OffsetsT, self.offsets.data);
+            @memset(offsets_slice[self.len + 1 .. next_len + 1], cast_offset);
+
+            if (self.validity == null) {
+                const buf = try initValidityAllValid(self.allocator, next_len);
+                self.validity = buf;
+            } else {
+                try ensureBitmapCapacity(&self.validity.?, next_len);
+            }
+
+            var i: usize = self.len;
+            while (i < next_len) : (i += 1) {
+                bitmap.clearBit(self.validity.?.data[0..bitmap.byteLength(next_len)], i);
+            }
+
+            self.null_count += count;
             self.len = next_len;
         }
 
@@ -292,6 +355,67 @@ test "list array reads values" {
     try std.testing.expectEqual(@as(usize, 2), third_values.len());
     try std.testing.expectEqual(@as(i32, 3), third_values.value(0));
     try std.testing.expectEqual(@as(i32, 4), third_values.value(1));
+}
+
+test "list builder appendLens batches offsets" {
+    const allocator = std.testing.allocator;
+    const value_type = DataType{ .int32 = {} };
+    const field = Field{ .name = "item", .data_type = &value_type, .nullable = true };
+
+    var values_builder = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 3);
+    defer values_builder.deinit();
+    try values_builder.append(11);
+    try values_builder.append(22);
+    try values_builder.append(33);
+    var values_ref = try values_builder.finish();
+    defer values_ref.release();
+
+    var builder = try ListBuilder.init(allocator, 0, field);
+    defer builder.deinit();
+    try builder.reserve(2);
+    try builder.appendLens(&[_]usize{ 1, 2 });
+
+    var list_ref = try builder.finish(values_ref);
+    defer list_ref.release();
+    const list = ListArray{ .data = list_ref.data() };
+
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+
+    var first = try list.value(0);
+    defer first.release();
+    const first_values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = first.data() };
+    try std.testing.expectEqual(@as(usize, 1), first_values.len());
+    try std.testing.expectEqual(@as(i32, 11), first_values.value(0));
+
+    var second = try list.value(1);
+    defer second.release();
+    const second_values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = second.data() };
+    try std.testing.expectEqual(@as(usize, 2), second_values.len());
+    try std.testing.expectEqual(@as(i32, 22), second_values.value(0));
+    try std.testing.expectEqual(@as(i32, 33), second_values.value(1));
+}
+
+test "list builder appendNulls batches nulls" {
+    const allocator = std.testing.allocator;
+    const value_type = DataType{ .int32 = {} };
+    const field = Field{ .name = "item", .data_type = &value_type, .nullable = true };
+
+    var values_builder = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 0);
+    defer values_builder.deinit();
+    var values_ref = try values_builder.finish();
+    defer values_ref.release();
+
+    var builder = try ListBuilder.init(allocator, 0, field);
+    defer builder.deinit();
+    try builder.appendNulls(2);
+
+    var list_ref = try builder.finish(values_ref);
+    defer list_ref.release();
+    const list = ListArray{ .data = list_ref.data() };
+
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+    try std.testing.expect(list.isNull(0));
+    try std.testing.expect(list.isNull(1));
 }
 
 test "large list array reads values" {
