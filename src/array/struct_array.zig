@@ -9,9 +9,11 @@ const BuilderError = error{
     InvalidChildOffset,
     MissingChildBuilders,
     ChildResetUnsupported,
+    ChildClearUnsupported,
 };
 pub const ChildBuilderError = error{
     ResetFailed,
+    ClearFailed,
 };
 const bitmap = @import("../bitmap.zig");
 const buffer = @import("../buffer.zig");
@@ -34,9 +36,10 @@ pub const ChildBuilder = struct {
     finishFn: *const fn (*anyopaque) anyerror!ArrayRef,
     lenFn: *const fn (*anyopaque) usize,
     resetFn: ?*const fn (*anyopaque) ChildBuilderError!void = null,
+    clearFn: ?*const fn (*anyopaque) ChildBuilderError!void = null,
 };
 
-const ResetFromChildrenError = BuilderError || ChildBuilderError;
+const FromChildrenError = BuilderError || ChildBuilderError;
 
 const initValidityAllValid = array_utils.initValidityAllValid;
 const ensureBitmapCapacity = array_utils.ensureBitmapCapacity;
@@ -82,7 +85,7 @@ pub const StructBuilder = struct {
     null_count: usize = 0,
     state: BuilderState = .ready,
 
-    fn resetChildren(self: *StructBuilder) ResetFromChildrenError!void {
+    fn resetChildren(self: *StructBuilder) FromChildrenError!void {
         if (self.child_builders == null) return;
         const builders = self.child_builders.?;
         if (builders.len != self.fields.len) return BuilderError.InvalidChildCount;
@@ -92,6 +95,48 @@ pub const StructBuilder = struct {
         for (builders) |builder| {
             try builder.resetFn.?(builder.ctx);
         }
+    }
+
+    fn clearChildren(self: *StructBuilder) FromChildrenError!void {
+        if (self.child_builders == null) return;
+        const builders = self.child_builders.?;
+        if (builders.len != self.fields.len) return BuilderError.InvalidChildCount;
+        for (builders) |builder| {
+            if (builder.clearFn == null) return BuilderError.ChildClearUnsupported;
+        }
+        for (builders) |builder| {
+            try builder.clearFn.?(builder.ctx);
+        }
+    }
+
+    fn materializeChildren(self: *StructBuilder, builders: []const ChildBuilder) ![]ArrayRef {
+        if (builders.len != self.fields.len) return BuilderError.InvalidChildCount;
+
+        const children = try self.allocator.alloc(ArrayRef, builders.len);
+        var child_count: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < child_count) : (i += 1) {
+                children[i].release();
+            }
+            self.allocator.free(children);
+        }
+
+        for (builders, 0..) |builder, i| {
+            if (builder.lenFn(builder.ctx) != self.len) return BuilderError.InvalidChildLength;
+            children[i] = try builder.finishFn(builder.ctx);
+            child_count += 1;
+        }
+
+        return children;
+    }
+
+    fn releaseMaterializedChildren(self: *StructBuilder, children: []ArrayRef) void {
+        var i: usize = 0;
+        while (i < children.len) : (i += 1) {
+            children[i].release();
+        }
+        self.allocator.free(children);
     }
 
     pub fn init(allocator: std.mem.Allocator, fields: []const Field) StructBuilder {
@@ -233,34 +278,13 @@ pub const StructBuilder = struct {
     pub fn finishFromChildren(self: *StructBuilder) !ArrayRef {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;
-        if (builders.len != self.fields.len) return BuilderError.InvalidChildCount;
 
-        const children = try self.allocator.alloc(ArrayRef, builders.len);
-        var child_count: usize = 0;
-        errdefer {
-            var i: usize = 0;
-            while (i < child_count) : (i += 1) {
-                children[i].release();
-            }
-            self.allocator.free(children);
-        }
-
-        for (builders, 0..) |builder, i| {
-            if (builder.lenFn(builder.ctx) != self.len) return BuilderError.InvalidChildLength;
-            children[i] = try builder.finishFn(builder.ctx);
-            child_count += 1;
-        }
-
-        const array_ref_out = try self.finish(children);
-        var i: usize = 0;
-        while (i < child_count) : (i += 1) {
-            children[i].release();
-        }
-        self.allocator.free(children);
-        return array_ref_out;
+        const children = try self.materializeChildren(builders);
+        defer self.releaseMaterializedChildren(children);
+        return self.finish(children);
     }
 
-    pub fn resetFromChildren(self: *StructBuilder) ResetFromChildrenError!void {
+    pub fn resetFromChildren(self: *StructBuilder) FromChildrenError!void {
         if (self.state != .finished) return BuilderError.NotFinished;
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         try self.resetChildren();
@@ -269,47 +293,28 @@ pub const StructBuilder = struct {
         self.state = .ready;
     }
 
-    pub fn finishResetFromChildren(self: *StructBuilder) (ResetFromChildrenError || anyerror)!ArrayRef {
+    pub fn finishResetFromChildren(self: *StructBuilder) (FromChildrenError || anyerror)!ArrayRef {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;
-        if (builders.len != self.fields.len) return BuilderError.InvalidChildCount;
 
         for (builders) |builder| {
             if (builder.resetFn == null) return BuilderError.ChildResetUnsupported;
         }
 
-        const children = try self.allocator.alloc(ArrayRef, builders.len);
-        var child_count: usize = 0;
-        errdefer {
-            var i: usize = 0;
-            while (i < child_count) : (i += 1) {
-                children[i].release();
-            }
-            self.allocator.free(children);
-        }
+        const children = try self.materializeChildren(builders);
+        defer self.releaseMaterializedChildren(children);
 
-        for (builders, 0..) |builder, i| {
-            if (builder.lenFn(builder.ctx) != self.len) return BuilderError.InvalidChildLength;
-            children[i] = try builder.finishFn(builder.ctx);
-            child_count += 1;
-        }
-
-        const array_ref_out = try self.finish(children);
-        var i: usize = 0;
-        while (i < child_count) : (i += 1) {
-            children[i].release();
-        }
-        self.allocator.free(children);
+        var array_ref_out = try self.finish(children);
+        errdefer array_ref_out.release();
 
         try self.resetFromChildren();
-
         return array_ref_out;
     }
 
-    pub fn clearFromChildren(self: *StructBuilder) ResetFromChildrenError!void {
+    pub fn clearFromChildren(self: *StructBuilder) FromChildrenError!void {
         if (self.state != .finished) return BuilderError.NotFinished;
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
-        try self.resetChildren();
+        try self.clearChildren();
         if (self.validity) |*valid| valid.deinit();
         self.validity = null;
         self.len = 0;
@@ -317,40 +322,21 @@ pub const StructBuilder = struct {
         self.state = .ready;
     }
 
-    pub fn finishClearFromChildren(self: *StructBuilder) (ResetFromChildrenError || anyerror)!ArrayRef {
+    pub fn finishClearFromChildren(self: *StructBuilder) (FromChildrenError || anyerror)!ArrayRef {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;
-        if (builders.len != self.fields.len) return BuilderError.InvalidChildCount;
 
         for (builders) |builder| {
-            if (builder.resetFn == null) return BuilderError.ChildResetUnsupported;
+            if (builder.clearFn == null) return BuilderError.ChildClearUnsupported;
         }
 
-        const children = try self.allocator.alloc(ArrayRef, builders.len);
-        var child_count: usize = 0;
-        errdefer {
-            var i: usize = 0;
-            while (i < child_count) : (i += 1) {
-                children[i].release();
-            }
-            self.allocator.free(children);
-        }
+        const children = try self.materializeChildren(builders);
+        defer self.releaseMaterializedChildren(children);
 
-        for (builders, 0..) |builder, i| {
-            if (builder.lenFn(builder.ctx) != self.len) return BuilderError.InvalidChildLength;
-            children[i] = try builder.finishFn(builder.ctx);
-            child_count += 1;
-        }
-
-        const array_ref_out = try self.finish(children);
-        var i: usize = 0;
-        while (i < child_count) : (i += 1) {
-            children[i].release();
-        }
-        self.allocator.free(children);
+        var array_ref_out = try self.finish(children);
+        errdefer array_ref_out.release();
 
         try self.clearFromChildren();
-
         return array_ref_out;
     }
 
@@ -597,6 +583,12 @@ test "struct builder finishResetFromChildren resets child builders" {
                     ptr.reset() catch return ChildBuilderError.ResetFailed;
                 }
             }.reset,
+            .clearFn = struct {
+                fn clear(ctx: *anyopaque) ChildBuilderError!void {
+                    const ptr: *IntBuilder = @ptrCast(@alignCast(ctx));
+                    ptr.clear() catch return ChildBuilderError.ClearFailed;
+                }
+            }.clear,
         },
     });
     defer builder.deinit();
@@ -644,6 +636,12 @@ test "struct builder resetFromChildren reuses builders" {
                     ptr.reset() catch return ChildBuilderError.ResetFailed;
                 }
             }.reset,
+            .clearFn = struct {
+                fn clear(ctx: *anyopaque) ChildBuilderError!void {
+                    const ptr: *IntBuilder = @ptrCast(@alignCast(ctx));
+                    ptr.clear() catch return ChildBuilderError.ClearFailed;
+                }
+            }.clear,
         },
     });
     defer builder.deinit();
@@ -692,6 +690,12 @@ test "struct builder clearFromChildren frees validity and resets children" {
                     ptr.reset() catch return ChildBuilderError.ResetFailed;
                 }
             }.reset,
+            .clearFn = struct {
+                fn clear(ctx: *anyopaque) ChildBuilderError!void {
+                    const ptr: *IntBuilder = @ptrCast(@alignCast(ctx));
+                    ptr.clear() catch return ChildBuilderError.ClearFailed;
+                }
+            }.clear,
         },
     });
     defer builder.deinit();
@@ -742,6 +746,12 @@ test "struct builder finishClearFromChildren clears after finish" {
                     ptr.reset() catch return ChildBuilderError.ResetFailed;
                 }
             }.reset,
+            .clearFn = struct {
+                fn clear(ctx: *anyopaque) ChildBuilderError!void {
+                    const ptr: *IntBuilder = @ptrCast(@alignCast(ctx));
+                    ptr.clear() catch return ChildBuilderError.ClearFailed;
+                }
+            }.clear,
         },
     });
     defer builder.deinit();
