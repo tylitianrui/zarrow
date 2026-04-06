@@ -67,4 +67,68 @@ pub fn build(b: *std.Build) void {
         const run_step = b.step("run", "Run the default example");
         run_step.dependOn(step);
     }
+
+    // Discover benchmark files in `benchmarks` and wire dedicated run steps.
+    const benches_dir = b.path("benchmarks");
+    var benches = std.fs.openDirAbsolute(benches_dir.getPath(b), .{ .iterate = true }) catch |err| {
+        std.debug.print("warning: failed to open benchmarks directory: {s}\n", .{@errorName(err)});
+        return;
+    };
+    defer benches.close();
+
+    var bench_all_step = b.step("benchmark", "Run all benchmarks (default mode)");
+    var bench_smoke_step = b.step("benchmark-smoke", "Run all benchmarks in smoke mode");
+    var bench_full_step = b.step("benchmark-full", "Run all benchmarks in full mode");
+    var bench_matrix_step = b.step("benchmark-matrix", "Run all benchmarks in matrix CSV mode");
+    var bench_ci_step = b.step("benchmark-ci", "Run all benchmarks in CI CSV mode");
+    var matrix_header_done = false;
+    var ci_header_done = false;
+    var bench_it = benches.iterate();
+    while (bench_it.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+
+        const base_name = entry.name[0 .. entry.name.len - 4];
+        const bench_path = b.fmt("benchmarks/{s}", .{entry.name});
+        const bench_exe = b.addExecutable(.{
+            .name = b.fmt("benchmark-{s}", .{base_name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(bench_path),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        bench_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
+
+        const run_bench = b.addRunArtifact(bench_exe);
+        const bench_step = b.step(b.fmt("benchmark-{s}", .{base_name}), b.fmt("Run benchmark {s}", .{base_name}));
+        bench_step.dependOn(&run_bench.step);
+        bench_all_step.dependOn(&run_bench.step);
+
+        const run_bench_smoke = b.addRunArtifact(bench_exe);
+        run_bench_smoke.addArg("smoke");
+        bench_smoke_step.dependOn(&run_bench_smoke.step);
+
+        const run_bench_full = b.addRunArtifact(bench_exe);
+        run_bench_full.addArg("full");
+        bench_full_step.dependOn(&run_bench_full.step);
+
+        const run_bench_matrix = b.addRunArtifact(bench_exe);
+        if (!matrix_header_done) {
+            run_bench_matrix.addArg("matrix");
+            matrix_header_done = true;
+        } else {
+            run_bench_matrix.addArg("matrix-no-header");
+        }
+        bench_matrix_step.dependOn(&run_bench_matrix.step);
+
+        const run_bench_ci = b.addRunArtifact(bench_exe);
+        if (!ci_header_done) {
+            run_bench_ci.addArg("ci");
+            ci_header_done = true;
+        } else {
+            run_bench_ci.addArg("ci-no-header");
+        }
+        bench_ci_step.dependOn(&run_bench_ci.step);
+    }
 }

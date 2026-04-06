@@ -173,18 +173,21 @@ pub const RecordBatchBuilder = struct {
         }
 
         const batch = try RecordBatch.init(self.allocator, self.schema, refs);
+        // The resulting batch now owns retained column refs, so the builder
+        // should not keep additional holds after a successful finish.
+        self.releaseColumns();
         self.finished = true;
         return batch;
     }
 
     pub fn reset(self: *Self) RecordBatchBuilderError!void {
-        if (!self.finished) return RecordBatchBuilderError.NotFinished;
+        // Reset keeps capacity and can be called in any state.
         self.releaseColumns();
         self.finished = false;
     }
 
     pub fn clear(self: *Self) RecordBatchBuilderError!void {
-        if (!self.finished) return RecordBatchBuilderError.NotFinished;
+        // Clear is a hard cleanup operation and is allowed even before finish.
         self.releaseColumns();
         self.finished = false;
     }
@@ -422,4 +425,50 @@ test "record batch builder reset allows reuse" {
     defer second.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), second.numRows());
+}
+
+test "record batch builder clear before finish releases slots" {
+    const allocator = std.testing.allocator;
+    const int_type = @import("datatype.zig").DataType{ .int32 = {} };
+    const fields = [_]Field{.{ .name = "id", .data_type = &int_type, .nullable = false }};
+
+    var int_builder = try @import("array/primitive_array.zig").PrimitiveBuilder(i32, @import("datatype.zig").DataType{ .int32 = {} }).init(allocator, 1);
+    defer int_builder.deinit();
+    try int_builder.append(5);
+    var int_ref = try int_builder.finish();
+    defer int_ref.release();
+
+    var builder = try RecordBatchBuilder.init(allocator, .{ .fields = fields[0..] });
+    defer builder.deinit();
+
+    try builder.setColumn(0, int_ref);
+    try builder.clear();
+    try builder.setColumn(0, int_ref);
+    var batch = try builder.finish();
+    defer batch.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), batch.numRows());
+}
+
+test "record batch builder reset before finish releases slots" {
+    const allocator = std.testing.allocator;
+    const int_type = @import("datatype.zig").DataType{ .int32 = {} };
+    const fields = [_]Field{.{ .name = "id", .data_type = &int_type, .nullable = false }};
+
+    var int_builder = try @import("array/primitive_array.zig").PrimitiveBuilder(i32, @import("datatype.zig").DataType{ .int32 = {} }).init(allocator, 1);
+    defer int_builder.deinit();
+    try int_builder.append(8);
+    var int_ref = try int_builder.finish();
+    defer int_ref.release();
+
+    var builder = try RecordBatchBuilder.init(allocator, .{ .fields = fields[0..] });
+    defer builder.deinit();
+
+    try builder.setColumn(0, int_ref);
+    try builder.reset();
+    try builder.setColumn(0, int_ref);
+    var batch = try builder.finish();
+    defer batch.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), batch.numRows());
 }
