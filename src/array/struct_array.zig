@@ -130,9 +130,29 @@ pub const StructBuilder = struct {
         }
     }
 
+    /// Execute rollbackChildren logic for this type.
+    fn rollbackChildren(self: *StructBuilder, builders: []const ChildBuilder, action: RecycleAction) ChildBuilderError!void {
+        _ = self;
+        for (builders) |builder| {
+            switch (action) {
+                .reset => try builder.resetFn.?(builder.ctx),
+                .clear => try builder.clearFn.?(builder.ctx),
+            }
+        }
+    }
+
     /// Execute materializeChildren logic for this type.
-    fn materializeChildren(self: *StructBuilder, builders: []const ChildBuilder) FromChildrenError![]ArrayRef {
+    fn materializeChildren(self: *StructBuilder, builders: []const ChildBuilder, rollback_action: ?RecycleAction) FromChildrenError![]ArrayRef {
         if (builders.len != self.fields.len) return BuilderError.InvalidChildCount;
+
+        if (rollback_action) |action| {
+            for (builders) |builder| {
+                switch (action) {
+                    .reset => if (builder.resetFn == null) return BuilderError.ChildResetUnsupported,
+                    .clear => if (builder.clearFn == null) return BuilderError.ChildClearUnsupported,
+                }
+            }
+        }
 
         const children = try self.allocator.alloc(ArrayRef, builders.len);
         var child_count: usize = 0;
@@ -146,7 +166,12 @@ pub const StructBuilder = struct {
 
         for (builders, 0..) |builder, i| {
             if (builder.lenFn(builder.ctx) != self.len) return BuilderError.InvalidChildLength;
-            children[i] = try builder.finishFn(builder.ctx);
+            children[i] = builder.finishFn(builder.ctx) catch |err| {
+                if (rollback_action) |action| {
+                    self.rollbackChildren(builders[0..child_count], action) catch |rollback_err| return rollback_err;
+                }
+                return err;
+            };
             child_count += 1;
         }
 
@@ -334,7 +359,7 @@ pub const StructBuilder = struct {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;
 
-        const children = try self.materializeChildren(builders);
+        const children = try self.materializeChildren(builders, null);
         defer self.releaseMaterializedChildren(children);
         return self.finish(children);
     }
@@ -344,11 +369,7 @@ pub const StructBuilder = struct {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;
 
-        for (builders) |builder| {
-            if (builder.resetFn == null) return BuilderError.ChildResetUnsupported;
-        }
-
-        const children = try self.materializeChildren(builders);
+        const children = try self.materializeChildren(builders, .reset);
         defer self.releaseMaterializedChildren(children);
 
         var array_ref_out = try self.finish(children);
@@ -363,11 +384,7 @@ pub const StructBuilder = struct {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;
 
-        for (builders) |builder| {
-            if (builder.clearFn == null) return BuilderError.ChildClearUnsupported;
-        }
-
-        const children = try self.materializeChildren(builders);
+        const children = try self.materializeChildren(builders, .clear);
         defer self.releaseMaterializedChildren(children);
 
         var array_ref_out = try self.finish(children);

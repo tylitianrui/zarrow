@@ -1,26 +1,55 @@
 const std = @import("std");
 
 // Configure the zarrow package as a reusable module plus a dedicated test step.
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     // Allow downstream consumers and tests to select their own target and optimization mode.
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // Expose zarrow as a reusable Zig module for downstream dependencies.
-    _ = b.addModule("zarrow", .{
+    const zarrow_module = b.addModule("zarrow", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Tests still build a runnable artifact, but the package itself does not.
-    const tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/root.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    const fbz_dep = b.dependency("flatbufferz", .{
+        .target = target,
+        .optimize = optimize,
     });
+
+    const gen_step = try @import("flatbufferz").GenStep.create(
+        b,
+        fbz_dep.artifact("flatc-zig"),
+        &.{
+            "src/format/Message.fbs",
+            "src/format/Schema.fbs",
+            "src/format/Tensor.fbs",
+            "src/format/SparseTensor.fbs",
+        },
+        &.{ "-I", "src/format" },
+        "flatc-zig",
+    );
+
+    const arrow_fbs_module = b.createModule(.{
+        .root_source_file = gen_step.module.root_source_file,
+        .imports = &.{.{ .name = "flatbufferz", .module = fbz_dep.module("flatbufferz") }},
+    });
+
+    zarrow_module.addImport("flatbufferz", fbz_dep.module("flatbufferz"));
+    zarrow_module.addImport("arrow_fbs", arrow_fbs_module);
+
+    // Tests still build a runnable artifact, but the package itself does not.
+    const test_module = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_module.addImport("flatbufferz", fbz_dep.module("flatbufferz"));
+    test_module.addImport("arrow_fbs", arrow_fbs_module);
+
+    const tests = b.addTest(.{ .root_module = test_module });
+    tests.step.dependOn(&gen_step.step);
 
     // Discover example files in the `examples` directory and wire them into the build.
     const examples_dir = b.path("examples");
@@ -32,6 +61,7 @@ pub fn build(b: *std.Build) void {
 
     // Wire the test artifact into a named build step for `zig build test`.
     const run_tests = b.addRunArtifact(tests);
+    run_tests.step.dependOn(&gen_step.step);
     const test_step = b.step("test", "Run zarrow unit tests");
     test_step.dependOn(&run_tests.step);
 

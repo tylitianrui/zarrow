@@ -87,7 +87,7 @@ pub const SharedBuffer = struct {
 
     /// Execute typedSlice logic for this type.
     pub fn typedSlice(self: SharedBuffer, comptime T: type) []const T {
-        const aligned: []align(ALIGNMENT) const u8 = @alignCast(self.data);
+        const aligned: []align(@alignOf(T)) const u8 = @alignCast(self.data);
         return std.mem.bytesAsSlice(T, aligned);
     }
 };

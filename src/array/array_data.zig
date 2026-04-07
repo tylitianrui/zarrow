@@ -298,21 +298,25 @@ pub const ArrayData = struct {
                 if (self.buffers.len < 2) return error.InvalidBufferCount;
                 const offset_width = offsetByteWidth(self.data_type).?;
                 if (self.buffers[1].len() % offset_width != 0) return error.InvalidOffsetBuffer;
-                if (self.buffers.len < 3 and (self.data_type == .string or self.data_type == .binary or self.data_type == .large_string or self.data_type == .large_binary)) {
+
+                const is_list = self.data_type == .list or self.data_type == .large_list or self.data_type == .map;
+                if (is_list) {
+                    if (self.children.len != 1) return error.InvalidChildren;
+                } else if (self.buffers.len < 3) {
                     return error.InvalidBufferCount;
                 }
 
-                const data_len = if (self.buffers.len >= 3) self.buffers[2].len() else 0;
+                const data_len = if (is_list) blk: {
+                    const child_data = self.children[0].data();
+                    break :blk child_data.length + child_data.offset;
+                } else if (self.buffers.len >= 3) self.buffers[2].len() else 0;
+
                 if (offset_width == 4) {
                     const offsets = self.buffers[1].typedSlice(i32);
                     try validateOffsetsI32(offsets, total_len, data_len);
                 } else {
                     const offsets = self.buffers[1].typedSlice(i64);
                     try validateOffsetsI64(offsets, total_len, data_len);
-                }
-
-                if (self.data_type == .list or self.data_type == .large_list or self.data_type == .map) {
-                    if (self.children.len != 1) return error.InvalidChildren;
                 }
             },
             .fixed_size_list, .struct_ => {
@@ -323,6 +327,12 @@ pub const ArrayData = struct {
                     else => 0,
                 };
                 if (self.children.len != expected) return error.InvalidChildren;
+                if (self.data_type == .fixed_size_list) {
+                    const list_size = @as(usize, @intCast(self.data_type.fixed_size_list.list_size));
+                    const required = total_len * list_size;
+                    const child_data = self.children[0].data();
+                    if (child_data.length + child_data.offset < required) return error.InvalidChildren;
+                }
             },
             .dictionary => |dict| {
                 if (self.buffers.len < 2) return error.InvalidBufferCount;
@@ -334,10 +344,13 @@ pub const ArrayData = struct {
             .sparse_union => |uni| {
                 if (self.buffers.len < 1) return error.InvalidBufferCount;
                 if (self.children.len != uni.fields.len) return error.InvalidChildren;
+                if (self.buffers[0].len() < total_len) return error.BufferTooSmall;
             },
             .dense_union => |uni| {
                 if (self.buffers.len < 2) return error.InvalidBufferCount;
                 if (self.children.len != uni.fields.len) return error.InvalidChildren;
+                if (self.buffers[0].len() < total_len) return error.BufferTooSmall;
+                if (self.buffers[1].len() < total_len * @sizeOf(i32)) return error.BufferTooSmall;
             },
             .run_end_encoded => {
                 if (self.buffers.len < 1) return error.InvalidBufferCount;
@@ -477,6 +490,76 @@ test "array data validateLayout accepts primitive" {
 
     try data.validateLayout();
     try data.validateFull();
+}
+
+test "array data validateLayout rejects null count without validity" {
+    const dtype = DataType{ .int32 = {} };
+    var values_bytes: [@sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memset(values_bytes[0..], 0);
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 1,
+        .null_count = 1,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(values_bytes[0..]) },
+    };
+
+    try std.testing.expectError(error.InvalidNullCount, data.validateLayout());
+}
+
+test "array data validateLayout rejects struct child count mismatch" {
+    const value_type = DataType{ .int32 = {} };
+    const fields = &[_]datatype.Field{.{ .name = "x", .data_type = &value_type, .nullable = true }};
+    const data = ArrayData{
+        .data_type = DataType{ .struct_ = .{ .fields = fields } },
+        .length = 1,
+        .buffers = &[_]SharedBuffer{SharedBuffer.empty},
+        .children = &[_]ArrayRef{},
+    };
+
+    try std.testing.expectError(error.InvalidChildren, data.validateLayout());
+}
+
+test "array data validateFull checks null count matches bitmap" {
+    const dtype = DataType{ .int32 = {} };
+    var validity: [1]u8 = .{0xFF};
+    var values_bytes: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memset(values_bytes[0..], 0);
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 2,
+        .null_count = 1,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.fromSlice(validity[0..]), SharedBuffer.fromSlice(values_bytes[0..]) },
+    };
+
+    try std.testing.expectError(error.InvalidNullCount, data.validateFull());
+}
+
+test "array data validateLayout rejects dictionary index buffer too small" {
+    const allocator = std.testing.allocator;
+    const value_type = DataType{ .string = {} };
+    const dict_type = DataType{ .dictionary = .{ .index_type = .{ .bit_width = 32, .signed = true }, .value_type = &value_type, .ordered = false } };
+
+    const values = ArrayData{
+        .data_type = value_type,
+        .length = 0,
+        .buffers = &[_]SharedBuffer{},
+    };
+    var dict_ref = try ArrayRef.fromBorrowed(allocator, values);
+    defer dict_ref.release();
+
+    const indices: [4]u8 = .{ 0, 0, 0, 0 };
+    const data = ArrayData{
+        .data_type = dict_type,
+        .length = 2,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(indices[0..]) },
+        .dictionary = dict_ref.retain(),
+    };
+    defer {
+        var owned = data.dictionary.?;
+        owned.release();
+    }
+
+    try std.testing.expectError(error.BufferTooSmall, data.validateLayout());
 }
 
 test "array data validateLayout catches invalid offsets" {

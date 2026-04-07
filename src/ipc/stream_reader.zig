@@ -6,18 +6,49 @@ const buffer = @import("../buffer.zig");
 const array_ref = @import("../array/array_ref.zig");
 const array_data = @import("../array/array_data.zig");
 const format = @import("format.zig");
+const fb = @import("flatbufferz");
+const arrow_fbs = @import("arrow_fbs");
 
 pub const StreamError = format.StreamError;
-pub const MessageType = format.MessageType;
 
 pub const Schema = schema_mod.Schema;
 pub const Field = datatype.Field;
 pub const DataType = datatype.DataType;
-pub const TypeId = datatype.TypeId;
 pub const ArrayRef = array_ref.ArrayRef;
 pub const ArrayData = array_data.ArrayData;
 pub const RecordBatch = record_batch.RecordBatch;
 pub const OwnedBuffer = buffer.OwnedBuffer;
+
+const fbs = struct {
+    const Message = arrow_fbs.org_apache_arrow_flatbuf_Message.Message;
+    const MessageT = arrow_fbs.org_apache_arrow_flatbuf_Message.MessageT;
+    const MessageHeader = arrow_fbs.org_apache_arrow_flatbuf_MessageHeader.MessageHeader;
+    const MessageHeaderT = arrow_fbs.org_apache_arrow_flatbuf_MessageHeader.MessageHeaderT;
+    const MetadataVersion = arrow_fbs.org_apache_arrow_flatbuf_MetadataVersion.MetadataVersion;
+    const SchemaT = arrow_fbs.org_apache_arrow_flatbuf_Schema.SchemaT;
+    const FieldT = arrow_fbs.org_apache_arrow_flatbuf_Field.FieldT;
+    const TypeT = arrow_fbs.org_apache_arrow_flatbuf_Type.TypeT;
+    const DictionaryEncodingT = arrow_fbs.org_apache_arrow_flatbuf_DictionaryEncoding.DictionaryEncodingT;
+    const Endianness = arrow_fbs.org_apache_arrow_flatbuf_Endianness.Endianness;
+    const RecordBatchT = arrow_fbs.org_apache_arrow_flatbuf_RecordBatch.RecordBatchT;
+    const FieldNodeT = arrow_fbs.org_apache_arrow_flatbuf_FieldNode.FieldNodeT;
+    const BufferT = arrow_fbs.org_apache_arrow_flatbuf_Buffer.BufferT;
+    const IntT = arrow_fbs.org_apache_arrow_flatbuf_Int.IntT;
+    const FloatingPointT = arrow_fbs.org_apache_arrow_flatbuf_FloatingPoint.FloatingPointT;
+    const Precision = arrow_fbs.org_apache_arrow_flatbuf_Precision.Precision;
+    const FixedSizeBinaryT = arrow_fbs.org_apache_arrow_flatbuf_FixedSizeBinary.FixedSizeBinaryT;
+    const FixedSizeListT = arrow_fbs.org_apache_arrow_flatbuf_FixedSizeList.FixedSizeListT;
+    const MapT = arrow_fbs.org_apache_arrow_flatbuf_Map.MapT;
+    const BoolT = arrow_fbs.org_apache_arrow_flatbuf_Bool.BoolT;
+    const BinaryT = arrow_fbs.org_apache_arrow_flatbuf_Binary.BinaryT;
+    const Utf8T = arrow_fbs.org_apache_arrow_flatbuf_Utf8.Utf8T;
+    const LargeBinaryT = arrow_fbs.org_apache_arrow_flatbuf_LargeBinary.LargeBinaryT;
+    const LargeUtf8T = arrow_fbs.org_apache_arrow_flatbuf_LargeUtf8.LargeUtf8T;
+    const ListT = arrow_fbs.org_apache_arrow_flatbuf_List.ListT;
+    const LargeListT = arrow_fbs.org_apache_arrow_flatbuf_LargeList.LargeListT;
+    const Struct_T = arrow_fbs.org_apache_arrow_flatbuf_Struct_.Struct_T;
+    const NullT = arrow_fbs.org_apache_arrow_flatbuf_Null.NullT;
+};
 
 pub const OwnedSchema = struct {
     arena: std.heap.ArenaAllocator,
@@ -36,7 +67,6 @@ pub fn StreamReader(comptime ReaderType: type) type {
     return struct {
         allocator: std.mem.Allocator,
         reader: ReaderType,
-        header_read: bool = false,
         schema_owned: ?OwnedSchema = null,
 
         const Self = @This();
@@ -50,128 +80,180 @@ pub fn StreamReader(comptime ReaderType: type) type {
             self.schema_owned = null;
         }
 
-        pub fn readSchema(self: *Self) !Schema {
-            try self.ensureHeader();
-            const msg = try format.readMessageHeader(self.reader);
-            if (msg.msg_type != .schema) return StreamError.InvalidMessage;
-            var meta_buf = try self.allocator.alloc(u8, msg.meta_len);
-            defer self.allocator.free(meta_buf);
-            if (msg.meta_len > 0) try self.reader.readNoEof(meta_buf);
+        pub fn readSchema(self: *Self) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!Schema {
+            var msg = try readMessage(self.*);
+            defer msg.deinit(self.allocator);
+            if (msg.msg.header != .Schema) return StreamError.InvalidMessage;
 
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             errdefer arena.deinit();
-            var meta_stream = std.io.fixedBufferStream(meta_buf);
-            const schema = try readSchemaMeta(meta_stream.reader(), arena.allocator());
+            const schema = try buildSchemaFromFlatbuf(arena.allocator(), msg.msg.header.Schema.?);
 
             if (self.schema_owned) |*owned| owned.deinit();
             self.schema_owned = .{ .arena = arena, .schema = schema };
             return schema;
         }
 
-        pub fn nextRecordBatch(self: *Self) !?RecordBatch {
-            try self.ensureHeader();
+        pub fn nextRecordBatch(self: *Self) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?RecordBatch {
             if (self.schema_owned == null) return StreamError.SchemaNotRead;
 
-            const msg = try format.readMessageHeader(self.reader);
-            if (msg.msg_type == .end) return null;
-            if (msg.msg_type != .record_batch) return StreamError.InvalidMessage;
+            const maybe_msg = try readMessageOptional(self.*);
+            if (maybe_msg == null) return null;
+            var msg = maybe_msg.?;
+            defer msg.deinit(self.allocator);
 
-            var meta_buf = try self.allocator.alloc(u8, msg.meta_len);
-            defer self.allocator.free(meta_buf);
-            if (msg.meta_len > 0) try self.reader.readNoEof(meta_buf);
+            if (msg.msg.header != .RecordBatch) return StreamError.InvalidMessage;
+            if (msg.body == null) return StreamError.InvalidBody;
 
-            var body_buf = try OwnedBuffer.init(self.allocator, msg.body_len);
-            errdefer body_buf.deinit();
-            if (msg.body_len > 0) try self.reader.readNoEof(body_buf.data[0..msg.body_len]);
-            var body_shared = try body_buf.toShared(msg.body_len);
-
-            var meta_stream = std.io.fixedBufferStream(meta_buf);
-            var body_offset: usize = 0;
             const schema = self.schema_owned.?.schema;
-            const batch = try readRecordBatchMeta(meta_stream.reader(), self.allocator, schema, body_shared, &body_offset);
-
-            var owned = body_shared;
-            owned.release();
+            const batch = try buildRecordBatchFromFlatbuf(self.allocator, schema, msg.msg.header.RecordBatch.?, msg.body.?);
             return batch;
         }
-
-        fn ensureHeader(self: *Self) !void {
-            if (self.header_read) return;
-            try format.readStreamHeader(self.reader);
-            self.header_read = true;
-        }
     };
 }
 
-fn readSchemaMeta(reader: anytype, allocator: std.mem.Allocator) !Schema {
-    const field_count = try format.readInt(reader, u32);
-    const fields = try allocator.alloc(Field, field_count);
-    var i: usize = 0;
-    while (i < field_count) : (i += 1) {
-        fields[i] = try readField(reader, allocator);
+const MessageWithBody = struct {
+    msg: fbs.MessageT,
+    body_len: usize,
+    body: ?array_data.SharedBuffer,
+
+    fn deinit(self: *MessageWithBody, allocator: std.mem.Allocator) void {
+        self.msg.deinit(allocator);
+        if (self.body) |*buf| buf.release();
+    }
+};
+
+fn readMessageOptional(self: anytype) (StreamError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?MessageWithBody {
+    const meta_len_opt = try format.readMessageLength(self.reader);
+    if (meta_len_opt == null) return null;
+    const meta_len = meta_len_opt.?;
+
+    const meta_buf = try self.allocator.alloc(u8, meta_len);
+    defer self.allocator.free(meta_buf);
+    if (meta_len > 0) try self.reader.readNoEof(meta_buf);
+    try format.skipPadding(self.reader, format.padLen(meta_len));
+
+    const msg = fbs.Message.GetRootAs(meta_buf, 0);
+    const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
+    const msg_t = try fbs.MessageT.Unpack(msg, opts);
+    if (msg_t.version != .V5 and msg_t.version != .V4) {
+        var tmp = msg_t;
+        tmp.deinit(self.allocator);
+        return StreamError.InvalidMetadata;
     }
 
-    return Schema{ .fields = fields, .endianness = .native, .metadata = null };
+    var body_shared: ?array_data.SharedBuffer = null;
+    const body_len: usize = @intCast(msg_t.bodyLength);
+    if (body_len > 0) {
+        var body_buf = try OwnedBuffer.init(self.allocator, body_len);
+        errdefer body_buf.deinit();
+        try self.reader.readNoEof(body_buf.data[0..body_len]);
+        body_shared = try body_buf.toShared(body_len);
+    }
+
+    return .{ .msg = msg_t, .body_len = body_len, .body = body_shared };
 }
 
-fn readField(reader: anytype, allocator: std.mem.Allocator) !Field {
-    const name_len = try format.readInt(reader, u16);
-    const name = try allocator.alloc(u8, name_len);
-    if (name_len > 0) try reader.readNoEof(name);
-    const nullable = (try format.readInt(reader, u8)) != 0;
+fn readMessage(self: anytype) (StreamError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!MessageWithBody {
+    const msg_opt = try readMessageOptional(self);
+    if (msg_opt == null) return StreamError.InvalidMessage;
+    return msg_opt.?;
+}
+
+fn buildSchemaFromFlatbuf(allocator: std.mem.Allocator, schema_t: *fbs.SchemaT) (StreamError || error{OutOfMemory})!Schema {
+    if (schema_t.endianness != .Little) return StreamError.UnsupportedType;
+    const fields = try allocator.alloc(Field, schema_t.fields.items.len);
+    for (schema_t.fields.items, 0..) |field_t, i| {
+        fields[i] = try buildFieldFromFlatbuf(allocator, field_t);
+    }
+    return .{ .fields = fields, .endianness = .little, .metadata = null };
+}
+
+fn buildFieldFromFlatbuf(allocator: std.mem.Allocator, field_t: fbs.FieldT) (StreamError || error{OutOfMemory})!Field {
+    const name = try allocator.dupe(u8, field_t.name);
+    const dtype = try buildDataTypeFromFlatbuf(allocator, field_t);
     const dtype_ptr = try allocator.create(DataType);
-    dtype_ptr.* = try readDataType(reader, allocator);
-    return Field{ .name = name, .data_type = dtype_ptr, .nullable = nullable };
+    dtype_ptr.* = dtype;
+    return .{ .name = name, .data_type = dtype_ptr, .nullable = field_t.nullable };
 }
 
-fn readDataType(reader: anytype, allocator: std.mem.Allocator) !DataType {
-    const raw_id = try format.readInt(reader, u8);
-    const type_id = std.meta.intToEnum(TypeId, raw_id) catch return StreamError.InvalidMetadata;
+fn buildDataTypeFromFlatbuf(allocator: std.mem.Allocator, field_t: fbs.FieldT) (StreamError || error{OutOfMemory})!DataType {
+    if (field_t.type == .NONE) return StreamError.UnsupportedType;
 
-    return switch (type_id) {
-        .bool => DataType{ .bool = {} },
-        .uint8 => DataType{ .uint8 = {} },
-        .int8 => DataType{ .int8 = {} },
-        .uint16 => DataType{ .uint16 = {} },
-        .int16 => DataType{ .int16 = {} },
-        .uint32 => DataType{ .uint32 = {} },
-        .int32 => DataType{ .int32 = {} },
-        .uint64 => DataType{ .uint64 = {} },
-        .int64 => DataType{ .int64 = {} },
-        .half_float => DataType{ .half_float = {} },
-        .float => DataType{ .float = {} },
-        .double => DataType{ .double = {} },
-        .string => DataType{ .string = {} },
-        .binary => DataType{ .binary = {} },
-        .list => blk: {
-            const value_field = try readField(reader, allocator);
-            break :blk DataType{ .list = .{ .value_field = value_field } };
+    const dtype = switch (field_t.type) {
+        .Null => DataType{ .null = {} },
+        .Bool => DataType{ .bool = {} },
+        .Int => blk: {
+            const int_t = field_t.type.Int.?;
+            const signed = int_t.is_signed;
+            const width = int_t.bitWidth;
+            break :blk switch (width) {
+                8 => if (signed) DataType{ .int8 = {} } else DataType{ .uint8 = {} },
+                16 => if (signed) DataType{ .int16 = {} } else DataType{ .uint16 = {} },
+                32 => if (signed) DataType{ .int32 = {} } else DataType{ .uint32 = {} },
+                64 => if (signed) DataType{ .int64 = {} } else DataType{ .uint64 = {} },
+                else => return StreamError.UnsupportedType,
+            };
         },
-        .struct_ => blk: {
-            const count = try format.readInt(reader, u32);
-            const fields = try allocator.alloc(Field, count);
-            var i: usize = 0;
-            while (i < count) : (i += 1) fields[i] = try readField(reader, allocator);
-            break :blk DataType{ .struct_ = .{ .fields = fields } };
+        .FloatingPoint => blk: {
+            const fp = field_t.type.FloatingPoint.?;
+            break :blk switch (fp.precision) {
+                .HALF => DataType{ .half_float = {} },
+                .SINGLE => DataType{ .float = {} },
+                .DOUBLE => DataType{ .double = {} },
+                else => return StreamError.UnsupportedType,
+            };
         },
-        .dictionary => blk: {
-            const bit_width = try format.readInt(reader, u8);
-            const signed = (try format.readInt(reader, u8)) != 0;
-            const ordered = (try format.readInt(reader, u8)) != 0;
-            const value_ptr = try allocator.create(DataType);
-            value_ptr.* = try readDataType(reader, allocator);
-            break :blk DataType{ .dictionary = .{ .index_type = .{ .bit_width = bit_width, .signed = signed }, .value_type = value_ptr, .ordered = ordered } };
+        .Utf8 => DataType{ .string = {} },
+        .Binary => DataType{ .binary = {} },
+        .LargeUtf8 => DataType{ .large_string = {} },
+        .LargeBinary => DataType{ .large_binary = {} },
+        .List => blk: {
+            if (field_t.children.items.len != 1) return StreamError.InvalidMetadata;
+            const child_field = try buildFieldFromFlatbuf(allocator, field_t.children.items[0]);
+            break :blk DataType{ .list = .{ .value_field = child_field } };
         },
-        else => return StreamError.UnsupportedType,
+        .LargeList => blk: {
+            if (field_t.children.items.len != 1) return StreamError.InvalidMetadata;
+            const child_field = try buildFieldFromFlatbuf(allocator, field_t.children.items[0]);
+            break :blk DataType{ .large_list = .{ .value_field = child_field } };
+        },
+        .FixedSizeList => blk: {
+            if (field_t.children.items.len != 1) return StreamError.InvalidMetadata;
+            const list_size = field_t.type.FixedSizeList.?.listSize;
+            const child_field = try buildFieldFromFlatbuf(allocator, field_t.children.items[0]);
+            break :blk DataType{ .fixed_size_list = .{ .value_field = child_field, .list_size = list_size } };
+        },
+        .FixedSizeBinary => DataType{ .fixed_size_binary = .{ .byte_width = field_t.type.FixedSizeBinary.?.byteWidth } },
+        .Struct_ => blk: {
+            const child_fields = try allocator.alloc(Field, field_t.children.items.len);
+            for (field_t.children.items, 0..) |child, i| {
+                child_fields[i] = try buildFieldFromFlatbuf(allocator, child);
+            }
+            break :blk DataType{ .struct_ = .{ .fields = child_fields } };
+        },
     };
+
+    if (field_t.dictionary) |dict_t| {
+        const index_type = dict_t.indexType orelse return StreamError.UnsupportedType;
+        const index = datatype.IntType{ .bit_width = @intCast(index_type.bitWidth), .signed = index_type.is_signed };
+        const value_ptr = try allocator.create(DataType);
+        value_ptr.* = dtype;
+        return DataType{ .dictionary = .{ .index_type = index, .value_type = value_ptr, .ordered = dict_t.isOrdered } };
+    }
+
+    return dtype;
 }
 
-fn readRecordBatchMeta(reader: anytype, allocator: std.mem.Allocator, schema: Schema, body: array_data.SharedBuffer, body_offset: *usize) !RecordBatch {
-    const column_count = try format.readInt(reader, u32);
-    const num_rows = try format.readInt(reader, u64);
-    if (column_count != schema.fields.len) return StreamError.InvalidMetadata;
+fn buildRecordBatchFromFlatbuf(
+    allocator: std.mem.Allocator,
+    schema: Schema,
+    record_batch_t: *fbs.RecordBatchT,
+    body: array_data.SharedBuffer,
+) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || error{OutOfMemory})!RecordBatch {
+    if (record_batch_t.variadicBufferCounts.items.len != 0) return StreamError.UnsupportedType;
 
-    const columns = try allocator.alloc(ArrayRef, column_count);
+    const columns = try allocator.alloc(ArrayRef, schema.fields.len);
     var col_count: usize = 0;
     errdefer {
         var i: usize = 0;
@@ -179,8 +261,18 @@ fn readRecordBatchMeta(reader: anytype, allocator: std.mem.Allocator, schema: Sc
         allocator.free(columns);
     }
 
+    var node_index: usize = 0;
+    var buffer_index: usize = 0;
     for (schema.fields, 0..) |field, i| {
-        columns[i] = try readArrayNode(reader, allocator, field.data_type.*, body, body_offset);
+        columns[i] = try readArrayFromMeta(
+            allocator,
+            field.data_type.*,
+            record_batch_t.nodes.items,
+            record_batch_t.buffers.items,
+            body,
+            &node_index,
+            &buffer_index,
+        );
         col_count += 1;
     }
 
@@ -188,18 +280,24 @@ fn readRecordBatchMeta(reader: anytype, allocator: std.mem.Allocator, schema: Sc
     var i: usize = 0;
     while (i < col_count) : (i += 1) columns[i].release();
     allocator.free(columns);
-    if (batch.numRows() != @as(usize, @intCast(num_rows))) return StreamError.InvalidMetadata;
+    if (batch.numRows() != @as(usize, @intCast(record_batch_t.length))) return StreamError.InvalidMetadata;
     return batch;
 }
 
-fn readArrayNode(reader: anytype, allocator: std.mem.Allocator, dt: DataType, body: array_data.SharedBuffer, body_offset: *usize) !ArrayRef {
-    const length = try format.readInt(reader, u64);
-    const offset = try format.readInt(reader, u64);
-    const null_present = (try format.readInt(reader, u8)) != 0;
-    var null_count: ?usize = null;
-    if (null_present) null_count = @intCast(try format.readInt(reader, u64));
+fn readArrayFromMeta(
+    allocator: std.mem.Allocator,
+    dt: DataType,
+    nodes: []const fbs.FieldNodeT,
+    buffers_meta: []const fbs.BufferT,
+    body: array_data.SharedBuffer,
+    node_index: *usize,
+    buffer_index: *usize,
+) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
+    if (node_index.* >= nodes.len) return StreamError.InvalidMetadata;
+    const node = nodes[node_index.*];
+    node_index.* += 1;
 
-    const buffer_count = try format.readInt(reader, u32);
+    const buffer_count = try bufferCountForType(dt);
     const buffers = try allocator.alloc(array_data.SharedBuffer, buffer_count);
     var buf_count: usize = 0;
     errdefer {
@@ -213,68 +311,69 @@ fn readArrayNode(reader: anytype, allocator: std.mem.Allocator, dt: DataType, bo
 
     var i: usize = 0;
     while (i < buffer_count) : (i += 1) {
-        const buf_len = @as(usize, @intCast(try format.readInt(reader, u64)));
-        const start = body_offset.*;
-        const end = start + buf_len;
+        if (buffer_index.* >= buffers_meta.len) return StreamError.InvalidMetadata;
+        const meta = buffers_meta[buffer_index.*];
+        buffer_index.* += 1;
+        const start = @as(usize, @intCast(meta.offset));
+        const end = start + @as(usize, @intCast(meta.length));
         if (end > body.len()) return StreamError.InvalidBody;
-        buffers[i] = body.slice(start, end);
+        buffers[i] = if (meta.length == 0) array_data.SharedBuffer.empty else body.slice(start, end);
         buf_count += 1;
-        body_offset.* = end;
     }
 
-    const child_count = try format.readInt(reader, u32);
-    const children = try allocator.alloc(ArrayRef, child_count);
-    var child_written: usize = 0;
-    errdefer {
-        var j: usize = 0;
-        while (j < child_written) : (j += 1) children[j].release();
-        allocator.free(children);
-    }
-
-    switch (dt) {
-        .list => |lst| {
-            if (child_count != 1) return StreamError.InvalidMetadata;
-            children[0] = try readArrayNode(reader, allocator, lst.value_field.data_type.*, body, body_offset);
-            child_written = 1;
-        },
-        .struct_ => |st| {
-            if (child_count != st.fields.len) return StreamError.InvalidMetadata;
-            var idx: usize = 0;
-            while (idx < st.fields.len) : (idx += 1) {
-                children[idx] = try readArrayNode(reader, allocator, st.fields[idx].data_type.*, body, body_offset);
-                child_written += 1;
-            }
-        },
-        .dictionary => {
-            if (child_count != 0) return StreamError.InvalidMetadata;
-        },
-        else => {
-            if (child_count != 0) return StreamError.InvalidMetadata;
-        },
-    }
-
-    const has_dict = (try format.readInt(reader, u8)) != 0;
-    var dict_ref: ?ArrayRef = null;
-    if (has_dict) {
-        if (dt != .dictionary) return StreamError.InvalidMetadata;
-        const value_type = dt.dictionary.value_type.*;
-        dict_ref = try readArrayNode(reader, allocator, value_type, body, body_offset);
+    var children: []ArrayRef = &.{};
+    if (dt == .list or dt == .large_list or dt == .fixed_size_list) {
+        children = try allocator.alloc(ArrayRef, 1);
+        errdefer allocator.free(children);
+        children[0] = try readArrayFromMeta(allocator, childValueType(dt), nodes, buffers_meta, body, node_index, buffer_index);
+    } else if (dt == .struct_) {
+        const field_count = dt.struct_.fields.len;
+        children = try allocator.alloc(ArrayRef, field_count);
+        var filled: usize = 0;
+        errdefer {
+            var j: usize = 0;
+            while (j < filled) : (j += 1) children[j].release();
+            allocator.free(children);
+        }
+        var idx: usize = 0;
+        while (idx < field_count) : (idx += 1) {
+            children[idx] = try readArrayFromMeta(allocator, dt.struct_.fields[idx].data_type.*, nodes, buffers_meta, body, node_index, buffer_index);
+            filled += 1;
+        }
     } else if (dt == .dictionary) {
-        return StreamError.InvalidMetadata;
+        return StreamError.UnsupportedType;
     }
 
     const data = ArrayData{
         .data_type = dt,
-        .length = @intCast(length),
-        .offset = @intCast(offset),
-        .null_count = null_count,
+        .length = @intCast(node.length),
+        .null_count = @intCast(node.null_count),
         .buffers = buffers,
         .children = children,
-        .dictionary = dict_ref,
     };
-
     try data.validateLayout();
     return ArrayRef.fromOwnedUnsafe(allocator, data);
+}
+
+fn childValueType(dt: DataType) DataType {
+    return switch (dt) {
+        .list => |lst| lst.value_field.data_type.*,
+        .large_list => |lst| lst.value_field.data_type.*,
+        .fixed_size_list => |lst| lst.value_field.data_type.*,
+        else => dt,
+    };
+}
+
+fn bufferCountForType(dt: DataType) StreamError!usize {
+    return switch (dt) {
+        .null => 0,
+        .struct_, .fixed_size_list => 1,
+        .list, .large_list, .map => 2,
+        .string, .binary, .large_string, .large_binary => 3,
+        .bool, .uint8, .int8, .uint16, .int16, .uint32, .int32, .uint64, .int64, .half_float, .float, .double, .fixed_size_binary => 2,
+        .dictionary => StreamError.UnsupportedType,
+        else => StreamError.UnsupportedType,
+    };
 }
 
 test "ipc stream roundtrip schema and batch" {
@@ -305,15 +404,15 @@ test "ipc stream roundtrip schema and batch" {
     var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{ int_ref, str_ref });
     defer batch.deinit();
 
-    var buffer = std.ArrayList(u8).init(allocator);
-    defer buffer.deinit();
+    var out_buf = std.array_list.Managed(u8).init(allocator);
+    defer out_buf.deinit();
 
-    var writer = try @import("stream_writer.zig").StreamWriter(@TypeOf(buffer.writer())).init(allocator, buffer.writer());
+    var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
 
-    var stream = std.io.fixedBufferStream(buffer.items);
+    var stream = std.io.fixedBufferStream(out_buf.items);
     var reader = StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
     defer reader.deinit();
 
@@ -330,4 +429,58 @@ test "ipc stream roundtrip schema and batch" {
     try std.testing.expectEqual(@as(usize, 2), out_batch.numRows());
     const names = @import("../array/string_array.zig").StringArray{ .data = out_batch.columns[1].data() };
     try std.testing.expect(names.isNull(1));
+}
+
+test "ipc stream roundtrip large string and binary" {
+    const allocator = std.testing.allocator;
+
+    const ls_type = DataType{ .large_string = {} };
+    const lb_type = DataType{ .large_binary = {} };
+    const fields = [_]Field{
+        .{ .name = "ls", .data_type = &ls_type, .nullable = true },
+        .{ .name = "lb", .data_type = &lb_type, .nullable = true },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var ls_builder = try @import("../array/string_array.zig").LargeStringBuilder.init(allocator, 2, 8);
+    defer ls_builder.deinit();
+    try ls_builder.append("hi");
+    try ls_builder.appendNull();
+    var ls_ref = try ls_builder.finish();
+    defer ls_ref.release();
+
+    var lb_builder = try @import("../array/binary_array.zig").LargeBinaryBuilder.init(allocator, 2, 8);
+    defer lb_builder.deinit();
+    try lb_builder.append("zz");
+    try lb_builder.appendNull();
+    var lb_ref = try lb_builder.finish();
+    defer lb_ref.release();
+
+    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{ ls_ref, lb_ref });
+    defer batch.deinit();
+
+    var out_buf = std.array_list.Managed(u8).init(allocator);
+    defer out_buf.deinit();
+
+    var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    try writer.writeSchema(schema);
+    try writer.writeRecordBatch(batch);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out_buf.items);
+    var reader = StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    defer reader.deinit();
+
+    _ = try reader.readSchema();
+    const batch_opt = try reader.nextRecordBatch();
+    try std.testing.expect(batch_opt != null);
+    var out_batch = batch_opt.?;
+    defer out_batch.deinit();
+
+    const ls_view = @import("../array/string_array.zig").LargeStringArray{ .data = out_batch.columns[0].data() };
+    const lb_view = @import("../array/binary_array.zig").LargeBinaryArray{ .data = out_batch.columns[1].data() };
+    try std.testing.expectEqualStrings("hi", ls_view.value(0));
+    try std.testing.expect(ls_view.isNull(1));
+    try std.testing.expectEqualStrings("zz", lb_view.value(0));
+    try std.testing.expect(lb_view.isNull(1));
 }
