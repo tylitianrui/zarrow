@@ -119,6 +119,39 @@ pub fn build(b: *std.Build) !void {
         run_step.dependOn(step);
     }
 
+    // IPC interop helper tools used by CI compatibility matrix checks.
+    const interop_writer_exe = b.addExecutable(.{
+        .name = "interop-fixture-writer",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/interop_fixture_writer.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    interop_writer_exe.step.dependOn(&run_fix_flatc_lib.step);
+    interop_writer_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
+
+    const run_interop_writer = b.addRunArtifact(interop_writer_exe);
+    if (b.args) |args| run_interop_writer.addArgs(args);
+    const interop_writer_step = b.step("interop-fixture-writer", "Write canonical IPC fixture with zarrow");
+    interop_writer_step.dependOn(&run_interop_writer.step);
+
+    const interop_check_exe = b.addExecutable(.{
+        .name = "interop-fixture-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/interop_fixture_check.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    interop_check_exe.step.dependOn(&run_fix_flatc_lib.step);
+    interop_check_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
+
+    const run_interop_check = b.addRunArtifact(interop_check_exe);
+    if (b.args) |args| run_interop_check.addArgs(args);
+    const interop_check_step = b.step("interop-fixture-check", "Validate canonical IPC fixture with zarrow");
+    interop_check_step.dependOn(&run_interop_check.step);
+
     // Discover benchmark files in `benchmarks` and wire dedicated run steps.
     const benches_dir = b.path("benchmarks");
     var benches = std.fs.openDirAbsolute(benches_dir.getPath(b), .{ .iterate = true }) catch |err| {

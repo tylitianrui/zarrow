@@ -54,6 +54,27 @@ version in `src/ipc/testdata/pyarrow_version.txt`.
 When fixtures change, the IPC reader tests that embed them will also change. Regenerate and commit the
 updated .arrow files whenever the fixture script or PyArrow output changes to keep tests in sync.
 
+## Cross-Implementation IPC Matrix
+
+The repo includes an interop matrix to verify roundtrip compatibility between zarrow and:
+
+- PyArrow
+- arrow-rs
+- Arrow C++
+
+The matrix validates both directions:
+
+- Read others: generate fixture with external implementation, validate with zarrow.
+- Write to others: generate fixture with zarrow, validate with external implementation.
+
+Helper commands:
+
+- Generate canonical zarrow fixture: `zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow`
+- Validate fixture with zarrow: `zig build interop-fixture-check -- .interop-fixtures/pyarrow.arrow`
+
+CI runs the full matrix in `.github/workflows/ci.yml` job:
+`IPC Interop Matrix (zarrow <-> pyarrow/arrow-rs/arrow-cpp)`.
+
 ## Benchmark
 
 - Run all benchmarks (default): `zig build benchmark -Doptimize=ReleaseFast`
