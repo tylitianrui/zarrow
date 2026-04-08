@@ -72,14 +72,34 @@ pub fn StreamWriter(comptime WriterType: type) type {
     return struct {
         allocator: std.mem.Allocator,
         writer: WriterType,
+        dictionary_values: std.AutoHashMap(i64, ArrayRef),
 
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator, writer: WriterType) Self {
-            return .{ .allocator = allocator, .writer = writer };
+            return .{
+                .allocator = allocator,
+                .writer = writer,
+                .dictionary_values = std.AutoHashMap(i64, ArrayRef).init(allocator),
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.clearDictionaryValues();
+            self.dictionary_values.deinit();
+        }
+
+        fn clearDictionaryValues(self: *Self) void {
+            var it = self.dictionary_values.iterator();
+            while (it.next()) |entry| {
+                var dict = entry.value_ptr.*;
+                dict.release();
+            }
+            self.dictionary_values.clearRetainingCapacity();
         }
 
         pub fn writeSchema(self: *Self, schema: Schema) (WriterError || @TypeOf(self.writer).Error)!void {
+            self.clearDictionaryValues();
             const schema_ptr = try self.allocator.create(fbs.SchemaT);
             errdefer self.allocator.destroy(schema_ptr);
             var next_dictionary_id: i64 = 0;
@@ -118,7 +138,20 @@ pub fn StreamWriter(comptime WriterType: type) type {
             if (dictionary_ids.items.len != dictionary_arrays.items.len) return StreamError.InvalidMetadata;
 
             for (dictionary_ids.items, dictionary_arrays.items) |dictionary_id, dict_ref| {
-                try writeDictionaryBatch(self.allocator, self.writer, dictionary_id, dict_ref.data());
+                const emission = try planDictionaryEmission(self.dictionary_values.get(dictionary_id), dict_ref);
+                if (emission.mode != .skip) {
+                    try writeDictionaryBatch(self.allocator, self.writer, dictionary_id, emission.array.data(), emission.mode == .delta);
+                }
+                if (emission.owned_slice) |slice| {
+                    var owned = slice;
+                    owned.release();
+                }
+
+                const previous = try self.dictionary_values.fetchPut(dictionary_id, dict_ref.retain());
+                if (previous) |entry| {
+                    var old = entry.value;
+                    old.release();
+                }
             }
 
             var nodes = try std.ArrayList(fbs.FieldNodeT).initCapacity(self.allocator, 0);
@@ -423,8 +456,23 @@ fn collectDictionaryIdsFromField(
         },
         .list => |lst| try collectDictionaryIdsFromField(allocator, lst.value_field, next_dictionary_id, ids),
         .large_list => |lst| try collectDictionaryIdsFromField(allocator, lst.value_field, next_dictionary_id, ids),
+        .list_view => |lst| try collectDictionaryIdsFromField(allocator, lst.value_field, next_dictionary_id, ids),
+        .large_list_view => |lst| try collectDictionaryIdsFromField(allocator, lst.value_field, next_dictionary_id, ids),
         .fixed_size_list => |lst| try collectDictionaryIdsFromField(allocator, lst.value_field, next_dictionary_id, ids),
+        .map => |map_t| {
+            try collectDictionaryIdsFromField(allocator, map_t.key_field, next_dictionary_id, ids);
+            try collectDictionaryIdsFromField(allocator, map_t.item_field, next_dictionary_id, ids);
+        },
         .struct_ => |st| for (st.fields) |child| try collectDictionaryIdsFromField(allocator, child, next_dictionary_id, ids),
+        .sparse_union, .dense_union => |uni| for (uni.fields) |child| try collectDictionaryIdsFromField(allocator, child, next_dictionary_id, ids),
+        .run_end_encoded => |ree| {
+            const value_field = Field{
+                .name = "values",
+                .data_type = ree.value_type,
+                .nullable = true,
+            };
+            try collectDictionaryIdsFromField(allocator, value_field, next_dictionary_id, ids);
+        },
         else => {},
     }
 }
@@ -442,7 +490,13 @@ fn collectDictionaryArraysFromData(
         .list, .large_list, .fixed_size_list, .list_view, .large_list_view => {
             if (data.children.len == 1) try collectDictionaryArraysFromData(allocator, data.children[0].data(), out);
         },
+        .map, .run_end_encoded => {
+            if (data.children.len == 1) try collectDictionaryArraysFromData(allocator, data.children[0].data(), out);
+        },
         .struct_ => {
+            for (data.children) |child| try collectDictionaryArraysFromData(allocator, child.data(), out);
+        },
+        .sparse_union, .dense_union => {
             for (data.children) |child| try collectDictionaryArraysFromData(allocator, child.data(), out);
         },
         else => {},
@@ -454,6 +508,7 @@ fn writeDictionaryBatch(
     writer: anytype,
     dictionary_id: i64,
     dictionary_data: *const ArrayData,
+    is_delta: bool,
 ) (WriterError || @TypeOf(writer).Error)!void {
     var nodes = try std.ArrayList(fbs.FieldNodeT).initCapacity(allocator, 0);
     var buffers = try std.ArrayList(fbs.BufferT).initCapacity(allocator, 0);
@@ -478,7 +533,7 @@ fn writeDictionaryBatch(
     dictionary_batch_ptr.* = .{
         .id = dictionary_id,
         .data = record_batch_ptr,
-        .isDelta = false,
+        .isDelta = is_delta,
     };
 
     var msg = fbs.MessageT{
@@ -490,6 +545,196 @@ fn writeDictionaryBatch(
     defer msg.deinit(allocator);
 
     try writeMessage(allocator, writer, msg, body_buffers.items);
+}
+
+const DictionaryEmissionMode = enum {
+    skip,
+    full,
+    delta,
+};
+
+const DictionaryEmission = struct {
+    mode: DictionaryEmissionMode,
+    array: ArrayRef,
+    owned_slice: ?ArrayRef = null,
+};
+
+fn planDictionaryEmission(
+    previous_opt: ?ArrayRef,
+    current: ArrayRef,
+) (StreamError || error{OutOfMemory})!DictionaryEmission {
+    if (previous_opt == null) {
+        return .{ .mode = .full, .array = current };
+    }
+    const previous = previous_opt.?;
+    if (!std.meta.eql(previous.data().data_type, current.data().data_type)) return StreamError.InvalidMetadata;
+
+    if (previous.data().length == current.data().length) {
+        if (try arraysEqualForDelta(previous, current)) {
+            return .{ .mode = .skip, .array = current };
+        }
+        return .{ .mode = .full, .array = current };
+    }
+    if (current.data().length < previous.data().length) {
+        return .{ .mode = .full, .array = current };
+    }
+    if (!supportsDictionaryDeltaType(current.data().data_type)) {
+        return .{ .mode = .full, .array = current };
+    }
+
+    var prefix = try current.slice(0, previous.data().length);
+    defer prefix.release();
+    if (!try arraysEqualForDelta(previous, prefix)) {
+        return .{ .mode = .full, .array = current };
+    }
+
+    const delta_len = current.data().length - previous.data().length;
+    if (delta_len == 0) {
+        return .{ .mode = .skip, .array = current };
+    }
+    const tail = try current.slice(previous.data().length, delta_len);
+    return .{ .mode = .delta, .array = tail, .owned_slice = tail };
+}
+
+fn supportsDictionaryDeltaType(dt: DataType) bool {
+    return switch (dt) {
+        .null,
+        .bool,
+        .uint8,
+        .int8,
+        .uint16,
+        .int16,
+        .uint32,
+        .int32,
+        .uint64,
+        .int64,
+        .half_float,
+        .float,
+        .double,
+        .date32,
+        .date64,
+        .time32,
+        .time64,
+        .timestamp,
+        .duration,
+        .interval_months,
+        .interval_day_time,
+        .interval_month_day_nano,
+        .decimal32,
+        .decimal64,
+        .decimal128,
+        .decimal256,
+        .fixed_size_binary,
+        .string,
+        .binary,
+        .large_string,
+        .large_binary,
+        => true,
+        else => false,
+    };
+}
+
+fn arraysEqualForDelta(left: ArrayRef, right: ArrayRef) (StreamError || error{OutOfMemory})!bool {
+    const a = left.data();
+    const b = right.data();
+    if (!std.meta.eql(a.data_type, b.data_type)) return false;
+    if (a.length != b.length) return false;
+    if (a.length == 0) return true;
+
+    const dt = a.data_type;
+    switch (dt) {
+        .null => return true,
+        .bool => {
+            var i: usize = 0;
+            while (i < a.length) : (i += 1) {
+                const a_null = a.isNull(i);
+                const b_null = b.isNull(i);
+                if (a_null != b_null) return false;
+                if (a_null) continue;
+                if (bitAt(a.buffers[1], a.offset + i) != bitAt(b.buffers[1], b.offset + i)) return false;
+            }
+            return true;
+        },
+        .uint8, .int8 => return try fixedWidthEqual(a, b, 1),
+        .uint16, .int16, .half_float => return try fixedWidthEqual(a, b, 2),
+        .uint32, .int32, .float, .date32, .time32, .interval_months, .decimal32 => return try fixedWidthEqual(a, b, 4),
+        .uint64, .int64, .double, .date64, .time64, .timestamp, .duration, .interval_day_time, .decimal64 => return try fixedWidthEqual(a, b, 8),
+        .decimal128, .interval_month_day_nano => return try fixedWidthEqual(a, b, 16),
+        .decimal256 => return try fixedWidthEqual(a, b, 32),
+        .fixed_size_binary => |fsb| {
+            const byte_width = std.math.cast(usize, fsb.byte_width) orelse return StreamError.InvalidMetadata;
+            return try fixedWidthEqual(a, b, byte_width);
+        },
+        .string, .binary => return try variableBinaryEqualI32(a, b),
+        .large_string, .large_binary => return try variableBinaryEqualI64(a, b),
+        else => return false,
+    }
+}
+
+fn fixedWidthEqual(a: *const ArrayData, b: *const ArrayData, byte_width: usize) StreamError!bool {
+    if (a.buffers.len < 2 or b.buffers.len < 2) return StreamError.InvalidMetadata;
+    var i: usize = 0;
+    while (i < a.length) : (i += 1) {
+        const a_null = a.isNull(i);
+        const b_null = b.isNull(i);
+        if (a_null != b_null) return false;
+        if (a_null) continue;
+        const a_idx = std.math.add(usize, a.offset, i) catch return StreamError.InvalidMetadata;
+        const b_idx = std.math.add(usize, b.offset, i) catch return StreamError.InvalidMetadata;
+        const a_start = std.math.mul(usize, a_idx, byte_width) catch return StreamError.InvalidMetadata;
+        const b_start = std.math.mul(usize, b_idx, byte_width) catch return StreamError.InvalidMetadata;
+        const a_end = std.math.add(usize, a_start, byte_width) catch return StreamError.InvalidMetadata;
+        const b_end = std.math.add(usize, b_start, byte_width) catch return StreamError.InvalidMetadata;
+        if (a_end > a.buffers[1].len() or b_end > b.buffers[1].len()) return StreamError.InvalidMetadata;
+        if (!std.mem.eql(u8, a.buffers[1].data[a_start..a_end], b.buffers[1].data[b_start..b_end])) return false;
+    }
+    return true;
+}
+
+fn variableBinaryEqualI32(a: *const ArrayData, b: *const ArrayData) StreamError!bool {
+    if (a.buffers.len < 3 or b.buffers.len < 3) return StreamError.InvalidMetadata;
+    const a_offsets = a.buffers[1].typedSlice(i32);
+    const b_offsets = b.buffers[1].typedSlice(i32);
+    var i: usize = 0;
+    while (i < a.length) : (i += 1) {
+        const a_null = a.isNull(i);
+        const b_null = b.isNull(i);
+        if (a_null != b_null) return false;
+        if (a_null) continue;
+        const ai0 = std.math.cast(usize, a_offsets[a.offset + i]) orelse return StreamError.InvalidMetadata;
+        const ai1 = std.math.cast(usize, a_offsets[a.offset + i + 1]) orelse return StreamError.InvalidMetadata;
+        const bi0 = std.math.cast(usize, b_offsets[b.offset + i]) orelse return StreamError.InvalidMetadata;
+        const bi1 = std.math.cast(usize, b_offsets[b.offset + i + 1]) orelse return StreamError.InvalidMetadata;
+        if (ai1 < ai0 or bi1 < bi0) return StreamError.InvalidMetadata;
+        if (ai1 > a.buffers[2].len() or bi1 > b.buffers[2].len()) return StreamError.InvalidMetadata;
+        if (!std.mem.eql(u8, a.buffers[2].data[ai0..ai1], b.buffers[2].data[bi0..bi1])) return false;
+    }
+    return true;
+}
+
+fn variableBinaryEqualI64(a: *const ArrayData, b: *const ArrayData) StreamError!bool {
+    if (a.buffers.len < 3 or b.buffers.len < 3) return StreamError.InvalidMetadata;
+    const a_offsets = a.buffers[1].typedSlice(i64);
+    const b_offsets = b.buffers[1].typedSlice(i64);
+    var i: usize = 0;
+    while (i < a.length) : (i += 1) {
+        const a_null = a.isNull(i);
+        const b_null = b.isNull(i);
+        if (a_null != b_null) return false;
+        if (a_null) continue;
+        const ai0 = std.math.cast(usize, a_offsets[a.offset + i]) orelse return StreamError.InvalidMetadata;
+        const ai1 = std.math.cast(usize, a_offsets[a.offset + i + 1]) orelse return StreamError.InvalidMetadata;
+        const bi0 = std.math.cast(usize, b_offsets[b.offset + i]) orelse return StreamError.InvalidMetadata;
+        const bi1 = std.math.cast(usize, b_offsets[b.offset + i + 1]) orelse return StreamError.InvalidMetadata;
+        if (ai1 < ai0 or bi1 < bi0) return StreamError.InvalidMetadata;
+        if (ai1 > a.buffers[2].len() or bi1 > b.buffers[2].len()) return StreamError.InvalidMetadata;
+        if (!std.mem.eql(u8, a.buffers[2].data[ai0..ai1], b.buffers[2].data[bi0..bi1])) return false;
+    }
+    return true;
+}
+
+fn bitAt(buf: array_data.SharedBuffer, bit_index: usize) bool {
+    return @import("../bitmap.zig").bitIsSet(buf.data, bit_index);
 }
 
 fn appendArrayMeta(
@@ -560,6 +805,31 @@ fn parseGoldenHexCsv(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
+fn readNextMessageForTest(allocator: std.mem.Allocator, reader: anytype) anyerror!?fbs.MessageT {
+    const meta_len_opt = try format.readMessageLength(reader);
+    if (meta_len_opt == null) return null;
+    const meta_len = meta_len_opt.?;
+
+    const metadata = try allocator.alloc(u8, meta_len);
+    defer allocator.free(metadata);
+    if (meta_len > 0) try reader.readNoEof(metadata);
+    try format.skipPadding(reader, format.padLen(meta_len));
+
+    const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
+    const opts: fb.common.PackOptions = .{ .allocator = allocator };
+    const msg_t = try fbs.MessageT.Unpack(msg, opts);
+
+    const body_len = std.math.cast(usize, msg_t.bodyLength) orelse return StreamError.InvalidBody;
+    if (body_len > 0) {
+        const body = try allocator.alloc(u8, body_len);
+        defer allocator.free(body);
+        try reader.readNoEof(body);
+    }
+    try format.skipPadding(reader, format.padLen(body_len));
+
+    return msg_t;
+}
+
 test "ipc writer stream output matches golden fixture" {
     const allocator = std.testing.allocator;
 
@@ -583,6 +853,7 @@ test "ipc writer stream output matches golden fixture" {
     defer out.deinit();
 
     var writer = StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -694,6 +965,7 @@ test "ipc writer roundtrip supports view types and variadicBufferCounts" {
     var out = std.array_list.Managed(u8).init(allocator);
     defer out.deinit();
     var writer = StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -711,4 +983,94 @@ test "ipc writer roundtrip supports view types and variadicBufferCounts" {
     var out_batch = out_batch_opt.?;
     defer out_batch.deinit();
     try std.testing.expectEqual(@as(usize, 0), out_batch.numRows());
+}
+
+test "ipc writer emits dictionary delta on append-only dictionary growth" {
+    const allocator = std.testing.allocator;
+
+    const value_type = DataType{ .string = {} };
+    const dict_type = DataType{
+        .dictionary = .{
+            .id = null,
+            .index_type = .{ .bit_width = 32, .signed = true },
+            .value_type = &value_type,
+            .ordered = false,
+        },
+    };
+    const fields = [_]Field{
+        .{ .name = "color", .data_type = &dict_type, .nullable = false },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var dict_values_builder_1 = try @import("../array/string_array.zig").StringBuilder.init(allocator, 2, 7);
+    defer dict_values_builder_1.deinit();
+    try dict_values_builder_1.append("red");
+    try dict_values_builder_1.append("blue");
+    var dict_values_1 = try dict_values_builder_1.finish();
+    defer dict_values_1.release();
+
+    var dict_builder_1 = try @import("../array/dictionary_array.zig").DictionaryBuilder.init(
+        allocator,
+        .{ .bit_width = 32, .signed = true },
+        &value_type,
+        2,
+    );
+    defer dict_builder_1.deinit();
+    try dict_builder_1.appendIndex(0);
+    try dict_builder_1.appendIndex(1);
+    var dict_col_1 = try dict_builder_1.finish(dict_values_1);
+    defer dict_col_1.release();
+    var batch_1 = try RecordBatch.init(allocator, schema, &[_]ArrayRef{dict_col_1});
+    defer batch_1.deinit();
+
+    var dict_values_builder_2 = try @import("../array/string_array.zig").StringBuilder.init(allocator, 3, 12);
+    defer dict_values_builder_2.deinit();
+    try dict_values_builder_2.append("red");
+    try dict_values_builder_2.append("blue");
+    try dict_values_builder_2.append("green");
+    var dict_values_2 = try dict_values_builder_2.finish();
+    defer dict_values_2.release();
+
+    var dict_builder_2 = try @import("../array/dictionary_array.zig").DictionaryBuilder.init(
+        allocator,
+        .{ .bit_width = 32, .signed = true },
+        &value_type,
+        1,
+    );
+    defer dict_builder_2.deinit();
+    try dict_builder_2.appendIndex(2);
+    var dict_col_2 = try dict_builder_2.finish(dict_values_2);
+    defer dict_col_2.release();
+    var batch_2 = try RecordBatch.init(allocator, schema, &[_]ArrayRef{dict_col_2});
+    defer batch_2.deinit();
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    defer out.deinit();
+
+    var writer = StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
+    try writer.writeSchema(schema);
+    try writer.writeRecordBatch(batch_1);
+    try writer.writeRecordBatch(batch_2);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out.items);
+    const reader = stream.reader();
+
+    var dict_flags = std.ArrayList(bool){};
+    defer dict_flags.deinit(allocator);
+
+    while (true) {
+        const next_opt = try readNextMessageForTest(allocator, reader);
+        if (next_opt == null) break;
+        var msg = next_opt.?;
+        defer msg.deinit(allocator);
+        if (msg.header == .DictionaryBatch) {
+            try dict_flags.append(allocator, msg.header.DictionaryBatch.?.isDelta);
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), dict_flags.items.len);
+    try std.testing.expectEqual(false, dict_flags.items[0]);
+    try std.testing.expectEqual(true, dict_flags.items[1]);
 }

@@ -1703,6 +1703,7 @@ test "ipc stream roundtrip schema and batch" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -1758,6 +1759,7 @@ test "ipc stream roundtrip large string and binary" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -1821,6 +1823,7 @@ test "ipc stream roundtrip temporal and decimal primitives" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -1895,6 +1898,7 @@ test "ipc stream roundtrip dictionary encoded string column" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -1944,6 +1948,7 @@ test "ipc reader merges dictionary delta batches" {
     defer out.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
 
     var dict1_nodes = try std.ArrayList(fbs.FieldNodeT).initCapacity(allocator, 0);
@@ -2243,6 +2248,7 @@ test "ipc stream roundtrip map int32 to int32" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -2332,6 +2338,7 @@ test "ipc stream roundtrip sparse union int32/bool" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -2414,6 +2421,7 @@ test "ipc stream roundtrip dense union int32/bool" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -2491,6 +2499,7 @@ test "ipc stream roundtrip run-end encoded int32 values" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
@@ -2549,6 +2558,7 @@ test "ipc schema roundtrip preserves field and schema metadata" {
     var out_buf = std.array_list.Managed(u8).init(allocator);
     defer out_buf.deinit();
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeEnd();
 
@@ -2612,7 +2622,9 @@ test "ipc schema metadata serialization is deterministic" {
     defer out_b.deinit();
 
     var writer_a = @import("stream_writer.zig").StreamWriter(@TypeOf(out_a.writer())).init(allocator, out_a.writer());
+    defer writer_a.deinit();
     var writer_b = @import("stream_writer.zig").StreamWriter(@TypeOf(out_b.writer())).init(allocator, out_b.writer());
+    defer writer_b.deinit();
     try writer_a.writeSchema(schema_a);
     try writer_b.writeSchema(schema_b);
 
@@ -2702,6 +2714,7 @@ test "ipc reader handles non-8-aligned body and still reads next real writer mes
     var real_stream = std.array_list.Managed(u8).init(allocator);
     defer real_stream.deinit();
     var real_writer = @import("stream_writer.zig").StreamWriter(@TypeOf(real_stream.writer())).init(allocator, real_stream.writer());
+    defer real_writer.deinit();
     try real_writer.writeSchema(schema);
     try real_writer.writeEnd();
 
@@ -2798,6 +2811,7 @@ test "ipc reader rejects record batch buffer offset beyond body" {
     defer out.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
 
     var nodes = try std.ArrayList(fbs.FieldNodeT).initCapacity(allocator, 0);
@@ -2848,6 +2862,7 @@ test "ipc reader rejects record batch with trailing metadata entries" {
     defer out.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
 
     var nodes = try std.ArrayList(fbs.FieldNodeT).initCapacity(allocator, 0);
@@ -2902,6 +2917,7 @@ test "ipc reader rejects unexpected variadic buffer counts" {
     defer out.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
     try writer.writeSchema(schema);
 
     var nodes = try std.ArrayList(fbs.FieldNodeT).initCapacity(allocator, 0);

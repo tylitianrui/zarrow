@@ -60,6 +60,7 @@ pub fn main() !void {
     const fw = file.writer(&io_buf);
     var writer_adapter = WriterAdapter{ .inner = @constCast(&fw.interface) };
     var writer = zarrow.IpcStreamWriter(WriterAdapter).init(allocator, writer_adapter);
+    defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
