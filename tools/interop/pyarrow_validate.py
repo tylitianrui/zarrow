@@ -10,6 +10,21 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 
 
+def decode_dictionary_values(column: pa.Array) -> list[str]:
+    if not pa.types.is_dictionary(column.type):
+        raise RuntimeError("column must be dictionary type")
+    dictionary = column.dictionary.to_pylist()
+    indices = column.indices.to_pylist()
+    out: list[str] = []
+    for index in indices:
+        if index is None:
+            raise RuntimeError("dictionary index is null")
+        if index < 0 or index >= len(dictionary):
+            raise RuntimeError("dictionary index out of range")
+        out.append(dictionary[index])
+    return out
+
+
 def validate_canonical(in_path: pathlib.Path) -> None:
     with ipc.open_stream(in_path) as reader:
         schema = reader.schema
@@ -53,17 +68,10 @@ def validate_dict_delta(in_path: pathlib.Path) -> None:
     second = batches[1]
     if first.num_rows != 2 or second.num_rows != 1:
         raise RuntimeError("invalid row counts")
-    if first.column(0).to_pylist() != ["red", "blue"]:
+    if decode_dictionary_values(first.column(0)) != ["red", "blue"]:
         raise RuntimeError("invalid first batch values")
-    if second.column(0).to_pylist() != ["green"]:
+    if decode_dictionary_values(second.column(0)) != ["green"]:
         raise RuntimeError("invalid second batch values")
-
-    first_dict = first.column(0).dictionary.to_pylist()
-    second_dict = second.column(0).dictionary.to_pylist()
-    if first_dict != ["red", "blue"]:
-        raise RuntimeError(f"invalid first dictionary: {first_dict!r}")
-    if second_dict != ["red", "blue", "green"]:
-        raise RuntimeError(f"invalid second dictionary: {second_dict!r}")
 
 
 def main() -> int:

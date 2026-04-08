@@ -34,6 +34,7 @@
 # Local IPC interop artifacts
 /.interop-fixtures/
 /.interop-bin/
+/tools/interop/__pycache__/
 
 # Interop tool build outputs (non-source)
 /tools/interop/arrow-rs/target/
