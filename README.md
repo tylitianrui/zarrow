@@ -1,6 +1,7 @@
 # zarrow
 
-[English](README.md) | [中文](docs/README-ZH.md)
+[English](README.md) | [中文](docs/README-ZH.md)  
+
 Zig implementation of Apache Arrow.
 
 ## Goals
