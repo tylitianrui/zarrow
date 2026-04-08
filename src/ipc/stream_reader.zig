@@ -2604,15 +2604,49 @@ test "ipc schema roundtrip preserves field and schema metadata" {
 
     const out_field_md = out_schema.fields[0].metadata.?;
     try std.testing.expectEqual(@as(usize, 2), out_field_md.len);
-    try std.testing.expectEqualStrings("a", out_field_md[0].key);
-    try std.testing.expectEqualStrings("1", out_field_md[0].value);
-    try std.testing.expectEqualStrings("z", out_field_md[1].key);
-    try std.testing.expectEqualStrings("9", out_field_md[1].value);
+    try std.testing.expectEqualStrings("z", out_field_md[0].key);
+    try std.testing.expectEqualStrings("9", out_field_md[0].value);
+    try std.testing.expectEqualStrings("a", out_field_md[1].key);
+    try std.testing.expectEqualStrings("1", out_field_md[1].value);
 }
 
-test "ipc schema metadata serialization is deterministic" {
+test "ipc schema metadata serialization is stable for identical input" {
     const allocator = std.testing.allocator;
 
+    const int_type = DataType{ .int32 = {} };
+
+    const field_md = [_]datatype.KeyValue{
+        .{ .key = "beta", .value = "2" },
+        .{ .key = "alpha", .value = "1" },
+    };
+    const schema_md = [_]datatype.KeyValue{
+        .{ .key = "z", .value = "9" },
+        .{ .key = "a", .value = "0" },
+    };
+
+    const fields = [_]Field{
+        .{ .name = "id", .data_type = &int_type, .nullable = false, .metadata = field_md[0..] },
+    };
+    const schema = Schema{ .fields = fields[0..], .metadata = schema_md[0..] };
+
+    var out_a = std.array_list.Managed(u8).init(allocator);
+    defer out_a.deinit();
+    var out_b = std.array_list.Managed(u8).init(allocator);
+    defer out_b.deinit();
+
+    var writer_a = @import("stream_writer.zig").StreamWriter(@TypeOf(out_a.writer())).init(allocator, out_a.writer());
+    defer writer_a.deinit();
+    var writer_b = @import("stream_writer.zig").StreamWriter(@TypeOf(out_b.writer())).init(allocator, out_b.writer());
+    defer writer_b.deinit();
+    // Same schema written twice must produce identical bytes.
+    try writer_a.writeSchema(schema);
+    try writer_b.writeSchema(schema);
+
+    try std.testing.expectEqualSlices(u8, out_a.items, out_b.items);
+}
+
+test "ipc schema metadata serialization preserves insertion order" {
+    const allocator = std.testing.allocator;
     const int_type = DataType{ .int32 = {} };
 
     const field_md_a = [_]datatype.KeyValue{
@@ -2653,7 +2687,31 @@ test "ipc schema metadata serialization is deterministic" {
     try writer_a.writeSchema(schema_a);
     try writer_b.writeSchema(schema_b);
 
-    try std.testing.expectEqualSlices(u8, out_a.items, out_b.items);
+    try std.testing.expect(!std.mem.eql(u8, out_a.items, out_b.items));
+
+    var stream_a = std.io.fixedBufferStream(out_a.items);
+    var reader_a = StreamReader(@TypeOf(stream_a.reader())).init(allocator, stream_a.reader());
+    defer reader_a.deinit();
+    const read_a = try reader_a.readSchema();
+
+    var stream_b = std.io.fixedBufferStream(out_b.items);
+    var reader_b = StreamReader(@TypeOf(stream_b.reader())).init(allocator, stream_b.reader());
+    defer reader_b.deinit();
+    const read_b = try reader_b.readSchema();
+
+    const read_a_schema_md = read_a.metadata.?;
+    try std.testing.expectEqualStrings("z", read_a_schema_md[0].key);
+    try std.testing.expectEqualStrings("a", read_a_schema_md[1].key);
+    const read_a_field_md = read_a.fields[0].metadata.?;
+    try std.testing.expectEqualStrings("beta", read_a_field_md[0].key);
+    try std.testing.expectEqualStrings("alpha", read_a_field_md[1].key);
+
+    const read_b_schema_md = read_b.metadata.?;
+    try std.testing.expectEqualStrings("a", read_b_schema_md[0].key);
+    try std.testing.expectEqualStrings("z", read_b_schema_md[1].key);
+    const read_b_field_md = read_b.fields[0].metadata.?;
+    try std.testing.expectEqualStrings("alpha", read_b_field_md[0].key);
+    try std.testing.expectEqualStrings("beta", read_b_field_md[1].key);
 }
 
 test "ipc reader accepts pyarrow simple stream fixture" {

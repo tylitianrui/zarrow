@@ -324,26 +324,11 @@ fn buildFieldT(allocator: std.mem.Allocator, field: Field, next_dictionary_id: *
 
 fn buildCustomMetadataT(allocator: std.mem.Allocator, metadata: ?[]const datatype.KeyValue) WriterError!std.ArrayList(fbs.KeyValueT) {
     const kvs = metadata orelse return std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 0);
-    if (kvs.len == 0) return std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 0);
-
-    const sorted = try allocator.dupe(datatype.KeyValue, kvs);
-    defer allocator.free(sorted);
-    std.sort.pdq(datatype.KeyValue, sorted, {}, lessThanKeyValue);
-
-    var out = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, sorted.len);
-    for (sorted) |kv| {
-        try out.append(allocator, .{
-            .key = kv.key,
-            .value = kv.value,
-        });
+    var out = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, kvs.len);
+    for (kvs) |kv| {
+        try out.append(allocator, .{ .key = kv.key, .value = kv.value });
     }
     return out;
-}
-
-fn lessThanKeyValue(_: void, a: datatype.KeyValue, b: datatype.KeyValue) bool {
-    const key_order = std.mem.order(u8, a.key, b.key);
-    if (key_order != .eq) return key_order == .lt;
-    return std.mem.order(u8, a.value, b.value) == .lt;
 }
 
 fn buildTypeT(allocator: std.mem.Allocator, dt: DataType) WriterError!fbs.TypeT {
