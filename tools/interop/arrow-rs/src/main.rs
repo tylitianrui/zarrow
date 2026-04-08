@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow_array::builder::StringDictionaryBuilder;
 use arrow_array::types::Int32Type;
-use arrow_array::{Array, ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringArray};
+use arrow_array::{Array, ArrayRef, DictionaryArray, Int32Array, RecordBatch, RunArray, StringArray};
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{DataType, Field, Schema};
@@ -56,6 +56,31 @@ fn generate_dict_delta(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut writer = StreamWriter::try_new(file, &schema)?;
     writer.write(&first_batch)?;
     writer.write(&second_batch)?;
+    writer.finish()?;
+    Ok(())
+}
+
+fn ree_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![Field::new(
+        "ree",
+        DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        ),
+        true,
+    )]))
+}
+
+fn generate_ree(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let schema = ree_schema();
+    let run_ends = Int32Array::from(vec![2, 5]);
+    let values = Int32Array::from(vec![100, 200]);
+    let ree: ArrayRef = Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &values)?);
+    let batch = RecordBatch::try_new(schema.clone(), vec![ree])?;
+
+    let file = File::create(path)?;
+    let mut writer = StreamWriter::try_new(file, &schema)?;
+    writer.write(&batch)?;
     writer.finish()?;
     Ok(())
 }
@@ -163,6 +188,45 @@ fn validate_dict_delta(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn validate_ree(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let file = File::open(path)?;
+    let mut reader = StreamReader::try_new(file, None)?;
+    let schema = reader.schema();
+    if schema.fields().len() != 1 {
+        return Err("invalid schema field count".into());
+    }
+    if schema.field(0).name() != "ree" {
+        return Err("invalid ree field".into());
+    }
+    match schema.field(0).data_type() {
+        DataType::RunEndEncoded(run_ends, values)
+            if run_ends.data_type() == &DataType::Int32 && values.data_type() == &DataType::Int32 => {}
+        _ => return Err("ree field must be run_end_encoded<int32,int32>".into()),
+    }
+
+    let batch = reader.next().ok_or("missing batch")??;
+    if reader.next().is_some() {
+        return Err("unexpected extra batch".into());
+    }
+    if batch.num_rows() != 5 {
+        return Err("invalid row count".into());
+    }
+
+    let ree = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<RunArray<Int32Type>>()
+        .ok_or("ree downcast failed")?;
+    let typed = ree.downcast::<Int32Array>().ok_or("ree values downcast failed")?;
+    let actual: Vec<Option<i32>> = typed.into_iter().collect();
+    let expected = vec![Some(100), Some(100), Some(200), Some(200), Some(200)];
+    if actual != expected {
+        return Err(format!("invalid ree values: {actual:?}").into());
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args();
     let _exe = args.next();
@@ -176,6 +240,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("validate", "canonical") => validate(path),
         ("generate", "dict-delta") => generate_dict_delta(path),
         ("validate", "dict-delta") => validate_dict_delta(path),
-        _ => Err("usage: <generate|validate> <path.arrow> [canonical|dict-delta]".into()),
+        ("generate", "ree") => generate_ree(path),
+        ("validate", "ree") => validate_ree(path),
+        _ => Err("usage: <generate|validate> <path.arrow> [canonical|dict-delta|ree]".into()),
     }
 }

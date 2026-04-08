@@ -131,6 +131,9 @@ jobs:
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_dict_delta.arrow dict-delta
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree.arrow ree
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree.arrow ree
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree.arrow ree
 
       - name: Arrow C++ generate fixture
         shell: bash -l {0}
