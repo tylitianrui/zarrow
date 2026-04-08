@@ -166,10 +166,8 @@ fn writeDictionaryDeltaFixture(allocator: std.mem.Allocator, writer: *zarrow.Ipc
     var batch_1 = try zarrow.RecordBatch.init(allocator, schema, &[_]zarrow.ArrayRef{dict_col_1});
     defer batch_1.deinit();
 
-    var dict_values_builder_2 = try zarrow.StringBuilder.init(allocator, 3, 12);
+    var dict_values_builder_2 = try zarrow.StringBuilder.init(allocator, 1, 5);
     defer dict_values_builder_2.deinit();
-    try dict_values_builder_2.append("red");
-    try dict_values_builder_2.append("blue");
     try dict_values_builder_2.append("green");
     var dict_values_2 = try dict_values_builder_2.finish();
     defer dict_values_2.release();
@@ -181,7 +179,7 @@ fn writeDictionaryDeltaFixture(allocator: std.mem.Allocator, writer: *zarrow.Ipc
         1,
     );
     defer dict_builder_2.deinit();
-    try dict_builder_2.appendIndex(2);
+    try dict_builder_2.appendIndex(0);
     var dict_col_2 = try dict_builder_2.finish(dict_values_2);
     defer dict_col_2.release();
     var batch_2 = try zarrow.RecordBatch.init(allocator, schema, &[_]zarrow.ArrayRef{dict_col_2});
