@@ -453,6 +453,7 @@ fn buildDataTypeFromFlatbuf(allocator: std.mem.Allocator, field_t: fbs.FieldT) (
         const index_type = dict_t.indexType orelse return StreamError.UnsupportedType;
         const bit_width = std.math.cast(u8, index_type.bitWidth) orelse return StreamError.InvalidMetadata;
         if (bit_width != 8 and bit_width != 16 and bit_width != 32 and bit_width != 64) return StreamError.InvalidMetadata;
+        if (!index_type.is_signed) return StreamError.InvalidMetadata;
         const index = datatype.IntType{ .bit_width = bit_width, .signed = index_type.is_signed };
         const value_ptr = try allocator.create(DataType);
         value_ptr.* = dtype;
@@ -1507,6 +1508,35 @@ test "ipc schema rejects dictionary index metadata with invalid bit width" {
 
     var field = fbs.FieldT{
         .name = "bad_dict",
+        .nullable = true,
+        .type = .{ .Int = int_t },
+        .dictionary = dict_t,
+        .children = try std.ArrayList(fbs.FieldT).initCapacity(allocator, 0),
+        .custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 0),
+    };
+    defer field.deinit(allocator);
+
+    try std.testing.expectError(StreamError.InvalidMetadata, buildDataTypeFromFlatbuf(allocator, field));
+}
+
+test "ipc schema rejects dictionary index metadata with unsigned index type" {
+    const allocator = std.testing.allocator;
+
+    const int_t = try allocator.create(fbs.IntT);
+    int_t.* = .{ .bitWidth = 32, .is_signed = true };
+
+    const dict_index_t = try allocator.create(fbs.IntT);
+    dict_index_t.* = .{ .bitWidth = 32, .is_signed = false };
+    const dict_t = try allocator.create(fbs.DictionaryEncodingT);
+    dict_t.* = .{
+        .id = 1,
+        .indexType = dict_index_t,
+        .isOrdered = false,
+        .dictionaryKind = .DenseArray,
+    };
+
+    var field = fbs.FieldT{
+        .name = "bad_dict_unsigned",
         .nullable = true,
         .type = .{ .Int = int_t },
         .dictionary = dict_t,

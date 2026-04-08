@@ -293,6 +293,7 @@ fn buildFieldT(allocator: std.mem.Allocator, field: Field, next_dictionary_id: *
 
     const dictionary_t = switch (field.data_type.*) {
         .dictionary => |dict| blk: {
+            if (!dict.index_type.signed) return StreamError.InvalidMetadata;
             const dictionary_id = dict.id orelse id_blk: {
                 const assigned = next_dictionary_id.*;
                 next_dictionary_id.* += 1;
@@ -1063,4 +1064,29 @@ test "ipc writer emits dictionary delta on append-only dictionary growth" {
     try std.testing.expectEqual(@as(usize, 2), dict_flags.items.len);
     try std.testing.expectEqual(false, dict_flags.items[0]);
     try std.testing.expectEqual(true, dict_flags.items[1]);
+}
+
+test "ipc writer rejects dictionary with unsigned index type" {
+    const allocator = std.testing.allocator;
+
+    const value_type = DataType{ .string = {} };
+    const dict_type = DataType{
+        .dictionary = .{
+            .id = null,
+            .index_type = .{ .bit_width = 32, .signed = false },
+            .value_type = &value_type,
+            .ordered = false,
+        },
+    };
+    const fields = [_]Field{
+        .{ .name = "color", .data_type = &dict_type, .nullable = false },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    defer out.deinit();
+    var writer = StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
+
+    try std.testing.expectError(StreamError.InvalidMetadata, writer.writeSchema(schema));
 }
