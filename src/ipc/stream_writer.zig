@@ -167,7 +167,9 @@ fn writeMessage(allocator: std.mem.Allocator, writer: anytype, msg: fbs.MessageT
     try fbs.Message.FinishBuffer(&builder, msg_off);
     const metadata = try builder.finishedBytes();
 
-    try format.writeMessageLength(writer, @intCast(metadata.len));
+    // IPC stream framing stores the padded metadata length in the prefix.
+    const metadata_len = format.paddedLen(metadata.len);
+    try format.writeMessageLength(writer, @intCast(metadata_len));
     try writer.writeAll(metadata);
     try format.writePadding(writer, format.padLen(metadata.len));
 
@@ -178,7 +180,6 @@ fn writeMessage(allocator: std.mem.Allocator, writer: anytype, msg: fbs.MessageT
         const pad_len = padded - buf.len();
         if (pad_len > 0) try writer.writeAll(pad_bytes[0..pad_len]);
     }
-    try format.writePadding(writer, format.padLen(@as(usize, @intCast(msg.bodyLength))));
 }
 
 fn buildSchemaT(allocator: std.mem.Allocator, schema: Schema, next_dictionary_id: *i64) WriterError!fbs.SchemaT {
