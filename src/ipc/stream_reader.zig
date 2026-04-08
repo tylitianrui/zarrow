@@ -723,7 +723,7 @@ fn mergeDictionaryValues(
     base: ArrayRef,
     delta: ArrayRef,
 ) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
-    if (base.data().data_type.id() != delta.data().data_type.id()) return StreamError.InvalidMetadata;
+    if (!std.meta.eql(base.data().data_type, delta.data().data_type)) return StreamError.InvalidMetadata;
 
     const dt = base.data().data_type;
     return switch (dt) {
@@ -741,8 +741,274 @@ fn mergeDictionaryValues(
         },
         .string, .binary => try concatVariableBinaryArrayI32(allocator, dt, base.data(), delta.data()),
         .large_string, .large_binary => try concatVariableBinaryArrayI64(allocator, dt, base.data(), delta.data()),
+        .list, .map => try concatListLikeArrayI32(allocator, dt, base.data(), delta.data()),
+        .large_list => try concatListLikeArrayI64(allocator, dt, base.data(), delta.data()),
+        .fixed_size_list => try concatFixedSizeListArray(allocator, dt, base.data(), delta.data()),
+        .struct_ => try concatStructArray(allocator, dt, base.data(), delta.data()),
         else => StreamError.UnsupportedType,
     };
+}
+
+fn concatListLikeArrayI32(
+    allocator: std.mem.Allocator,
+    dt: DataType,
+    left: *const ArrayData,
+    right: *const ArrayData,
+) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
+    try requireBufferCount(left, 2);
+    try requireBufferCount(right, 2);
+    if (left.children.len != 1 or right.children.len != 1) return StreamError.InvalidMetadata;
+
+    const total_len = std.math.add(usize, left.length, right.length) catch return StreamError.InvalidMetadata;
+    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return StreamError.InvalidMetadata;
+    const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
+    errdefer if (!validity.isEmpty()) {
+        var owned = validity;
+        owned.release();
+    };
+
+    const left_offsets = left.buffers[1].typedSlice(i32);
+    const right_offsets = right.buffers[1].typedSlice(i32);
+    const left_base = left_offsets[left.offset];
+    const left_last = left_offsets[left.offset + left.length];
+    const right_base = right_offsets[right.offset];
+    const right_last = right_offsets[right.offset + right.length];
+    if (left_base < 0 or left_last < left_base or right_base < 0 or right_last < right_base) return StreamError.InvalidMetadata;
+
+    const offsets_len = std.math.add(usize, total_len, 1) catch return StreamError.InvalidMetadata;
+    var offsets_owned = try buffer.OwnedBuffer.init(allocator, offsets_len * @sizeOf(i32));
+    var out_offsets = offsets_owned.typedSlice(i32)[0..offsets_len];
+    out_offsets[0] = 0;
+
+    var i: usize = 0;
+    while (i < left.length) : (i += 1) {
+        const rel = std.math.sub(i32, left_offsets[left.offset + i + 1], left_base) catch return StreamError.InvalidMetadata;
+        out_offsets[i + 1] = rel;
+    }
+    const left_prefix = out_offsets[left.length];
+    while (i < total_len) : (i += 1) {
+        const right_i = i - left.length;
+        const rel = std.math.sub(i32, right_offsets[right.offset + right_i + 1], right_base) catch return StreamError.InvalidMetadata;
+        out_offsets[i + 1] = std.math.add(i32, left_prefix, rel) catch return StreamError.InvalidMetadata;
+    }
+    var offsets = try offsets_owned.toShared(offsets_len * @sizeOf(i32));
+    errdefer offsets.release();
+
+    const left_child_start = std.math.cast(usize, left_base) orelse return StreamError.InvalidMetadata;
+    const left_child_end = std.math.cast(usize, left_last) orelse return StreamError.InvalidMetadata;
+    const right_child_start = std.math.cast(usize, right_base) orelse return StreamError.InvalidMetadata;
+    const right_child_end = std.math.cast(usize, right_last) orelse return StreamError.InvalidMetadata;
+    const left_child_len = std.math.sub(usize, left_child_end, left_child_start) catch return StreamError.InvalidMetadata;
+    const right_child_len = std.math.sub(usize, right_child_end, right_child_start) catch return StreamError.InvalidMetadata;
+
+    var left_child = try left.children[0].slice(left_child_start, left_child_len);
+    defer left_child.release();
+    var right_child = try right.children[0].slice(right_child_start, right_child_len);
+    defer right_child.release();
+    var merged_child = try mergeDictionaryValues(allocator, left_child, right_child);
+    errdefer merged_child.release();
+
+    const buffers = try allocator.alloc(array_data.SharedBuffer, 2);
+    errdefer allocator.free(buffers);
+    buffers[0] = validity;
+    buffers[1] = offsets;
+    const children = try allocator.alloc(ArrayRef, 1);
+    errdefer allocator.free(children);
+    children[0] = merged_child;
+
+    const data = ArrayData{
+        .data_type = dt,
+        .length = total_len,
+        .null_count = null_count,
+        .buffers = buffers,
+        .children = children,
+        .dictionary = null,
+    };
+    try data.validateLayout();
+    return ArrayRef.fromOwnedUnsafe(allocator, data);
+}
+
+fn concatListLikeArrayI64(
+    allocator: std.mem.Allocator,
+    dt: DataType,
+    left: *const ArrayData,
+    right: *const ArrayData,
+) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
+    try requireBufferCount(left, 2);
+    try requireBufferCount(right, 2);
+    if (left.children.len != 1 or right.children.len != 1) return StreamError.InvalidMetadata;
+
+    const total_len = std.math.add(usize, left.length, right.length) catch return StreamError.InvalidMetadata;
+    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return StreamError.InvalidMetadata;
+    const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
+    errdefer if (!validity.isEmpty()) {
+        var owned = validity;
+        owned.release();
+    };
+
+    const left_offsets = left.buffers[1].typedSlice(i64);
+    const right_offsets = right.buffers[1].typedSlice(i64);
+    const left_base = left_offsets[left.offset];
+    const left_last = left_offsets[left.offset + left.length];
+    const right_base = right_offsets[right.offset];
+    const right_last = right_offsets[right.offset + right.length];
+    if (left_base < 0 or left_last < left_base or right_base < 0 or right_last < right_base) return StreamError.InvalidMetadata;
+
+    const offsets_len = std.math.add(usize, total_len, 1) catch return StreamError.InvalidMetadata;
+    var offsets_owned = try buffer.OwnedBuffer.init(allocator, offsets_len * @sizeOf(i64));
+    var out_offsets = offsets_owned.typedSlice(i64)[0..offsets_len];
+    out_offsets[0] = 0;
+
+    var i: usize = 0;
+    while (i < left.length) : (i += 1) {
+        const rel = std.math.sub(i64, left_offsets[left.offset + i + 1], left_base) catch return StreamError.InvalidMetadata;
+        out_offsets[i + 1] = rel;
+    }
+    const left_prefix = out_offsets[left.length];
+    while (i < total_len) : (i += 1) {
+        const right_i = i - left.length;
+        const rel = std.math.sub(i64, right_offsets[right.offset + right_i + 1], right_base) catch return StreamError.InvalidMetadata;
+        out_offsets[i + 1] = std.math.add(i64, left_prefix, rel) catch return StreamError.InvalidMetadata;
+    }
+    var offsets = try offsets_owned.toShared(offsets_len * @sizeOf(i64));
+    errdefer offsets.release();
+
+    const left_child_start = std.math.cast(usize, left_base) orelse return StreamError.InvalidMetadata;
+    const left_child_end = std.math.cast(usize, left_last) orelse return StreamError.InvalidMetadata;
+    const right_child_start = std.math.cast(usize, right_base) orelse return StreamError.InvalidMetadata;
+    const right_child_end = std.math.cast(usize, right_last) orelse return StreamError.InvalidMetadata;
+    const left_child_len = std.math.sub(usize, left_child_end, left_child_start) catch return StreamError.InvalidMetadata;
+    const right_child_len = std.math.sub(usize, right_child_end, right_child_start) catch return StreamError.InvalidMetadata;
+
+    var left_child = try left.children[0].slice(left_child_start, left_child_len);
+    defer left_child.release();
+    var right_child = try right.children[0].slice(right_child_start, right_child_len);
+    defer right_child.release();
+    var merged_child = try mergeDictionaryValues(allocator, left_child, right_child);
+    errdefer merged_child.release();
+
+    const buffers = try allocator.alloc(array_data.SharedBuffer, 2);
+    errdefer allocator.free(buffers);
+    buffers[0] = validity;
+    buffers[1] = offsets;
+    const children = try allocator.alloc(ArrayRef, 1);
+    errdefer allocator.free(children);
+    children[0] = merged_child;
+
+    const data = ArrayData{
+        .data_type = dt,
+        .length = total_len,
+        .null_count = null_count,
+        .buffers = buffers,
+        .children = children,
+        .dictionary = null,
+    };
+    try data.validateLayout();
+    return ArrayRef.fromOwnedUnsafe(allocator, data);
+}
+
+fn concatFixedSizeListArray(
+    allocator: std.mem.Allocator,
+    dt: DataType,
+    left: *const ArrayData,
+    right: *const ArrayData,
+) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
+    try requireBufferCount(left, 1);
+    try requireBufferCount(right, 1);
+    if (left.children.len != 1 or right.children.len != 1) return StreamError.InvalidMetadata;
+    const list_size = std.math.cast(usize, dt.fixed_size_list.list_size) orelse return StreamError.InvalidMetadata;
+    if (list_size == 0) return StreamError.InvalidMetadata;
+
+    const total_len = std.math.add(usize, left.length, right.length) catch return StreamError.InvalidMetadata;
+    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return StreamError.InvalidMetadata;
+    const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
+    errdefer if (!validity.isEmpty()) {
+        var owned = validity;
+        owned.release();
+    };
+
+    const left_child_start = std.math.mul(usize, left.offset, list_size) catch return StreamError.InvalidMetadata;
+    const left_child_len = std.math.mul(usize, left.length, list_size) catch return StreamError.InvalidMetadata;
+    const right_child_start = std.math.mul(usize, right.offset, list_size) catch return StreamError.InvalidMetadata;
+    const right_child_len = std.math.mul(usize, right.length, list_size) catch return StreamError.InvalidMetadata;
+
+    var left_child = try left.children[0].slice(left_child_start, left_child_len);
+    defer left_child.release();
+    var right_child = try right.children[0].slice(right_child_start, right_child_len);
+    defer right_child.release();
+    var merged_child = try mergeDictionaryValues(allocator, left_child, right_child);
+    errdefer merged_child.release();
+
+    const buffers = try allocator.alloc(array_data.SharedBuffer, 1);
+    errdefer allocator.free(buffers);
+    buffers[0] = validity;
+    const children = try allocator.alloc(ArrayRef, 1);
+    errdefer allocator.free(children);
+    children[0] = merged_child;
+
+    const data = ArrayData{
+        .data_type = dt,
+        .length = total_len,
+        .null_count = null_count,
+        .buffers = buffers,
+        .children = children,
+        .dictionary = null,
+    };
+    try data.validateLayout();
+    return ArrayRef.fromOwnedUnsafe(allocator, data);
+}
+
+fn concatStructArray(
+    allocator: std.mem.Allocator,
+    dt: DataType,
+    left: *const ArrayData,
+    right: *const ArrayData,
+) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
+    try requireBufferCount(left, 1);
+    try requireBufferCount(right, 1);
+    if (left.children.len != dt.struct_.fields.len or right.children.len != dt.struct_.fields.len) return StreamError.InvalidMetadata;
+
+    const total_len = std.math.add(usize, left.length, right.length) catch return StreamError.InvalidMetadata;
+    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return StreamError.InvalidMetadata;
+    const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
+    errdefer if (!validity.isEmpty()) {
+        var owned = validity;
+        owned.release();
+    };
+
+    const children = try allocator.alloc(ArrayRef, dt.struct_.fields.len);
+    var child_count: usize = 0;
+    errdefer {
+        var i: usize = 0;
+        while (i < child_count) : (i += 1) {
+            var owned = children[i];
+            owned.release();
+        }
+        allocator.free(children);
+    }
+    for (left.children, right.children, 0..) |left_child_ref, right_child_ref, idx| {
+        var left_child = try left_child_ref.slice(left.offset, left.length);
+        defer left_child.release();
+        var right_child = try right_child_ref.slice(right.offset, right.length);
+        defer right_child.release();
+        children[idx] = try mergeDictionaryValues(allocator, left_child, right_child);
+        child_count += 1;
+    }
+
+    const buffers = try allocator.alloc(array_data.SharedBuffer, 1);
+    errdefer allocator.free(buffers);
+    buffers[0] = validity;
+
+    const data = ArrayData{
+        .data_type = dt,
+        .length = total_len,
+        .null_count = null_count,
+        .buffers = buffers,
+        .children = children,
+        .dictionary = null,
+    };
+    try data.validateLayout();
+    return ArrayRef.fromOwnedUnsafe(allocator, data);
 }
 
 fn concatNullArray(
@@ -1087,7 +1353,15 @@ fn findDictionaryValueTypeInDataType(dt: DataType, dictionary_id: i64) ?DataType
         },
         .list => |lst| findDictionaryValueTypeInDataType(lst.value_field.data_type.*, dictionary_id),
         .large_list => |lst| findDictionaryValueTypeInDataType(lst.value_field.data_type.*, dictionary_id),
+        .list_view => |lst| findDictionaryValueTypeInDataType(lst.value_field.data_type.*, dictionary_id),
+        .large_list_view => |lst| findDictionaryValueTypeInDataType(lst.value_field.data_type.*, dictionary_id),
         .fixed_size_list => |lst| findDictionaryValueTypeInDataType(lst.value_field.data_type.*, dictionary_id),
+        .map => |map_t| blk: {
+            if (findDictionaryValueTypeInDataType(map_t.key_field.data_type.*, dictionary_id)) |value_type| {
+                break :blk value_type;
+            }
+            break :blk findDictionaryValueTypeInDataType(map_t.item_field.data_type.*, dictionary_id);
+        },
         .struct_ => |st| blk: {
             for (st.fields) |field| {
                 if (findDictionaryValueTypeInDataType(field.data_type.*, dictionary_id)) |value_type| {
@@ -1096,8 +1370,77 @@ fn findDictionaryValueTypeInDataType(dt: DataType, dictionary_id: i64) ?DataType
             }
             break :blk null;
         },
+        .sparse_union, .dense_union => |uni| blk: {
+            for (uni.fields) |field| {
+                if (findDictionaryValueTypeInDataType(field.data_type.*, dictionary_id)) |value_type| {
+                    break :blk value_type;
+                }
+            }
+            break :blk null;
+        },
+        .run_end_encoded => |ree| findDictionaryValueTypeInDataType(ree.value_type.*, dictionary_id),
+        .extension => |ext| findDictionaryValueTypeInDataType(ext.storage_type.*, dictionary_id),
         else => null,
     };
+}
+
+test "ipc reader finds dictionary value type in nested metadata layouts" {
+    const value_type = DataType{ .string = {} };
+    const int32_type = DataType{ .int32 = {} };
+    const dict_type = DataType{
+        .dictionary = .{
+            .id = 99,
+            .index_type = .{ .bit_width = 32, .signed = true },
+            .value_type = &value_type,
+            .ordered = false,
+        },
+    };
+    const dict_field = Field{ .name = "dict", .data_type = &dict_type, .nullable = true };
+    const int_field = Field{ .name = "item", .data_type = &int32_type, .nullable = true };
+
+    const list_view_type = DataType{ .list_view = .{ .value_field = dict_field } };
+    try std.testing.expect(findDictionaryValueTypeInDataType(list_view_type, 99) != null);
+
+    const map_type = DataType{
+        .map = .{
+            .key_field = int_field,
+            .item_field = dict_field,
+            .keys_sorted = false,
+            .entries_type = null,
+        },
+    };
+    try std.testing.expect(findDictionaryValueTypeInDataType(map_type, 99) != null);
+
+    const union_fields = [_]Field{
+        .{ .name = "a", .data_type = &int32_type, .nullable = true },
+        .{ .name = "b", .data_type = &dict_type, .nullable = true },
+    };
+    const union_type_ids = [_]i8{ 0, 1 };
+    const sparse_union_type = DataType{
+        .sparse_union = .{
+            .type_ids = union_type_ids[0..],
+            .fields = union_fields[0..],
+            .mode = .sparse,
+        },
+    };
+    try std.testing.expect(findDictionaryValueTypeInDataType(sparse_union_type, 99) != null);
+
+    const ree_type = DataType{
+        .run_end_encoded = .{
+            .run_end_type = .{ .bit_width = 32, .signed = true },
+            .value_type = &dict_type,
+        },
+    };
+    try std.testing.expect(findDictionaryValueTypeInDataType(ree_type, 99) != null);
+
+    const extension_type = DataType{
+        .extension = .{
+            .name = "ext",
+            .storage_type = &dict_type,
+            .metadata = null,
+        },
+    };
+    try std.testing.expect(findDictionaryValueTypeInDataType(extension_type, 99) != null);
 }
 
 fn expectMetadataEntry(metadata: []const datatype.KeyValue, key: []const u8, value: []const u8) !void {
@@ -1715,6 +2058,132 @@ test "ipc reader merges dictionary delta batches" {
     try std.testing.expectEqualStrings("red", dict_view.value(0));
     try std.testing.expectEqualStrings("blue", dict_view.value(1));
     try std.testing.expectEqualStrings("green", dict_view.value(2));
+}
+
+test "ipc reader dictionary delta merge supports list values" {
+    const allocator = std.testing.allocator;
+    const arr = @import("../array/array.zig");
+
+    const int_type = DataType{ .int32 = {} };
+    const value_field = Field{ .name = "item", .data_type = &int_type, .nullable = true };
+    const list_type = DataType{ .list = .{ .value_field = value_field } };
+
+    var left_values_builder = try arr.Int32Builder.init(allocator, 3);
+    defer left_values_builder.deinit();
+    try left_values_builder.append(1);
+    try left_values_builder.append(2);
+    try left_values_builder.append(3);
+    var left_values = try left_values_builder.finish();
+    defer left_values.release();
+
+    var left_list_builder = try arr.ListBuilder.init(allocator, 2, value_field);
+    defer left_list_builder.deinit();
+    try left_list_builder.appendLen(2);
+    try left_list_builder.appendLen(1);
+    var left_list = try left_list_builder.finish(left_values);
+    defer left_list.release();
+
+    var right_values_builder = try arr.Int32Builder.init(allocator, 2);
+    defer right_values_builder.deinit();
+    try right_values_builder.append(4);
+    try right_values_builder.append(5);
+    var right_values = try right_values_builder.finish();
+    defer right_values.release();
+
+    var right_list_builder = try arr.ListBuilder.init(allocator, 2, value_field);
+    defer right_list_builder.deinit();
+    try right_list_builder.appendLen(1);
+    try right_list_builder.appendLen(1);
+    var right_list = try right_list_builder.finish(right_values);
+    defer right_list.release();
+
+    var merged = try mergeDictionaryValues(allocator, left_list, right_list);
+    defer merged.release();
+
+    try std.testing.expect(merged.data().data_type == .list);
+    try std.testing.expectEqual(@as(usize, 4), merged.data().length);
+    const offsets = merged.data().buffers[1].typedSlice(i32);
+    try std.testing.expectEqual(@as(i32, 0), offsets[0]);
+    try std.testing.expectEqual(@as(i32, 2), offsets[1]);
+    try std.testing.expectEqual(@as(i32, 3), offsets[2]);
+    try std.testing.expectEqual(@as(i32, 4), offsets[3]);
+    try std.testing.expectEqual(@as(i32, 5), offsets[4]);
+
+    const child = arr.Int32Array{ .data = merged.data().children[0].data() };
+    try std.testing.expectEqual(@as(usize, 5), child.len());
+    try std.testing.expectEqual(@as(i32, 1), child.value(0));
+    try std.testing.expectEqual(@as(i32, 2), child.value(1));
+    try std.testing.expectEqual(@as(i32, 3), child.value(2));
+    try std.testing.expectEqual(@as(i32, 4), child.value(3));
+    try std.testing.expectEqual(@as(i32, 5), child.value(4));
+    _ = list_type;
+}
+
+test "ipc reader dictionary delta merge supports struct values" {
+    const allocator = std.testing.allocator;
+    const arr = @import("../array/array.zig");
+
+    const int_type = DataType{ .int32 = {} };
+    const str_type = DataType{ .string = {} };
+    const struct_fields = [_]Field{
+        .{ .name = "id", .data_type = &int_type, .nullable = false },
+        .{ .name = "name", .data_type = &str_type, .nullable = true },
+    };
+    const struct_type = DataType{ .struct_ = .{ .fields = struct_fields[0..] } };
+
+    var left_ids_builder = try arr.Int32Builder.init(allocator, 2);
+    defer left_ids_builder.deinit();
+    try left_ids_builder.append(1);
+    try left_ids_builder.append(2);
+    var left_ids = try left_ids_builder.finish();
+    defer left_ids.release();
+
+    var left_names_builder = try arr.StringBuilder.init(allocator, 2, 2);
+    defer left_names_builder.deinit();
+    try left_names_builder.append("a");
+    try left_names_builder.append("b");
+    var left_names = try left_names_builder.finish();
+    defer left_names.release();
+
+    var left_struct_builder = arr.StructBuilder.init(allocator, struct_fields[0..]);
+    defer left_struct_builder.deinit();
+    try left_struct_builder.appendValid();
+    try left_struct_builder.appendValid();
+    var left_struct = try left_struct_builder.finish(&[_]ArrayRef{ left_ids, left_names });
+    defer left_struct.release();
+
+    var right_ids_builder = try arr.Int32Builder.init(allocator, 1);
+    defer right_ids_builder.deinit();
+    try right_ids_builder.append(3);
+    var right_ids = try right_ids_builder.finish();
+    defer right_ids.release();
+
+    var right_names_builder = try arr.StringBuilder.init(allocator, 1, 1);
+    defer right_names_builder.deinit();
+    try right_names_builder.append("c");
+    var right_names = try right_names_builder.finish();
+    defer right_names.release();
+
+    var right_struct_builder = arr.StructBuilder.init(allocator, struct_fields[0..]);
+    defer right_struct_builder.deinit();
+    try right_struct_builder.appendValid();
+    var right_struct = try right_struct_builder.finish(&[_]ArrayRef{ right_ids, right_names });
+    defer right_struct.release();
+
+    var merged = try mergeDictionaryValues(allocator, left_struct, right_struct);
+    defer merged.release();
+
+    try std.testing.expect(merged.data().data_type == .struct_);
+    try std.testing.expectEqual(@as(usize, 3), merged.data().length);
+    const ids = arr.Int32Array{ .data = merged.data().children[0].data() };
+    const names = arr.StringArray{ .data = merged.data().children[1].data() };
+    try std.testing.expectEqual(@as(i32, 1), ids.value(0));
+    try std.testing.expectEqual(@as(i32, 2), ids.value(1));
+    try std.testing.expectEqual(@as(i32, 3), ids.value(2));
+    try std.testing.expectEqualStrings("a", names.value(0));
+    try std.testing.expectEqualStrings("b", names.value(1));
+    try std.testing.expectEqualStrings("c", names.value(2));
+    _ = struct_type;
 }
 
 test "ipc stream roundtrip map int32 to int32" {
