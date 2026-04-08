@@ -406,8 +406,14 @@ fn buildDataTypeFromFlatbuf(allocator: std.mem.Allocator, field_t: fbs.FieldT) (
             const time_t = field_t.type.Time.?;
             const unit = fromFbsTimeUnit(time_t.unit);
             break :blk switch (time_t.bitWidth) {
-                32 => DataType{ .time32 = .{ .unit = unit } },
-                64 => DataType{ .time64 = .{ .unit = unit } },
+                32 => switch (unit) {
+                    .second, .millisecond => DataType{ .time32 = .{ .unit = unit } },
+                    else => return StreamError.InvalidMetadata,
+                },
+                64 => switch (unit) {
+                    .microsecond, .nanosecond => DataType{ .time64 = .{ .unit = unit } },
+                    else => return StreamError.InvalidMetadata,
+                },
                 else => return StreamError.UnsupportedType,
             };
         },
@@ -425,6 +431,14 @@ fn buildDataTypeFromFlatbuf(allocator: std.mem.Allocator, field_t: fbs.FieldT) (
         .Decimal => blk: {
             const dec_t = field_t.type.Decimal.?;
             const precision = std.math.cast(u8, dec_t.precision) orelse return StreamError.InvalidMetadata;
+            const max_precision: u8 = switch (dec_t.bitWidth) {
+                32 => 9,
+                64 => 18,
+                128 => 38,
+                256 => 76,
+                else => return StreamError.UnsupportedType,
+            };
+            if (precision == 0 or precision > max_precision) return StreamError.InvalidMetadata;
             const params = datatype.DecimalParams{
                 .precision = precision,
                 .scale = dec_t.scale,
@@ -1546,6 +1560,76 @@ test "ipc schema rejects dictionary index metadata with unsigned index type" {
     defer field.deinit(allocator);
 
     try std.testing.expectError(StreamError.InvalidMetadata, buildDataTypeFromFlatbuf(allocator, field));
+}
+
+test "ipc schema rejects decimal metadata precision outside allowed range" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_]struct {
+        bit_width: i32,
+        precision: i32,
+    }{
+        .{ .bit_width = 32, .precision = 10 },
+        .{ .bit_width = 64, .precision = 19 },
+        .{ .bit_width = 128, .precision = 39 },
+        .{ .bit_width = 256, .precision = 77 },
+        .{ .bit_width = 32, .precision = 0 },
+    };
+
+    for (cases) |c| {
+        const dec_t = try allocator.create(fbs.DecimalT);
+        dec_t.* = .{
+            .precision = c.precision,
+            .scale = 0,
+            .bitWidth = c.bit_width,
+        };
+
+        var field = fbs.FieldT{
+            .name = "bad_decimal",
+            .nullable = true,
+            .type = .{ .Decimal = dec_t },
+            .dictionary = null,
+            .children = try std.ArrayList(fbs.FieldT).initCapacity(allocator, 0),
+            .custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 0),
+        };
+        defer field.deinit(allocator);
+
+        try std.testing.expectError(StreamError.InvalidMetadata, buildDataTypeFromFlatbuf(allocator, field));
+    }
+}
+
+test "ipc schema rejects time metadata with invalid unit for bit width" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_]struct {
+        bit_width: i32,
+        unit: fbs.TimeUnit,
+    }{
+        .{ .bit_width = 32, .unit = .MICROSECOND },
+        .{ .bit_width = 32, .unit = .NANOSECOND },
+        .{ .bit_width = 64, .unit = .SECOND },
+        .{ .bit_width = 64, .unit = .MILLISECOND },
+    };
+
+    for (cases) |c| {
+        const time_t = try allocator.create(fbs.TimeT);
+        time_t.* = .{
+            .unit = c.unit,
+            .bitWidth = c.bit_width,
+        };
+
+        var field = fbs.FieldT{
+            .name = "bad_time",
+            .nullable = true,
+            .type = .{ .Time = time_t },
+            .dictionary = null,
+            .children = try std.ArrayList(fbs.FieldT).initCapacity(allocator, 0),
+            .custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 0),
+        };
+        defer field.deinit(allocator);
+
+        try std.testing.expectError(StreamError.InvalidMetadata, buildDataTypeFromFlatbuf(allocator, field));
+    }
 }
 
 test "ipc schema rejects run-end-encoded metadata with unsigned run-end type" {

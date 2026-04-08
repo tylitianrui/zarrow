@@ -333,6 +333,10 @@ fn buildCustomMetadataT(allocator: std.mem.Allocator, metadata: ?[]const datatyp
     return out;
 }
 
+fn validateDecimalPrecision(precision: u8, max_precision: u8) WriterError!void {
+    if (precision == 0 or precision > max_precision) return StreamError.InvalidMetadata;
+}
+
 fn buildTypeT(allocator: std.mem.Allocator, dt: DataType) WriterError!fbs.TypeT {
     return switch (dt) {
         .null => .{ .Null = try allocT(allocator, fbs.NullT, .{}) },
@@ -370,10 +374,22 @@ fn buildTypeT(allocator: std.mem.Allocator, dt: DataType) WriterError!fbs.TypeT 
         .interval_months => .{ .Interval = try allocT(allocator, fbs.IntervalT, .{ .unit = .YEAR_MONTH }) },
         .interval_day_time => .{ .Interval = try allocT(allocator, fbs.IntervalT, .{ .unit = .DAY_TIME }) },
         .interval_month_day_nano => .{ .Interval = try allocT(allocator, fbs.IntervalT, .{ .unit = .MONTH_DAY_NANO }) },
-        .decimal32 => |d| .{ .Decimal = try allocT(allocator, fbs.DecimalT, .{ .precision = @intCast(d.precision), .scale = d.scale, .bitWidth = 32 }) },
-        .decimal64 => |d| .{ .Decimal = try allocT(allocator, fbs.DecimalT, .{ .precision = @intCast(d.precision), .scale = d.scale, .bitWidth = 64 }) },
-        .decimal128 => |d| .{ .Decimal = try allocT(allocator, fbs.DecimalT, .{ .precision = @intCast(d.precision), .scale = d.scale, .bitWidth = 128 }) },
-        .decimal256 => |d| .{ .Decimal = try allocT(allocator, fbs.DecimalT, .{ .precision = @intCast(d.precision), .scale = d.scale, .bitWidth = 256 }) },
+        .decimal32 => |d| blk: {
+            try validateDecimalPrecision(d.precision, 9);
+            break :blk .{ .Decimal = try allocT(allocator, fbs.DecimalT, .{ .precision = @intCast(d.precision), .scale = d.scale, .bitWidth = 32 }) };
+        },
+        .decimal64 => |d| blk: {
+            try validateDecimalPrecision(d.precision, 18);
+            break :blk .{ .Decimal = try allocT(allocator, fbs.DecimalT, .{ .precision = @intCast(d.precision), .scale = d.scale, .bitWidth = 64 }) };
+        },
+        .decimal128 => |d| blk: {
+            try validateDecimalPrecision(d.precision, 38);
+            break :blk .{ .Decimal = try allocT(allocator, fbs.DecimalT, .{ .precision = @intCast(d.precision), .scale = d.scale, .bitWidth = 128 }) };
+        },
+        .decimal256 => |d| blk: {
+            try validateDecimalPrecision(d.precision, 76);
+            break :blk .{ .Decimal = try allocT(allocator, fbs.DecimalT, .{ .precision = @intCast(d.precision), .scale = d.scale, .bitWidth = 256 }) };
+        },
         .map => |m| .{ .Map = try allocT(allocator, fbs.MapT, .{ .keysSorted = m.keys_sorted }) },
         .sparse_union => |u| blk: {
             var type_ids = try std.ArrayList(i32).initCapacity(allocator, u.type_ids.len);
@@ -1090,6 +1106,46 @@ test "ipc writer rejects dictionary with unsigned index type" {
     defer writer.deinit();
 
     try std.testing.expectError(StreamError.InvalidMetadata, writer.writeSchema(schema));
+}
+
+test "ipc writer rejects decimal precision outside allowed range" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_]struct {
+        kind: enum { d32, d64, d128, d256 },
+        precision: u8,
+    }{
+        .{ .kind = .d32, .precision = 10 },
+        .{ .kind = .d64, .precision = 19 },
+        .{ .kind = .d128, .precision = 39 },
+        .{ .kind = .d256, .precision = 77 },
+    };
+
+    for (cases, 0..) |c, i| {
+        const dt = switch (c.kind) {
+            .d32 => DataType{ .decimal32 = .{ .precision = c.precision, .scale = 0 } },
+            .d64 => DataType{ .decimal64 = .{ .precision = c.precision, .scale = 0 } },
+            .d128 => DataType{ .decimal128 = .{ .precision = c.precision, .scale = 0 } },
+            .d256 => DataType{ .decimal256 = .{ .precision = c.precision, .scale = 0 } },
+        };
+        const field_name = switch (i) {
+            0 => "d32",
+            1 => "d64",
+            2 => "d128",
+            else => "d256",
+        };
+        const fields = [_]Field{
+            .{ .name = field_name, .data_type = &dt, .nullable = false },
+        };
+        const schema = Schema{ .fields = fields[0..] };
+
+        var out = std.array_list.Managed(u8).init(allocator);
+        defer out.deinit();
+        var writer = StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+        defer writer.deinit();
+
+        try std.testing.expectError(StreamError.InvalidMetadata, writer.writeSchema(schema));
+    }
 }
 
 test "ipc writer rejects big-endian schema" {
