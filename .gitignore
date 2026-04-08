@@ -30,3 +30,6 @@
 *.tar.bz2
 *.tar.xz
 *.7z
+
+# Local IPC interop artifacts
+/.interop-fixtures/
