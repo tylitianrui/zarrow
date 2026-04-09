@@ -118,9 +118,9 @@ Goal: Build a production-usable Zig implementation of Apache Arrow core memory m
 
 ### C3. Benchmark Reliability
 
-- [ ] C3.1 Add git_sha field to CSV benchmark output.
-- [ ] C3.2 Add timestamp field to CSV benchmark output.
-- [ ] C3.3 Add benchmark-ci parser sanity check script/test.
+- [x] C3.1 Add git_sha field to CSV benchmark output.
+- [x] C3.2 Add timestamp field to CSV benchmark output.
+- [x] C3.3 Add benchmark-ci parser sanity check script/test.
 
 ### C4. Project Governance
 
