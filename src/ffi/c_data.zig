@@ -433,6 +433,13 @@ fn importDataType(allocator: std.mem.Allocator, c_schema: *ArrowSchema) Error!Da
     if (std.mem.eql(u8, fmt, "ttm")) return DataType{ .time32 = .{ .unit = .millisecond } };
     if (std.mem.eql(u8, fmt, "ttu")) return DataType{ .time64 = .{ .unit = .microsecond } };
     if (std.mem.eql(u8, fmt, "ttn")) return DataType{ .time64 = .{ .unit = .nanosecond } };
+    if (std.mem.eql(u8, fmt, "tDs")) return DataType{ .duration = .{ .unit = .second } };
+    if (std.mem.eql(u8, fmt, "tDm")) return DataType{ .duration = .{ .unit = .millisecond } };
+    if (std.mem.eql(u8, fmt, "tDu")) return DataType{ .duration = .{ .unit = .microsecond } };
+    if (std.mem.eql(u8, fmt, "tDn")) return DataType{ .duration = .{ .unit = .nanosecond } };
+    if (std.mem.eql(u8, fmt, "tiM")) return DataType{ .interval_months = .{ .unit = .months } };
+    if (std.mem.eql(u8, fmt, "tDt")) return DataType{ .interval_day_time = .{ .unit = .day_time } };
+    if (std.mem.eql(u8, fmt, "tin")) return DataType{ .interval_month_day_nano = .{ .unit = .month_day_nano } };
     if (std.mem.startsWith(u8, fmt, "ts")) {
         const parsed = parseTimestampFormat(fmt) orelse return error.InvalidFormat;
         const tz = if (parsed.timezone.len == 0) null else try allocator.dupe(u8, parsed.timezone);
@@ -791,6 +798,15 @@ fn formatFromDataType(allocator: std.mem.Allocator, dt: DataType) Error![:0]u8 {
             .nanosecond => try allocator.dupeZ(u8, "ttn"),
             else => return error.UnsupportedType,
         },
+        .duration => |d| switch (d.unit) {
+            .second => try allocator.dupeZ(u8, "tDs"),
+            .millisecond => try allocator.dupeZ(u8, "tDm"),
+            .microsecond => try allocator.dupeZ(u8, "tDu"),
+            .nanosecond => try allocator.dupeZ(u8, "tDn"),
+        },
+        .interval_months => try allocator.dupeZ(u8, "tiM"),
+        .interval_day_time => try allocator.dupeZ(u8, "tDt"),
+        .interval_month_day_nano => try allocator.dupeZ(u8, "tin"),
         .fixed_size_binary => |fsb| allocPrintZ(allocator, "w:{d}", .{fsb.byte_width}),
         .list => try allocator.dupeZ(u8, "+l"),
         .large_list => try allocator.dupeZ(u8, "+L"),
@@ -1012,4 +1028,138 @@ test "c data schema supports timestamp and decimal128 formats" {
     try std.testing.expect(imported.schema.fields[1].data_type.* == .decimal128);
     try std.testing.expectEqual(@as(u8, 38), imported.schema.fields[1].data_type.decimal128.precision);
     try std.testing.expectEqual(@as(i32, 10), imported.schema.fields[1].data_type.decimal128.scale);
+}
+
+test "c data schema supports duration and intervals formats" {
+    const allocator = std.testing.allocator;
+
+    const dur_ty = DataType{ .duration = .{ .unit = .nanosecond } };
+    const int_m_ty = DataType{ .interval_months = .{ .unit = .months } };
+    const int_dt_ty = DataType{ .interval_day_time = .{ .unit = .day_time } };
+    const int_mdn_ty = DataType{ .interval_month_day_nano = .{ .unit = .month_day_nano } };
+    const fields = [_]Field{
+        .{ .name = "dur", .data_type = &dur_ty, .nullable = true },
+        .{ .name = "im", .data_type = &int_m_ty, .nullable = true },
+        .{ .name = "idt", .data_type = &int_dt_ty, .nullable = true },
+        .{ .name = "imdn", .data_type = &int_mdn_ty, .nullable = true },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var c_schema = try exportSchema(allocator, schema);
+    defer if (c_schema.release) |release_fn| release_fn(&c_schema);
+
+    var imported = try importSchemaOwned(allocator, &c_schema);
+    defer imported.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), imported.schema.fields.len);
+    try std.testing.expect(imported.schema.fields[0].data_type.* == .duration);
+    try std.testing.expectEqual(TimeUnit.nanosecond, imported.schema.fields[0].data_type.duration.unit);
+    try std.testing.expect(imported.schema.fields[1].data_type.* == .interval_months);
+    try std.testing.expect(imported.schema.fields[2].data_type.* == .interval_day_time);
+    try std.testing.expect(imported.schema.fields[3].data_type.* == .interval_month_day_nano);
+}
+
+test "c data export emits canonical temporal and decimal formats" {
+    const allocator = std.testing.allocator;
+
+    const ts_ty = DataType{ .timestamp = .{ .unit = .second, .timezone = "UTC" } };
+    const dur_ty = DataType{ .duration = .{ .unit = .microsecond } };
+    const int_m_ty = DataType{ .interval_months = .{ .unit = .months } };
+    const int_dt_ty = DataType{ .interval_day_time = .{ .unit = .day_time } };
+    const int_mdn_ty = DataType{ .interval_month_day_nano = .{ .unit = .month_day_nano } };
+    const dec_ty = DataType{ .decimal128 = .{ .precision = 20, .scale = 4 } };
+
+    const fields = [_]Field{
+        .{ .name = "ts", .data_type = &ts_ty, .nullable = true },
+        .{ .name = "dur", .data_type = &dur_ty, .nullable = true },
+        .{ .name = "im", .data_type = &int_m_ty, .nullable = true },
+        .{ .name = "idt", .data_type = &int_dt_ty, .nullable = true },
+        .{ .name = "imdn", .data_type = &int_mdn_ty, .nullable = true },
+        .{ .name = "dec", .data_type = &dec_ty, .nullable = true },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var c_schema = try exportSchema(allocator, schema);
+    defer if (c_schema.release) |release_fn| release_fn(&c_schema);
+
+    const children = childPtrsSchema(&c_schema).?;
+    try std.testing.expectEqual(@as(usize, 6), children.len);
+    try std.testing.expectEqualStrings("tss:UTC", cString(children[0].?.format).?);
+    try std.testing.expectEqualStrings("tDu", cString(children[1].?.format).?);
+    try std.testing.expectEqualStrings("tiM", cString(children[2].?.format).?);
+    try std.testing.expectEqualStrings("tDt", cString(children[3].?.format).?);
+    try std.testing.expectEqualStrings("tin", cString(children[4].?.format).?);
+    try std.testing.expectEqualStrings("d:20,4", cString(children[5].?.format).?);
+}
+
+test "c data import parses explicit decimal widths and empty timestamp timezone" {
+    const allocator = std.testing.allocator;
+
+    const ts_schema = ArrowSchema{
+        .format = "tsn:",
+        .name = null,
+        .metadata = null,
+        .flags = ARROW_FLAG_NULLABLE,
+        .n_children = 0,
+        .children = null,
+        .dictionary = null,
+        .release = null,
+        .private_data = null,
+    };
+    var ts_schema_mut = ts_schema;
+    const ts_dt = try importDataType(allocator, &ts_schema_mut);
+    try std.testing.expect(ts_dt == .timestamp);
+    try std.testing.expectEqual(TimeUnit.nanosecond, ts_dt.timestamp.unit);
+    try std.testing.expect(ts_dt.timestamp.timezone == null);
+
+    const dec32_schema = ArrowSchema{
+        .format = "d:9,2,32",
+        .name = null,
+        .metadata = null,
+        .flags = ARROW_FLAG_NULLABLE,
+        .n_children = 0,
+        .children = null,
+        .dictionary = null,
+        .release = null,
+        .private_data = null,
+    };
+    var dec32_schema_mut = dec32_schema;
+    const dec32_dt = try importDataType(allocator, &dec32_schema_mut);
+    try std.testing.expect(dec32_dt == .decimal32);
+    try std.testing.expectEqual(@as(u8, 9), dec32_dt.decimal32.precision);
+    try std.testing.expectEqual(@as(i32, 2), dec32_dt.decimal32.scale);
+
+    const dec64_schema = ArrowSchema{
+        .format = "d:18,3,64",
+        .name = null,
+        .metadata = null,
+        .flags = ARROW_FLAG_NULLABLE,
+        .n_children = 0,
+        .children = null,
+        .dictionary = null,
+        .release = null,
+        .private_data = null,
+    };
+    var dec64_schema_mut = dec64_schema;
+    const dec64_dt = try importDataType(allocator, &dec64_schema_mut);
+    try std.testing.expect(dec64_dt == .decimal64);
+    try std.testing.expectEqual(@as(u8, 18), dec64_dt.decimal64.precision);
+    try std.testing.expectEqual(@as(i32, 3), dec64_dt.decimal64.scale);
+
+    const dec256_schema = ArrowSchema{
+        .format = "d:76,20,256",
+        .name = null,
+        .metadata = null,
+        .flags = ARROW_FLAG_NULLABLE,
+        .n_children = 0,
+        .children = null,
+        .dictionary = null,
+        .release = null,
+        .private_data = null,
+    };
+    var dec256_schema_mut = dec256_schema;
+    const dec256_dt = try importDataType(allocator, &dec256_schema_mut);
+    try std.testing.expect(dec256_dt == .decimal256);
+    try std.testing.expectEqual(@as(u8, 76), dec256_dt.decimal256.precision);
+    try std.testing.expectEqual(@as(i32, 20), dec256_dt.decimal256.scale);
 }
