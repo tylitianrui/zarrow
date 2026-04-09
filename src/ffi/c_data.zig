@@ -461,7 +461,9 @@ fn importDataType(allocator: std.mem.Allocator, c_schema: *ArrowSchema) Error!Da
     if (std.mem.eql(u8, fmt, "tDu")) return DataType{ .duration = .{ .unit = .microsecond } };
     if (std.mem.eql(u8, fmt, "tDn")) return DataType{ .duration = .{ .unit = .nanosecond } };
     if (std.mem.eql(u8, fmt, "tiM")) return DataType{ .interval_months = .{ .unit = .months } };
-    if (std.mem.eql(u8, fmt, "tDt")) return DataType{ .interval_day_time = .{ .unit = .day_time } };
+    if (std.mem.eql(u8, fmt, "tiD") or std.mem.eql(u8, fmt, "tDt")) {
+        return DataType{ .interval_day_time = .{ .unit = .day_time } };
+    }
     if (std.mem.eql(u8, fmt, "tin")) return DataType{ .interval_month_day_nano = .{ .unit = .month_day_nano } };
     if (std.mem.startsWith(u8, fmt, "ts")) {
         const parsed = parseTimestampFormat(fmt) orelse return error.InvalidFormat;
@@ -916,7 +918,7 @@ fn formatFromDataType(allocator: std.mem.Allocator, dt: DataType) Error![:0]u8 {
             .nanosecond => try allocator.dupeZ(u8, "tDn"),
         },
         .interval_months => try allocator.dupeZ(u8, "tiM"),
-        .interval_day_time => try allocator.dupeZ(u8, "tDt"),
+        .interval_day_time => try allocator.dupeZ(u8, "tiD"),
         .interval_month_day_nano => try allocator.dupeZ(u8, "tin"),
         .fixed_size_binary => |fsb| allocPrintZ(allocator, "w:{d}", .{fsb.byte_width}),
         .list => try allocator.dupeZ(u8, "+l"),
@@ -1234,7 +1236,7 @@ test "c data export emits canonical temporal and decimal formats" {
     try std.testing.expectEqualStrings("tss:UTC", cString(children[0].?.format).?);
     try std.testing.expectEqualStrings("tDu", cString(children[1].?.format).?);
     try std.testing.expectEqualStrings("tiM", cString(children[2].?.format).?);
-    try std.testing.expectEqualStrings("tDt", cString(children[3].?.format).?);
+    try std.testing.expectEqualStrings("tiD", cString(children[3].?.format).?);
     try std.testing.expectEqualStrings("tin", cString(children[4].?.format).?);
     try std.testing.expectEqualStrings("d:20,4", cString(children[5].?.format).?);
 }
