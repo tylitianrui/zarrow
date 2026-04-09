@@ -15,6 +15,10 @@ const ArrayNode = struct {
     ref_count: std.atomic.Value(u32),
     // Owned array payload (buffers/children/dictionary containers).
     data: ArrayData,
+    // Optional owner hook used by FFI imports to keep foreign memory alive.
+    owner_ctx: ?*anyopaque = null,
+    owner_retain: ?*const fn (?*anyopaque) void = null,
+    owner_release: ?*const fn (?*anyopaque) void = null,
 };
 
 pub const ArrayRef = struct {
@@ -49,6 +53,9 @@ pub const ArrayRef = struct {
             owned.release();
         }
 
+        if (self.node.owner_release) |owner_release| {
+            owner_release(self.node.owner_ctx);
+        }
         allocator.destroy(self.node);
     }
 
@@ -133,7 +140,13 @@ pub const ArrayRef = struct {
         sliced.children = children;
         sliced.dictionary = dict_ref;
 
-        return ArrayRef.fromOwnedUnsafe(allocator, sliced);
+        return ArrayRef.fromOwnedWithOwner(
+            allocator,
+            sliced,
+            self.node.owner_ctx,
+            self.node.owner_retain,
+            self.node.owner_release,
+        );
     }
 
     /// Create an ArrayRef by wrapping an owned ArrayData layout.
@@ -146,6 +159,29 @@ pub const ArrayRef = struct {
             .allocator = allocator,
             .ref_count = std.atomic.Value(u32).init(1),
             .data = layout,
+        };
+        return .{ .node = node };
+    }
+
+    /// Create an ArrayRef by wrapping an owned ArrayData layout with owner hooks.
+    pub fn fromOwnedWithOwner(
+        allocator: std.mem.Allocator,
+        layout: ArrayData,
+        owner_ctx: ?*anyopaque,
+        owner_retain: ?*const fn (?*anyopaque) void,
+        owner_release: ?*const fn (?*anyopaque) void,
+    ) !ArrayRef {
+        if (owner_retain) |retain_fn| retain_fn(owner_ctx);
+        errdefer if (owner_release) |release_fn| release_fn(owner_ctx);
+
+        const node = try allocator.create(ArrayNode);
+        node.* = .{
+            .allocator = allocator,
+            .ref_count = std.atomic.Value(u32).init(1),
+            .data = layout,
+            .owner_ctx = owner_ctx,
+            .owner_retain = owner_retain,
+            .owner_release = owner_release,
         };
         return .{ .node = node };
     }

@@ -104,11 +104,11 @@ Goal: Build a production-usable Zig implementation of Apache Arrow core memory m
 
 ### C1. Arrow C Data Interface (FFI)
 
-- [ ] C1.1 Export Schema to C Data Interface.
-- [ ] C1.2 Export Array to C Data Interface.
-- [ ] C1.3 Import Schema from C Data Interface.
-- [ ] C1.4 Import Array from C Data Interface.
-- [ ] C1.5 Add smoke roundtrip tests.
+- [x] C1.1 Export Schema to C Data Interface.
+- [x] C1.2 Export Array to C Data Interface.
+- [x] C1.3 Import Schema from C Data Interface.
+- [x] C1.4 Import Array from C Data Interface.
+- [x] C1.5 Add smoke roundtrip tests.
 
 ### C2. Fuzzing
 
