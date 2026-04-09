@@ -3,6 +3,7 @@
 /src/format/.zig-cache/
 /zig-out/
 /.venv*/
+/tools/__pycache__/
 
 # Native build artifacts
 *.o
