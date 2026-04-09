@@ -1054,7 +1054,9 @@ fn parseDecimalFormat(fmt: []const u8) ?ParsedDecimal {
 fn parseUnionTypeIds(allocator: std.mem.Allocator, payload: []const u8) Error![]i8 {
     if (payload.len == 0) return error.InvalidFormat;
     var count: usize = 1;
-    for (payload) |c| if (c == ',') count += 1;
+    for (payload) |c| {
+        if (c == ',') count += 1;
+    }
     const out = allocator.alloc(i8, count) catch return error.OutOfMemory;
     errdefer allocator.free(out);
     var it = std.mem.splitScalar(u8, payload, ',');
@@ -1069,7 +1071,7 @@ fn parseUnionTypeIds(allocator: std.mem.Allocator, payload: []const u8) Error![]
 
 fn formatUnion(allocator: std.mem.Allocator, sparse: bool, ids: []const i8) Error![:0]u8 {
     if (ids.len == 0) return error.InvalidFormat;
-    var list = std.ArrayList(u8).init(allocator);
+    var list = std.array_list.Managed(u8).init(allocator);
     defer list.deinit();
 
     try list.appendSlice(if (sparse) "+us:" else "+ud:");
@@ -1626,4 +1628,73 @@ test "c data map import requires entries_type in target datatype" {
 
     try std.testing.expectError(error.UnsupportedType, importArray(allocator, &map_ty_no_entries, &c_array));
     try std.testing.expect(c_array.release == null);
+}
+
+test "c data schema supports sparse and dense union formats" {
+    const allocator = std.testing.allocator;
+
+    const a_ty = DataType{ .int32 = {} };
+    const b_ty = DataType{ .string = {} };
+    const c_ty = DataType{ .bool = {} };
+    const children = [_]Field{
+        .{ .name = "a", .data_type = &a_ty, .nullable = true },
+        .{ .name = "b", .data_type = &b_ty, .nullable = true },
+        .{ .name = "c", .data_type = &c_ty, .nullable = true },
+    };
+    const type_ids = [_]i8{ 0, 1, 2 };
+    const sparse_ty = DataType{
+        .sparse_union = .{
+            .type_ids = type_ids[0..],
+            .fields = children[0..],
+            .mode = .sparse,
+        },
+    };
+    const dense_ty = DataType{
+        .dense_union = .{
+            .type_ids = type_ids[0..],
+            .fields = children[0..],
+            .mode = .dense,
+        },
+    };
+    const root_fields = [_]Field{
+        .{ .name = "su", .data_type = &sparse_ty, .nullable = false },
+        .{ .name = "du", .data_type = &dense_ty, .nullable = false },
+    };
+    const schema = Schema{ .fields = root_fields[0..] };
+
+    var c_schema = try exportSchema(allocator, schema);
+    defer if (c_schema.release) |release_fn| release_fn(&c_schema);
+
+    const top_children = childPtrsSchema(&c_schema).?;
+    try std.testing.expectEqual(@as(usize, 2), top_children.len);
+    try std.testing.expectEqualStrings("+us:0,1,2", cString(top_children[0].?.format).?);
+    try std.testing.expectEqualStrings("+ud:0,1,2", cString(top_children[1].?.format).?);
+
+    var imported = try importSchemaOwned(allocator, &c_schema);
+    defer imported.deinit();
+    try std.testing.expect(imported.schema.fields[0].data_type.* == .sparse_union);
+    try std.testing.expect(imported.schema.fields[1].data_type.* == .dense_union);
+    try std.testing.expectEqual(@as(usize, 3), imported.schema.fields[0].data_type.sparse_union.type_ids.len);
+    try std.testing.expectEqual(@as(i8, 0), imported.schema.fields[0].data_type.sparse_union.type_ids[0]);
+    try std.testing.expectEqual(@as(i8, 1), imported.schema.fields[0].data_type.sparse_union.type_ids[1]);
+    try std.testing.expectEqual(@as(i8, 2), imported.schema.fields[0].data_type.sparse_union.type_ids[2]);
+    try std.testing.expectEqual(@as(usize, 3), imported.schema.fields[1].data_type.dense_union.type_ids.len);
+}
+
+test "c data import union rejects invalid type id payload" {
+    const allocator = std.testing.allocator;
+
+    var c_schema = ArrowSchema{
+        .format = "+us:0,,2",
+        .name = "u",
+        .metadata = null,
+        .flags = ARROW_FLAG_NULLABLE,
+        .n_children = 0,
+        .children = null,
+        .dictionary = null,
+        .release = null,
+        .private_data = null,
+    };
+
+    try std.testing.expectError(error.InvalidFormat, importDataType(allocator, &c_schema));
 }
