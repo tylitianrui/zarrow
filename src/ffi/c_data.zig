@@ -249,6 +249,21 @@ fn exportFieldSchema(allocator: std.mem.Allocator, field: Field) Error!ArrowSche
             priv.children_storage[0] = try exportFieldSchema(allocator, entries_field);
         }
         priv.children_ptrs[0] = &priv.children_storage[0];
+    } else if (field.data_type.* == .run_end_encoded) {
+        const ree = field.data_type.run_end_encoded;
+        const run_end_dt = dataTypeFromIntType(ree.run_end_type) orelse return error.UnsupportedType;
+        const run_end_field = Field{ .name = "run_ends", .data_type = &run_end_dt, .nullable = false };
+        const values_field = Field{ .name = "values", .data_type = ree.value_type, .nullable = true };
+
+        priv.children_storage = try allocator.alloc(ArrowSchema, 2);
+        errdefer allocator.free(priv.children_storage);
+        priv.children_ptrs = try allocator.alloc(?*ArrowSchema, 2);
+        errdefer allocator.free(priv.children_ptrs);
+
+        priv.children_storage[0] = try exportFieldSchema(allocator, run_end_field);
+        priv.children_storage[1] = try exportFieldSchema(allocator, values_field);
+        priv.children_ptrs[0] = &priv.children_storage[0];
+        priv.children_ptrs[1] = &priv.children_storage[1];
     } else {
         const children = try childFieldsForDataType(allocator, field.data_type.*);
         defer allocator.free(children);
@@ -496,6 +511,25 @@ fn importDataType(allocator: std.mem.Allocator, c_schema: *ArrowSchema) Error!Da
         const child_field = try importField(allocator, child);
         return DataType{ .large_list = .{ .value_field = child_field } };
     }
+    if (std.mem.eql(u8, fmt, "+r")) {
+        const children = childPtrsSchema(c_schema) orelse return error.InvalidChildren;
+        if (children.len != 2) return error.InvalidChildren;
+        const run_end_field = try importField(allocator, children[0] orelse return error.InvalidChildren);
+        const value_field = try importField(allocator, children[1] orelse return error.InvalidChildren);
+        const run_end_type = intTypeFromDataType(run_end_field.data_type.*) orelse return error.InvalidFormat;
+        if (!run_end_type.signed) return error.InvalidFormat;
+        if (run_end_type.bit_width != 16 and run_end_type.bit_width != 32 and run_end_type.bit_width != 64) {
+            return error.InvalidFormat;
+        }
+        const value_ptr = try allocator.create(DataType);
+        value_ptr.* = value_field.data_type.*;
+        return DataType{
+            .run_end_encoded = .{
+                .run_end_type = run_end_type,
+                .value_type = value_ptr,
+            },
+        };
+    }
     if (std.mem.eql(u8, fmt, "+m")) {
         const child = singleChildSchema(c_schema) orelse return error.InvalidChildren;
         const entries_field = try importField(allocator, child);
@@ -632,13 +666,22 @@ fn importArrayRecursive(
     }
 
     const child_ptrs = if (n_children == 0) &[_]?*ArrowArray{} else childPtrsArray(c_array) orelse return error.InvalidChildren;
-    const child_types = try childTypesForDataType(allocator, data_type.*);
-    defer allocator.free(child_types);
-
-    for (child_types, 0..) |child_ty, idx| {
-        const child_ptr = child_ptrs[idx] orelse return error.InvalidChildren;
-        children[idx] = try importArrayRecursive(allocator, child_ty, child_ptr, owner);
+    if (data_type.* == .run_end_encoded) {
+        const ree = data_type.run_end_encoded;
+        const run_end_dt = dataTypeFromIntType(ree.run_end_type) orelse return error.UnsupportedType;
+        children[0] = try importArrayRecursive(allocator, &run_end_dt, child_ptrs[0] orelse return error.InvalidChildren, owner);
         filled_children += 1;
+        children[1] = try importArrayRecursive(allocator, ree.value_type, child_ptrs[1] orelse return error.InvalidChildren, owner);
+        filled_children += 1;
+    } else {
+        const child_types = try childTypesForDataType(allocator, data_type.*);
+        defer allocator.free(child_types);
+
+        for (child_types, 0..) |child_ty, idx| {
+            const child_ptr = child_ptrs[idx] orelse return error.InvalidChildren;
+            children[idx] = try importArrayRecursive(allocator, child_ty, child_ptr, owner);
+            filled_children += 1;
+        }
     }
 
     var dict: ?ArrayRef = null;
@@ -745,6 +788,7 @@ fn hasValidity(dt: DataType) bool {
 fn expectedBufferCount(dt: DataType) ?i64 {
     return switch (dt) {
         .null => 0,
+        .run_end_encoded => 0,
         .struct_, .fixed_size_list => 1,
         .sparse_union => 1,
         .dense_union => 2,
@@ -785,6 +829,7 @@ fn expectedBufferCount(dt: DataType) ?i64 {
 fn expectedChildrenCount(dt: DataType) i64 {
     return switch (dt) {
         .list, .large_list, .fixed_size_list, .map => 1,
+        .run_end_encoded => 2,
         .struct_ => |s| @intCast(s.fields.len),
         .sparse_union => |u| @intCast(u.fields.len),
         .dense_union => |u| @intCast(u.fields.len),
@@ -924,6 +969,7 @@ fn formatFromDataType(allocator: std.mem.Allocator, dt: DataType) Error![:0]u8 {
         .list => try allocator.dupeZ(u8, "+l"),
         .large_list => try allocator.dupeZ(u8, "+L"),
         .map => try allocator.dupeZ(u8, "+m"),
+        .run_end_encoded => try allocator.dupeZ(u8, "+r"),
         .sparse_union => |u| formatUnion(allocator, true, u.type_ids),
         .dense_union => |u| formatUnion(allocator, false, u.type_ids),
         .struct_ => try allocator.dupeZ(u8, "+s"),
@@ -958,6 +1004,25 @@ fn intTypeFromFormat(fmt: []const u8) ?IntType {
     if (std.mem.eql(u8, fmt, "l")) return .{ .bit_width = 64, .signed = true };
     if (std.mem.eql(u8, fmt, "L")) return .{ .bit_width = 64, .signed = false };
     return null;
+}
+
+fn dataTypeFromIntType(int_type: IntType) ?DataType {
+    const id = int_type.toTypeId() orelse return null;
+    return switch (id) {
+        .int8 => DataType{ .int8 = {} },
+        .uint8 => DataType{ .uint8 = {} },
+        .int16 => DataType{ .int16 = {} },
+        .uint16 => DataType{ .uint16 = {} },
+        .int32 => DataType{ .int32 = {} },
+        .uint32 => DataType{ .uint32 = {} },
+        .int64 => DataType{ .int64 = {} },
+        .uint64 => DataType{ .uint64 = {} },
+        else => null,
+    };
+}
+
+fn intTypeFromDataType(dt: DataType) ?IntType {
+    return IntType.fromTypeId(dt.id());
 }
 
 fn childPtrsSchema(c_schema: *ArrowSchema) ?[]?*ArrowSchema {
@@ -1699,4 +1764,81 @@ test "c data import union rejects invalid type id payload" {
     };
 
     try std.testing.expectError(error.InvalidFormat, importDataType(allocator, &c_schema));
+}
+
+test "c data schema supports run-end-encoded format" {
+    const allocator = std.testing.allocator;
+
+    const value_ty = DataType{ .int32 = {} };
+    const ree_ty = DataType{
+        .run_end_encoded = .{
+            .run_end_type = .{ .bit_width = 32, .signed = true },
+            .value_type = &value_ty,
+        },
+    };
+    const fields = [_]Field{
+        .{ .name = "ree", .data_type = &ree_ty, .nullable = true },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var c_schema = try exportSchema(allocator, schema);
+    defer if (c_schema.release) |release_fn| release_fn(&c_schema);
+
+    const root_children = childPtrsSchema(&c_schema).?;
+    const ree_schema = root_children[0].?;
+    try std.testing.expectEqualStrings("+r", cString(ree_schema.format).?);
+    const ree_children = childPtrsSchema(ree_schema).?;
+    try std.testing.expectEqual(@as(usize, 2), ree_children.len);
+    try std.testing.expectEqualStrings("i", cString(ree_children[0].?.format).?);
+    try std.testing.expectEqualStrings("i", cString(ree_children[1].?.format).?);
+
+    var imported = try importSchemaOwned(allocator, &c_schema);
+    defer imported.deinit();
+    try std.testing.expect(imported.schema.fields[0].data_type.* == .run_end_encoded);
+    try std.testing.expectEqual(@as(u8, 32), imported.schema.fields[0].data_type.run_end_encoded.run_end_type.bit_width);
+    try std.testing.expect(imported.schema.fields[0].data_type.run_end_encoded.run_end_type.signed);
+    try std.testing.expect(imported.schema.fields[0].data_type.run_end_encoded.value_type.* == .int32);
+}
+
+test "c data array import supports run-end-encoded" {
+    const allocator = std.testing.allocator;
+
+    var values_builder = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 2);
+    defer values_builder.deinit();
+    try values_builder.append(7);
+    try values_builder.append(9);
+    var values_ref = try values_builder.finish();
+    defer values_ref.release();
+
+    const value_ty = DataType{ .int32 = {} };
+    var ree_builder = try @import("../array/advanced_array.zig").RunEndEncodedBuilder.init(
+        allocator,
+        .{ .bit_width = 32, .signed = true },
+        &value_ty,
+        2,
+    );
+    defer ree_builder.deinit();
+    try ree_builder.appendRunEnd(2);
+    try ree_builder.appendRunEnd(5);
+    var ree_ref = try ree_builder.finish(values_ref);
+    defer ree_ref.release();
+
+    var c_array = try exportArray(allocator, ree_ref);
+    var imported = try importArray(allocator, &ree_ref.data().data_type, &c_array);
+    defer imported.release();
+
+    try std.testing.expect(imported.data().data_type == .run_end_encoded);
+    try std.testing.expectEqual(@as(usize, 5), imported.data().length);
+    try std.testing.expectEqual(@as(usize, 0), imported.data().buffers.len);
+    try std.testing.expectEqual(@as(usize, 2), imported.data().children.len);
+
+    const run_ends = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = imported.data().children[0].data() };
+    const values = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = imported.data().children[1].data() };
+    try std.testing.expectEqual(@as(usize, 2), run_ends.len());
+    try std.testing.expectEqual(@as(i32, 2), run_ends.value(0));
+    try std.testing.expectEqual(@as(i32, 5), run_ends.value(1));
+    try std.testing.expectEqual(@as(usize, 2), values.len());
+    try std.testing.expectEqual(@as(i32, 7), values.value(0));
+    try std.testing.expectEqual(@as(i32, 9), values.value(1));
+    try std.testing.expect(c_array.release == null);
 }
