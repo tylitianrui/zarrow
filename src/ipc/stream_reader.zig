@@ -19,6 +19,8 @@ pub const ArrayRef = array_ref.ArrayRef;
 pub const ArrayData = array_data.ArrayData;
 pub const RecordBatch = record_batch.RecordBatch;
 pub const OwnedBuffer = buffer.OwnedBuffer;
+const extension_name_key = "ARROW:extension:name";
+const extension_metadata_key = "ARROW:extension:metadata";
 
 const fbs = struct {
     const Message = arrow_fbs.org_apache_arrow_flatbuf_Message.Message;
@@ -265,14 +267,134 @@ fn buildSchemaFromFlatbuf(allocator: std.mem.Allocator, schema_t: *fbs.SchemaT) 
 
 fn buildFieldFromFlatbuf(allocator: std.mem.Allocator, field_t: fbs.FieldT) (StreamError || error{OutOfMemory})!Field {
     const name = try allocator.dupe(u8, field_t.name);
-    const dtype = try buildDataTypeFromFlatbuf(allocator, field_t);
+    const parsed_meta = try parseFieldMetadataFromFlatbuf(allocator, field_t.custom_metadata.items);
+    errdefer freeParsedFieldMetadata(allocator, parsed_meta);
+    var dtype = try buildDataTypeFromFlatbuf(allocator, field_t);
+    if (parsed_meta.extension_name) |ext_name| {
+        if (dtype == .dictionary) {
+            const dict = dtype.dictionary;
+            const storage_ptr = try allocator.create(DataType);
+            storage_ptr.* = dict.value_type.*;
+            const ext_ptr = try allocator.create(DataType);
+            ext_ptr.* = .{
+                .extension = .{
+                    .name = ext_name,
+                    .storage_type = storage_ptr,
+                    .metadata = parsed_meta.extension_metadata,
+                },
+            };
+            dtype = .{
+                .dictionary = .{
+                    .id = dict.id,
+                    .index_type = dict.index_type,
+                    .value_type = ext_ptr,
+                    .ordered = dict.ordered,
+                },
+            };
+        } else {
+            const storage_ptr = try allocator.create(DataType);
+            storage_ptr.* = dtype;
+            dtype = .{
+                .extension = .{
+                    .name = ext_name,
+                    .storage_type = storage_ptr,
+                    .metadata = parsed_meta.extension_metadata,
+                },
+            };
+        }
+    }
     const dtype_ptr = try allocator.create(DataType);
     dtype_ptr.* = dtype;
     return .{
         .name = name,
         .data_type = dtype_ptr,
         .nullable = field_t.nullable,
-        .metadata = try buildMetadataFromFlatbuf(allocator, field_t.custom_metadata.items),
+        .metadata = parsed_meta.user_metadata,
+    };
+}
+
+const ParsedFieldMetadata = struct {
+    user_metadata: ?[]const datatype.KeyValue,
+    extension_name: ?[]const u8,
+    extension_metadata: ?[]const u8,
+};
+
+fn freeParsedFieldMetadata(allocator: std.mem.Allocator, parsed: ParsedFieldMetadata) void {
+    if (parsed.user_metadata) |metadata| {
+        for (metadata) |kv| {
+            allocator.free(kv.key);
+            allocator.free(kv.value);
+        }
+        allocator.free(metadata);
+    }
+    if (parsed.extension_name) |v| allocator.free(v);
+    if (parsed.extension_metadata) |v| allocator.free(v);
+}
+
+fn parseFieldMetadataFromFlatbuf(allocator: std.mem.Allocator, metadata_t: []const fbs.KeyValueT) (StreamError || error{OutOfMemory})!ParsedFieldMetadata {
+    if (metadata_t.len == 0) {
+        return .{
+            .user_metadata = null,
+            .extension_name = null,
+            .extension_metadata = null,
+        };
+    }
+
+    var extension_name: ?[]const u8 = null;
+    errdefer if (extension_name) |v| allocator.free(v);
+    var extension_metadata: ?[]const u8 = null;
+    errdefer if (extension_metadata) |v| allocator.free(v);
+    var user_count: usize = 0;
+
+    for (metadata_t) |entry| {
+        if (std.mem.eql(u8, entry.key, extension_name_key)) {
+            if (extension_name != null) return StreamError.InvalidMetadata;
+            extension_name = try allocator.dupe(u8, entry.value);
+            continue;
+        }
+        if (std.mem.eql(u8, entry.key, extension_metadata_key)) {
+            if (extension_metadata != null) return StreamError.InvalidMetadata;
+            extension_metadata = try allocator.dupe(u8, entry.value);
+            continue;
+        }
+        user_count += 1;
+    }
+
+    if (extension_metadata != null and extension_name == null) return StreamError.InvalidMetadata;
+
+    if (user_count == 0) {
+        return .{
+            .user_metadata = null,
+            .extension_name = extension_name,
+            .extension_metadata = extension_metadata,
+        };
+    }
+
+    const out = try allocator.alloc(datatype.KeyValue, user_count);
+    errdefer allocator.free(out);
+
+    var filled: usize = 0;
+    errdefer {
+        for (out[0..filled]) |kv| {
+            allocator.free(kv.key);
+            allocator.free(kv.value);
+        }
+    }
+    for (metadata_t) |entry| {
+        if (std.mem.eql(u8, entry.key, extension_name_key) or std.mem.eql(u8, entry.key, extension_metadata_key)) {
+            continue;
+        }
+        out[filled] = .{
+            .key = try allocator.dupe(u8, entry.key),
+            .value = try allocator.dupe(u8, entry.value),
+        };
+        filled += 1;
+    }
+
+    return .{
+        .user_metadata = out,
+        .extension_name = extension_name,
+        .extension_metadata = extension_metadata,
     };
 }
 
@@ -549,6 +671,13 @@ fn dataTypeFromIntType(int_type: datatype.IntType) DataType {
     };
 }
 
+fn storageDataType(dt: DataType) DataType {
+    return switch (dt) {
+        .extension => |ext| storageDataType(ext.storage_type.*),
+        else => dt,
+    };
+}
+
 fn buildRecordBatchFromFlatbuf(
     allocator: std.mem.Allocator,
     schema_ref: SchemaRef,
@@ -620,7 +749,8 @@ fn readArrayFromMeta(
     const node = nodes[node_index.*];
     node_index.* += 1;
 
-    const buffer_count = try bufferCountForType(dt, variadic_buffer_counts, variadic_index);
+    const layout_dt = storageDataType(dt);
+    const buffer_count = try bufferCountForType(layout_dt, variadic_buffer_counts, variadic_index);
     const buffers = try allocator.alloc(array_data.SharedBuffer, buffer_count);
     var buf_count: usize = 0;
     errdefer {
@@ -655,16 +785,16 @@ fn readArrayFromMeta(
     var children: []ArrayRef = &.{};
     var dictionary_ref: ?ArrayRef = null;
     errdefer if (dictionary_ref) |*dict| dict.release();
-    if (dt == .list or dt == .large_list or dt == .fixed_size_list or dt == .map or dt == .list_view or dt == .large_list_view) {
+    if (layout_dt == .list or layout_dt == .large_list or layout_dt == .fixed_size_list or layout_dt == .map or layout_dt == .list_view or layout_dt == .large_list_view) {
         children = try allocator.alloc(ArrayRef, 1);
         errdefer allocator.free(children);
-        const child_dt = if (dt == .map)
-            (dt.map.entries_type orelse return StreamError.InvalidMetadata).*
+        const child_dt = if (layout_dt == .map)
+            (layout_dt.map.entries_type orelse return StreamError.InvalidMetadata).*
         else
-            childValueType(dt);
+            childValueType(layout_dt);
         children[0] = try readArrayFromMeta(allocator, child_dt, nodes, buffers_meta, variadic_buffer_counts, body, node_index, buffer_index, variadic_index, dictionary_values);
-    } else if (dt == .struct_) {
-        const field_count = dt.struct_.fields.len;
+    } else if (layout_dt == .struct_) {
+        const field_count = layout_dt.struct_.fields.len;
         children = try allocator.alloc(ArrayRef, field_count);
         var filled: usize = 0;
         errdefer {
@@ -674,13 +804,13 @@ fn readArrayFromMeta(
         }
         var idx: usize = 0;
         while (idx < field_count) : (idx += 1) {
-            children[idx] = try readArrayFromMeta(allocator, dt.struct_.fields[idx].data_type.*, nodes, buffers_meta, variadic_buffer_counts, body, node_index, buffer_index, variadic_index, dictionary_values);
+            children[idx] = try readArrayFromMeta(allocator, layout_dt.struct_.fields[idx].data_type.*, nodes, buffers_meta, variadic_buffer_counts, body, node_index, buffer_index, variadic_index, dictionary_values);
             filled += 1;
         }
-    } else if (dt == .sparse_union or dt == .dense_union) {
-        const union_fields = switch (dt) {
-            .sparse_union => dt.sparse_union.fields,
-            .dense_union => dt.dense_union.fields,
+    } else if (layout_dt == .sparse_union or layout_dt == .dense_union) {
+        const union_fields = switch (layout_dt) {
+            .sparse_union => layout_dt.sparse_union.fields,
+            .dense_union => layout_dt.dense_union.fields,
             else => unreachable,
         };
         children = try allocator.alloc(ArrayRef, union_fields.len);
@@ -694,7 +824,7 @@ fn readArrayFromMeta(
             children[idx] = try readArrayFromMeta(allocator, field.data_type.*, nodes, buffers_meta, variadic_buffer_counts, body, node_index, buffer_index, variadic_index, dictionary_values);
             filled += 1;
         }
-    } else if (dt == .run_end_encoded) {
+    } else if (layout_dt == .run_end_encoded) {
         children = try allocator.alloc(ArrayRef, 2);
         var filled: usize = 0;
         errdefer {
@@ -703,13 +833,13 @@ fn readArrayFromMeta(
             allocator.free(children);
         }
 
-        const run_end_dt = dataTypeFromIntType(dt.run_end_encoded.run_end_type);
+        const run_end_dt = dataTypeFromIntType(layout_dt.run_end_encoded.run_end_type);
         children[0] = try readArrayFromMeta(allocator, run_end_dt, nodes, buffers_meta, variadic_buffer_counts, body, node_index, buffer_index, variadic_index, dictionary_values);
         filled += 1;
-        children[1] = try readArrayFromMeta(allocator, dt.run_end_encoded.value_type.*, nodes, buffers_meta, variadic_buffer_counts, body, node_index, buffer_index, variadic_index, dictionary_values);
+        children[1] = try readArrayFromMeta(allocator, layout_dt.run_end_encoded.value_type.*, nodes, buffers_meta, variadic_buffer_counts, body, node_index, buffer_index, variadic_index, dictionary_values);
         filled += 1;
-    } else if (dt == .dictionary) {
-        const dictionary_id = dt.dictionary.id orelse return StreamError.InvalidMetadata;
+    } else if (layout_dt == .dictionary) {
+        const dictionary_id = layout_dt.dictionary.id orelse return StreamError.InvalidMetadata;
         const dict_ref = dictionary_values.get(dictionary_id) orelse return StreamError.InvalidMetadata;
         dictionary_ref = dict_ref.retain();
     }
@@ -730,7 +860,7 @@ fn readArrayFromMeta(
 }
 
 fn childValueType(dt: DataType) DataType {
-    return switch (dt) {
+    return switch (storageDataType(dt)) {
         .list => |lst| lst.value_field.data_type.*,
         .large_list => |lst| lst.value_field.data_type.*,
         .fixed_size_list => |lst| lst.value_field.data_type.*,
@@ -741,7 +871,7 @@ fn childValueType(dt: DataType) DataType {
 }
 
 fn bufferCountForType(dt: DataType, variadic_buffer_counts: []const i64, variadic_index: *usize) StreamError!usize {
-    return switch (dt) {
+    return switch (storageDataType(dt)) {
         .null => 0,
         .struct_, .fixed_size_list => 1,
         .list, .large_list, .map => 2,
@@ -812,30 +942,42 @@ fn mergeDictionaryValues(
     base: ArrayRef,
     delta: ArrayRef,
 ) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
-    if (!std.meta.eql(base.data().data_type, delta.data().data_type)) return StreamError.InvalidMetadata;
+    if (!datatype.dataTypeEql(base.data().data_type, delta.data().data_type)) return StreamError.InvalidMetadata;
 
     const dt = base.data().data_type;
-    return switch (dt) {
-        .null => try concatNullArray(allocator, dt, base.data(), delta.data()),
-        .bool => try concatBooleanArray(allocator, dt, base.data(), delta.data()),
-        .uint8, .int8 => try concatFixedWidthArray(allocator, dt, base.data(), delta.data(), 1),
-        .uint16, .int16, .half_float => try concatFixedWidthArray(allocator, dt, base.data(), delta.data(), 2),
-        .uint32, .int32, .float, .date32, .time32, .interval_months, .decimal32 => try concatFixedWidthArray(allocator, dt, base.data(), delta.data(), 4),
-        .uint64, .int64, .double, .date64, .time64, .timestamp, .duration, .interval_day_time, .decimal64 => try concatFixedWidthArray(allocator, dt, base.data(), delta.data(), 8),
-        .decimal128, .interval_month_day_nano => try concatFixedWidthArray(allocator, dt, base.data(), delta.data(), 16),
-        .decimal256 => try concatFixedWidthArray(allocator, dt, base.data(), delta.data(), 32),
+    const layout_dt = storageDataType(dt);
+    var merged_storage = try switch (layout_dt) {
+        .null => try concatNullArray(allocator, layout_dt, base.data(), delta.data()),
+        .bool => try concatBooleanArray(allocator, layout_dt, base.data(), delta.data()),
+        .uint8, .int8 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 1),
+        .uint16, .int16, .half_float => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 2),
+        .uint32, .int32, .float, .date32, .time32, .interval_months, .decimal32 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 4),
+        .uint64, .int64, .double, .date64, .time64, .timestamp, .duration, .interval_day_time, .decimal64 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 8),
+        .decimal128, .interval_month_day_nano => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 16),
+        .decimal256 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 32),
         .fixed_size_binary => |fsb| blk: {
             const byte_width = std.math.cast(usize, fsb.byte_width) orelse return StreamError.InvalidMetadata;
-            break :blk try concatFixedWidthArray(allocator, dt, base.data(), delta.data(), byte_width);
+            break :blk try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), byte_width);
         },
-        .string, .binary => try concatVariableBinaryArrayI32(allocator, dt, base.data(), delta.data()),
-        .large_string, .large_binary => try concatVariableBinaryArrayI64(allocator, dt, base.data(), delta.data()),
-        .list, .map => try concatListLikeArrayI32(allocator, dt, base.data(), delta.data()),
-        .large_list => try concatListLikeArrayI64(allocator, dt, base.data(), delta.data()),
-        .fixed_size_list => try concatFixedSizeListArray(allocator, dt, base.data(), delta.data()),
-        .struct_ => try concatStructArray(allocator, dt, base.data(), delta.data()),
+        .string, .binary => try concatVariableBinaryArrayI32(allocator, layout_dt, base.data(), delta.data()),
+        .large_string, .large_binary => try concatVariableBinaryArrayI64(allocator, layout_dt, base.data(), delta.data()),
+        .list, .map => try concatListLikeArrayI32(allocator, layout_dt, base.data(), delta.data()),
+        .large_list => try concatListLikeArrayI64(allocator, layout_dt, base.data(), delta.data()),
+        .fixed_size_list => try concatFixedSizeListArray(allocator, layout_dt, base.data(), delta.data()),
+        .struct_ => try concatStructArray(allocator, layout_dt, base.data(), delta.data()),
         else => StreamError.UnsupportedType,
     };
+
+    if (datatype.dataTypeEql(dt, layout_dt)) return merged_storage;
+    const retagged = try retagArrayRefDataType(allocator, merged_storage, dt);
+    merged_storage.release();
+    return retagged;
+}
+
+fn retagArrayRefDataType(allocator: std.mem.Allocator, src: ArrayRef, out_dt: DataType) error{OutOfMemory}!ArrayRef {
+    var out = src.data().*;
+    out.data_type = out_dt;
+    return ArrayRef.fromBorrowed(allocator, out);
 }
 
 fn concatListLikeArrayI32(
@@ -1537,6 +1679,63 @@ fn expectMetadataEntry(metadata: []const datatype.KeyValue, key: []const u8, val
         if (std.mem.eql(u8, entry.key, key) and std.mem.eql(u8, entry.value, value)) return;
     }
     return error.MetadataEntryMissing;
+}
+
+test "ipc schema decodes extension metadata into extension datatype" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const int_t = try allocator.create(fbs.IntT);
+    int_t.* = .{ .bitWidth = 32, .is_signed = true };
+
+    var custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 3);
+    try custom_metadata.append(allocator, .{ .key = extension_name_key, .value = "com.example.int32_ext" });
+    try custom_metadata.append(allocator, .{ .key = extension_metadata_key, .value = "v1" });
+    try custom_metadata.append(allocator, .{ .key = "owner", .value = "core" });
+
+    var field = fbs.FieldT{
+        .name = "ext_col",
+        .nullable = true,
+        .type = .{ .Int = int_t },
+        .dictionary = null,
+        .children = try std.ArrayList(fbs.FieldT).initCapacity(allocator, 0),
+        .custom_metadata = custom_metadata,
+    };
+    defer field.deinit(allocator);
+
+    const out = try buildFieldFromFlatbuf(allocator, field);
+    try std.testing.expect(out.data_type.* == .extension);
+    try std.testing.expectEqualStrings("com.example.int32_ext", out.data_type.extension.name);
+    try std.testing.expectEqualStrings("v1", out.data_type.extension.metadata.?);
+    try std.testing.expect(out.data_type.extension.storage_type.* == .int32);
+    try std.testing.expect(out.metadata != null);
+    try std.testing.expectEqual(@as(usize, 1), out.metadata.?.len);
+    try expectMetadataEntry(out.metadata.?, "owner", "core");
+}
+
+test "ipc schema rejects extension metadata without extension name" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const int_t = try allocator.create(fbs.IntT);
+    int_t.* = .{ .bitWidth = 32, .is_signed = true };
+
+    var custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 1);
+    try custom_metadata.append(allocator, .{ .key = extension_metadata_key, .value = "v1" });
+
+    var field = fbs.FieldT{
+        .name = "bad_ext_col",
+        .nullable = true,
+        .type = .{ .Int = int_t },
+        .dictionary = null,
+        .children = try std.ArrayList(fbs.FieldT).initCapacity(allocator, 0),
+        .custom_metadata = custom_metadata,
+    };
+    defer field.deinit(allocator);
+
+    try std.testing.expectError(StreamError.InvalidMetadata, buildFieldFromFlatbuf(allocator, field));
 }
 
 test "ipc schema rejects fixed-size-binary metadata with non-positive width" {

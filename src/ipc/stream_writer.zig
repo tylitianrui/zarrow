@@ -19,6 +19,8 @@ pub const ArrayData = array_data.ArrayData;
 pub const RecordBatch = record_batch.RecordBatch;
 
 const WriterError = StreamError || fb.common.PackError || error{OutOfMemory};
+const extension_name_key = "ARROW:extension:name";
+const extension_metadata_key = "ARROW:extension:metadata";
 
 const fbs = struct {
     const Message = arrow_fbs.org_apache_arrow_flatbuf_Message.Message;
@@ -235,9 +237,14 @@ fn buildFieldT(allocator: std.mem.Allocator, field: Field, next_dictionary_id: *
         .dictionary => |dict| dict.value_type.*,
         else => field.data_type.*,
     };
-    const type_t = try buildTypeT(allocator, logical_type);
+    const storage_type = storageDataType(logical_type);
+    const extension_meta = switch (logical_type) {
+        .extension => |ext| ext,
+        else => null,
+    };
+    const type_t = try buildTypeT(allocator, storage_type);
 
-    switch (logical_type) {
+    switch (storage_type) {
         .list => |lst| {
             try children.append(allocator, try buildFieldT(allocator, lst.value_field, next_dictionary_id));
         },
@@ -319,7 +326,7 @@ fn buildFieldT(allocator: std.mem.Allocator, field: Field, next_dictionary_id: *
         .type = type_t,
         .dictionary = dictionary_t,
         .children = children,
-        .custom_metadata = try buildCustomMetadataT(allocator, field.metadata),
+        .custom_metadata = try buildFieldCustomMetadataT(allocator, field.metadata, extension_meta),
     };
 }
 
@@ -332,8 +339,38 @@ fn buildCustomMetadataT(allocator: std.mem.Allocator, metadata: ?[]const datatyp
     return out;
 }
 
+fn buildFieldCustomMetadataT(
+    allocator: std.mem.Allocator,
+    metadata: ?[]const datatype.KeyValue,
+    extension_meta: ?datatype.ExtensionType,
+) WriterError!std.ArrayList(fbs.KeyValueT) {
+    const base_count = if (metadata) |m| m.len else 0;
+    const ext_count: usize = if (extension_meta) |ext| if (ext.metadata != null) 2 else 1 else 0;
+
+    var out = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, base_count + ext_count);
+    if (metadata) |kvs| {
+        for (kvs) |kv| {
+            try out.append(allocator, .{ .key = kv.key, .value = kv.value });
+        }
+    }
+    if (extension_meta) |ext| {
+        try out.append(allocator, .{ .key = extension_name_key, .value = ext.name });
+        if (ext.metadata) |meta| {
+            try out.append(allocator, .{ .key = extension_metadata_key, .value = meta });
+        }
+    }
+    return out;
+}
+
 fn validateDecimalPrecision(precision: u8, max_precision: u8) WriterError!void {
     if (precision == 0 or precision > max_precision) return StreamError.InvalidMetadata;
+}
+
+fn storageDataType(dt: DataType) DataType {
+    return switch (dt) {
+        .extension => |ext| storageDataType(ext.storage_type.*),
+        else => dt,
+    };
 }
 
 fn buildTypeT(allocator: std.mem.Allocator, dt: DataType) WriterError!fbs.TypeT {
@@ -411,7 +448,8 @@ fn buildTypeT(allocator: std.mem.Allocator, dt: DataType) WriterError!fbs.TypeT 
             };
         },
         .run_end_encoded => .{ .RunEndEncoded = try allocT(allocator, fbs.RunEndEncodedT, .{}) },
-        .dictionary, .extension => StreamError.UnsupportedType,
+        .extension => |ext| try buildTypeT(allocator, ext.storage_type.*),
+        .dictionary => StreamError.UnsupportedType,
         else => StreamError.UnsupportedType,
     };
 }
@@ -475,6 +513,15 @@ fn collectDictionaryIdsFromField(
             };
             try collectDictionaryIdsFromField(allocator, value_field, next_dictionary_id, ids);
         },
+        .extension => |ext| {
+            const storage_field = Field{
+                .name = field.name,
+                .data_type = ext.storage_type,
+                .nullable = field.nullable,
+                .metadata = field.metadata,
+            };
+            try collectDictionaryIdsFromField(allocator, storage_field, next_dictionary_id, ids);
+        },
         else => {},
     }
 }
@@ -484,7 +531,7 @@ fn collectDictionaryArraysFromData(
     data: *const ArrayData,
     out: *std.ArrayList(ArrayRef),
 ) error{OutOfMemory}!void {
-    switch (data.data_type) {
+    switch (storageDataType(data.data_type)) {
         .dictionary => {
             if (data.dictionary == null) return;
             try out.append(allocator, data.dictionary.?.retain());
@@ -572,7 +619,7 @@ fn planDictionaryEmission(
         return .{ .mode = .full, .array = current };
     }
     const previous = previous_opt.?;
-    if (!std.meta.eql(previous.data().data_type, current.data().data_type)) return StreamError.InvalidMetadata;
+    if (!datatype.dataTypeEql(previous.data().data_type, current.data().data_type)) return StreamError.InvalidMetadata;
 
     if (previous.data().length == current.data().length) {
         if (try arraysEqualForDelta(previous, current)) {
@@ -602,7 +649,7 @@ fn planDictionaryEmission(
 }
 
 fn supportsDictionaryDeltaType(dt: DataType) bool {
-    return switch (dt) {
+    return switch (storageDataType(dt)) {
         .null,
         .bool,
         .uint8,
@@ -642,11 +689,11 @@ fn supportsDictionaryDeltaType(dt: DataType) bool {
 fn arraysEqualForDelta(left: ArrayRef, right: ArrayRef) (StreamError || error{OutOfMemory})!bool {
     const a = left.data();
     const b = right.data();
-    if (!std.meta.eql(a.data_type, b.data_type)) return false;
+    if (!datatype.dataTypeEql(a.data_type, b.data_type)) return false;
     if (a.length != b.length) return false;
     if (a.length == 0) return true;
 
-    const dt = a.data_type;
+    const dt = storageDataType(a.data_type);
     switch (dt) {
         .null => return true,
         .bool => {
@@ -753,19 +800,20 @@ fn appendArrayMeta(
 ) WriterError!void {
     const null_count = if (data.null_count) |count| count else computeNullCount(data);
     try nodes.append(allocator, .{ .length = @intCast(data.length), .null_count = @intCast(null_count) });
+    const layout_dt = storageDataType(data.data_type);
 
     for (data.buffers) |buf| {
         try buffers.append(allocator, .{ .offset = @intCast(body_offset.*), .length = @intCast(buf.len()) });
         try body_buffers.append(allocator, buf);
         body_offset.* += @intCast(format.paddedLen(buf.len()));
     }
-    if (data.data_type == .string_view or data.data_type == .binary_view) {
+    if (layout_dt == .string_view or layout_dt == .binary_view) {
         if (data.buffers.len < 2) return StreamError.InvalidMetadata;
         const variadic_count = std.math.sub(usize, data.buffers.len, 2) catch return StreamError.InvalidMetadata;
         try variadic_buffer_counts.append(allocator, @intCast(variadic_count));
     }
 
-    switch (data.data_type) {
+    switch (layout_dt) {
         .list, .large_list, .fixed_size_list, .map, .list_view, .large_list_view => {
             if (data.children.len != 1) return StreamError.InvalidMetadata;
             try appendArrayMeta(allocator, data.children[0].data(), nodes, buffers, variadic_buffer_counts, body_buffers, body_offset);
@@ -990,6 +1038,75 @@ test "ipc writer roundtrip supports view types and variadicBufferCounts" {
     var out_batch = out_batch_opt.?;
     defer out_batch.deinit();
     try std.testing.expectEqual(@as(usize, 0), out_batch.numRows());
+}
+
+test "ipc writer and reader roundtrip extension field metadata and values" {
+    const allocator = std.testing.allocator;
+
+    const storage_type = DataType{ .int32 = {} };
+    const extension_type = DataType{
+        .extension = .{
+            .name = "com.example.int32_ext",
+            .storage_type = &storage_type,
+            .metadata = "v1",
+        },
+    };
+    const field_metadata = [_]datatype.KeyValue{
+        .{ .key = "owner", .value = "core" },
+    };
+    const fields = [_]Field{
+        .{ .name = "id_ext", .data_type = &extension_type, .nullable = true, .metadata = field_metadata[0..] },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var storage_builder = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 3);
+    defer storage_builder.deinit();
+    try storage_builder.append(7);
+    try storage_builder.appendNull();
+    try storage_builder.append(11);
+    var storage_ref = try storage_builder.finish();
+    defer storage_ref.release();
+
+    var ext_builder = try @import("../array/extension_array.zig").ExtensionBuilder.init(allocator, extension_type.extension);
+    defer ext_builder.deinit();
+    var ext_ref = try ext_builder.finish(storage_ref);
+    defer ext_ref.release();
+
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{ext_ref});
+    defer batch.deinit();
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    defer out.deinit();
+    var writer = StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
+    try writer.writeSchema(schema);
+    try writer.writeRecordBatch(batch);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out.items);
+    var reader = @import("stream_reader.zig").StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    defer reader.deinit();
+
+    const read_schema = try reader.readSchema();
+    try std.testing.expect(read_schema.fields[0].data_type.* == .extension);
+    try std.testing.expectEqualStrings("com.example.int32_ext", read_schema.fields[0].data_type.extension.name);
+    try std.testing.expectEqualStrings("v1", read_schema.fields[0].data_type.extension.metadata.?);
+    try std.testing.expect(read_schema.fields[0].data_type.extension.storage_type.* == .int32);
+    try std.testing.expect(read_schema.fields[0].metadata != null);
+    try std.testing.expectEqual(@as(usize, 1), read_schema.fields[0].metadata.?.len);
+    try std.testing.expectEqualStrings("owner", read_schema.fields[0].metadata.?[0].key);
+    try std.testing.expectEqualStrings("core", read_schema.fields[0].metadata.?[0].value);
+
+    const batch_opt = try reader.nextRecordBatch();
+    try std.testing.expect(batch_opt != null);
+    var read_batch = batch_opt.?;
+    defer read_batch.deinit();
+    try std.testing.expectEqual(@as(usize, 3), read_batch.numRows());
+    try std.testing.expect(read_batch.columns[0].data().data_type == .extension);
+    const values = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = read_batch.columns[0].data() };
+    try std.testing.expectEqual(@as(i32, 7), values.value(0));
+    try std.testing.expect(values.isNull(1));
+    try std.testing.expectEqual(@as(i32, 11), values.value(2));
 }
 
 test "ipc writer emits dictionary delta on append-only dictionary growth" {

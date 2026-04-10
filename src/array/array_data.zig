@@ -56,8 +56,15 @@ pub const ArrayData = struct {
 
     const Self = @This();
 
-    fn hasTopLevelValidityBitmap(dt: DataType) bool {
+    fn layoutDataType(dt: DataType) DataType {
         return switch (dt) {
+            .extension => |ext| layoutDataType(ext.storage_type.*),
+            else => dt,
+        };
+    }
+
+    fn hasTopLevelValidityBitmap(dt: DataType) bool {
+        return switch (layoutDataType(dt)) {
             .null, .sparse_union, .dense_union => false,
             else => true,
         };
@@ -124,7 +131,7 @@ pub const ArrayData = struct {
     /// Execute nullCount logic for this type.
     pub fn nullCount(self: *Self) usize {
         if (self.null_count) |count| return count;
-        if (self.data_type == .null) {
+        if (layoutDataType(self.data_type) == .null) {
             self.null_count = self.length;
             return self.length;
         }
@@ -279,11 +286,13 @@ pub const ArrayData = struct {
 
     /// Execute validateLayout logic for this type.
     pub fn validateLayout(self: Self) ValidationError!void {
+        const dt = layoutDataType(self.data_type);
+
         if (self.null_count) |count| {
             // Null arrays have no validity bitmap; all elements are implicitly null.
-            if (self.data_type == .null) {
+            if (dt == .null) {
                 if (count != self.length) return error.InvalidNullCount;
-            } else if (!hasTopLevelValidityBitmap(self.data_type)) {
+            } else if (!hasTopLevelValidityBitmap(dt)) {
                 // Union arrays have no validity bitmap; null_count must be 0.
                 if (count != 0) return error.InvalidNullCount;
             } else if (count != 0 and (self.buffers.len == 0 or self.buffers[0].isEmpty())) {
@@ -292,13 +301,13 @@ pub const ArrayData = struct {
         }
 
         const total_len = std.math.add(usize, self.offset, self.length) catch return error.InvalidOffsets;
-        const has_top_level_validity = hasTopLevelValidityBitmap(self.data_type);
+        const has_top_level_validity = hasTopLevelValidityBitmap(dt);
         if (has_top_level_validity and self.buffers.len > 0 and !self.buffers[0].isEmpty()) {
             const needed = bitmap.byteLength(total_len);
             if (self.buffers[0].len() < needed) return error.BufferTooSmall;
         }
 
-        switch (self.data_type) {
+        switch (dt) {
             .null => {},
             .bool => {
                 if (self.buffers.len < 2) return error.InvalidBufferCount;
@@ -309,7 +318,7 @@ pub const ArrayData = struct {
                 if (self.buffers.len < 3) return error.InvalidBufferCount;
                 if (self.children.len != 1) return error.InvalidChildren;
 
-                const offset_width = offsetByteWidth(self.data_type).?;
+                const offset_width = offsetByteWidth(dt).?;
                 if (self.buffers[1].len() % offset_width != 0) return error.InvalidOffsetBuffer;
                 if (self.buffers[2].len() % offset_width != 0) return error.InvalidOffsetBuffer;
 
@@ -328,10 +337,10 @@ pub const ArrayData = struct {
             },
             .string, .binary, .list, .map, .large_string, .large_binary, .large_list => {
                 if (self.buffers.len < 2) return error.InvalidBufferCount;
-                const offset_width = offsetByteWidth(self.data_type).?;
+                const offset_width = offsetByteWidth(dt).?;
                 if (self.buffers[1].len() % offset_width != 0) return error.InvalidOffsetBuffer;
 
-                const is_list = self.data_type == .list or self.data_type == .large_list or self.data_type == .map;
+                const is_list = dt == .list or dt == .large_list or dt == .map;
                 if (is_list) {
                     if (self.children.len != 1) return error.InvalidChildren;
                 } else if (self.buffers.len < 3) {
@@ -353,14 +362,14 @@ pub const ArrayData = struct {
             },
             .fixed_size_list, .struct_ => {
                 if (self.buffers.len < 1) return error.InvalidBufferCount;
-                const expected = switch (self.data_type) {
+                const expected = switch (dt) {
                     .fixed_size_list => 1,
                     .struct_ => |st| st.fields.len,
                     else => 0,
                 };
                 if (self.children.len != expected) return error.InvalidChildren;
-                if (self.data_type == .fixed_size_list) {
-                    const list_size = std.math.cast(usize, self.data_type.fixed_size_list.list_size) orelse return error.InvalidChildren;
+                if (dt == .fixed_size_list) {
+                    const list_size = std.math.cast(usize, dt.fixed_size_list.list_size) orelse return error.InvalidChildren;
                     const required = std.math.mul(usize, total_len, list_size) catch return error.InvalidChildren;
                     const child_data = self.children[0].data();
                     const child_total = std.math.add(usize, child_data.length, child_data.offset) catch return error.InvalidChildren;
@@ -393,16 +402,16 @@ pub const ArrayData = struct {
 
                 const run_ends = self.children[0].data();
                 const values = self.children[1].data();
-                const run_end_dt = switch (self.data_type.run_end_encoded.run_end_type.bit_width) {
-                    16 => if (self.data_type.run_end_encoded.run_end_type.signed) DataType{ .int16 = {} } else return error.InvalidOffsetBuffer,
-                    32 => if (self.data_type.run_end_encoded.run_end_type.signed) DataType{ .int32 = {} } else return error.InvalidOffsetBuffer,
-                    64 => if (self.data_type.run_end_encoded.run_end_type.signed) DataType{ .int64 = {} } else return error.InvalidOffsetBuffer,
+                const run_end_dt = switch (dt.run_end_encoded.run_end_type.bit_width) {
+                    16 => if (dt.run_end_encoded.run_end_type.signed) DataType{ .int16 = {} } else return error.InvalidOffsetBuffer,
+                    32 => if (dt.run_end_encoded.run_end_type.signed) DataType{ .int32 = {} } else return error.InvalidOffsetBuffer,
+                    64 => if (dt.run_end_encoded.run_end_type.signed) DataType{ .int64 = {} } else return error.InvalidOffsetBuffer,
                     else => return error.InvalidOffsetBuffer,
                 };
                 if (!std.meta.eql(run_ends.data_type, run_end_dt)) return error.InvalidChildren;
                 if (run_ends.buffers.len < 2) return error.InvalidChildren;
 
-                const byte_width = switch (self.data_type) {
+                const byte_width = switch (dt) {
                     .run_end_encoded => |ree| ree.run_end_type.bit_width / 8,
                     else => 0,
                 };
@@ -417,15 +426,15 @@ pub const ArrayData = struct {
                 const run_ends_slice_end = std.math.add(usize, run_ends.offset, run_ends.length) catch return error.InvalidOffsets;
 
                 switch (byte_width) {
-                    2 => if (self.data_type.run_end_encoded.run_end_type.signed)
+                    2 => if (dt.run_end_encoded.run_end_type.signed)
                         try validateRunEndsSigned(i16, run_ends.buffers[1].typedSlice(i16)[run_ends_slice_start..run_ends_slice_end], total_len)
                     else
                         try validateRunEndsUnsigned(u16, run_ends.buffers[1].typedSlice(u16)[run_ends_slice_start..run_ends_slice_end], total_len),
-                    4 => if (self.data_type.run_end_encoded.run_end_type.signed)
+                    4 => if (dt.run_end_encoded.run_end_type.signed)
                         try validateRunEndsSigned(i32, run_ends.buffers[1].typedSlice(i32)[run_ends_slice_start..run_ends_slice_end], total_len)
                     else
                         try validateRunEndsUnsigned(u32, run_ends.buffers[1].typedSlice(u32)[run_ends_slice_start..run_ends_slice_end], total_len),
-                    8 => if (self.data_type.run_end_encoded.run_end_type.signed)
+                    8 => if (dt.run_end_encoded.run_end_type.signed)
                         try validateRunEndsSigned(i64, run_ends.buffers[1].typedSlice(i64)[run_ends_slice_start..run_ends_slice_end], total_len)
                     else
                         try validateRunEndsUnsigned(u64, run_ends.buffers[1].typedSlice(u64)[run_ends_slice_start..run_ends_slice_end], total_len),
@@ -433,7 +442,7 @@ pub const ArrayData = struct {
                 }
             },
             else => {
-                if (fixedWidthByteSize(self.data_type)) |byte_width| {
+                if (fixedWidthByteSize(dt)) |byte_width| {
                     if (self.buffers.len < 2) return error.InvalidBufferCount;
                     if (byte_width == 0) return error.InvalidOffsetBuffer;
                     const needed = std.math.mul(usize, total_len, byte_width) catch return error.BufferTooSmall;
@@ -448,7 +457,7 @@ pub const ArrayData = struct {
         try self.validateLayout();
 
         if (self.null_count) |expected_count| {
-            if (hasTopLevelValidityBitmap(self.data_type) and self.buffers.len > 0 and !self.buffers[0].isEmpty()) {
+            if (hasTopLevelValidityBitmap(layoutDataType(self.data_type)) and self.buffers.len > 0 and !self.buffers[0].isEmpty()) {
                 const total_len = std.math.add(usize, self.offset, self.length) catch return error.InvalidOffsets;
                 const validity_bitmap = ValidityBitmap.fromBuffer(self.buffers[0], total_len);
                 var actual_count: usize = 0;
@@ -542,6 +551,28 @@ test "array data validateLayout accepts primitive" {
     @memcpy(values_bytes[0..], std.mem.sliceAsBytes(&[_]i32{ 1, 2, 3 }));
     const data = ArrayData{
         .data_type = dtype,
+        .length = 3,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(values_bytes[0..]) },
+    };
+
+    try data.validateLayout();
+    try data.validateFull();
+}
+
+test "array data validateLayout accepts extension by delegating to storage layout" {
+    const storage = DataType{ .int32 = {} };
+    const ext = DataType{
+        .extension = .{
+            .name = "com.example.int32_ext",
+            .storage_type = &storage,
+            .metadata = "v1",
+        },
+    };
+    var values_bytes: [3 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(values_bytes[0..], std.mem.sliceAsBytes(&[_]i32{ 1, 2, 3 }));
+    const data = ArrayData{
+        .data_type = ext,
         .length = 3,
         .null_count = 0,
         .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(values_bytes[0..]) },

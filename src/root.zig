@@ -61,6 +61,8 @@ pub const ArrayData = array.ArrayData;
 pub const ArrayRef = array.ArrayRef;
 pub const NullArray = array.NullArray;
 pub const NullBuilder = array.NullBuilder;
+pub const ExtensionArray = array.ExtensionArray;
+pub const ExtensionBuilder = array.ExtensionBuilder;
 pub const StringViewArray = array.StringViewArray;
 pub const BinaryViewArray = array.BinaryViewArray;
 pub const ListViewArray = array.ListViewArray;
@@ -166,6 +168,7 @@ test {
     _ = @import("array/array_data.zig");
     _ = @import("array/primitive_array.zig");
     _ = @import("array/null_array.zig");
+    _ = @import("array/extension_array.zig");
     _ = @import("array/boolean_array.zig");
     _ = @import("array/string_array.zig");
     _ = @import("array/binary_array.zig");
