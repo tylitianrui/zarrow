@@ -120,7 +120,7 @@ pub fn StreamWriter(comptime WriterType: type) type {
             var dictionary_ids = try std.ArrayList(i64).initCapacity(self.allocator, 0);
             defer dictionary_ids.deinit(self.allocator);
             var next_dictionary_id: i64 = 0;
-            for (batch.schema.fields) |field| {
+            for (batch.schema().fields) |field| {
                 try collectDictionaryIdsFromField(self.allocator, field, &next_dictionary_id, &dictionary_ids);
             }
 
@@ -853,7 +853,7 @@ test "ipc writer stream output matches golden fixture" {
     var col_ref = try builder.finish();
     defer col_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{col_ref});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{col_ref});
     defer batch.deinit();
 
     var out = std.array_list.Managed(u8).init(allocator);
@@ -966,7 +966,7 @@ test "ipc writer roundtrip supports view types and variadicBufferCounts" {
     });
     defer llv_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{ sv_ref, bv_ref, lv_ref, llv_ref });
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{ sv_ref, bv_ref, lv_ref, llv_ref });
     defer batch.deinit();
 
     var out = std.array_list.Managed(u8).init(allocator);
@@ -1027,7 +1027,7 @@ test "ipc writer emits dictionary delta on append-only dictionary growth" {
     try dict_builder_1.appendIndex(1);
     var dict_col_1 = try dict_builder_1.finish(dict_values_1);
     defer dict_col_1.release();
-    var batch_1 = try RecordBatch.init(allocator, schema, &[_]ArrayRef{dict_col_1});
+    var batch_1 = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{dict_col_1});
     defer batch_1.deinit();
 
     var dict_values_builder_2 = try @import("../array/string_array.zig").StringBuilder.init(allocator, 3, 12);
@@ -1048,7 +1048,7 @@ test "ipc writer emits dictionary delta on append-only dictionary growth" {
     try dict_builder_2.appendIndex(2);
     var dict_col_2 = try dict_builder_2.finish(dict_values_2);
     defer dict_col_2.release();
-    var batch_2 = try RecordBatch.init(allocator, schema, &[_]ArrayRef{dict_col_2});
+    var batch_2 = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{dict_col_2});
     defer batch_2.deinit();
 
     var out = std.array_list.Managed(u8).init(allocator);

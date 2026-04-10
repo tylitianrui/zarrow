@@ -38,6 +38,7 @@ pub const DictionaryType = datatype.DictionaryType;
 pub const RunEndEncodedType = datatype.RunEndEncodedType;
 pub const ExtensionType = datatype.ExtensionType;
 pub const Schema = schema.Schema;
+pub const SchemaRef = schema.SchemaRef;
 pub const RecordBatch = record_batch.RecordBatch;
 pub const RecordBatchError = record_batch.RecordBatchError;
 pub const RecordBatchBuilder = record_batch.RecordBatchBuilder;

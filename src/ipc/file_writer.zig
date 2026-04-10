@@ -340,7 +340,7 @@ test "ipc file writer emits arrow file magic and footer" {
     var id_ref = try id_builder.finish();
     defer id_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]@import("../array/array_ref.zig").ArrayRef{id_ref});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]@import("../array/array_ref.zig").ArrayRef{id_ref});
     defer batch.deinit();
 
     var out = std.ArrayList(u8){};

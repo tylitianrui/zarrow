@@ -30,7 +30,7 @@ pub fn main() !void {
     var name_ref = try name_builder.finish();
     defer name_ref.release();
 
-    var batch = try zarrow.RecordBatch.init(allocator, schema, &[_]zarrow.ArrayRef{ id_ref, name_ref });
+    var batch = try zarrow.RecordBatch.initBorrowed(allocator, schema, &[_]zarrow.ArrayRef{ id_ref, name_ref });
     defer batch.deinit();
 
     // ── Write IPC stream to an in-memory buffer ───────────────────────────────

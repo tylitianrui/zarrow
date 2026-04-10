@@ -66,6 +66,9 @@ const fbs = struct {
     const NullT = arrow_fbs.org_apache_arrow_flatbuf_Null.NullT;
 };
 
+pub const SchemaRef = schema_mod.SchemaRef;
+
+// OwnedSchema kept as a backward-compatible alias; new code should use SchemaRef.
 pub const OwnedSchema = struct {
     arena: std.heap.ArenaAllocator,
     schema: Schema,
@@ -83,7 +86,7 @@ pub fn StreamReader(comptime ReaderType: type) type {
     return struct {
         allocator: std.mem.Allocator,
         reader: ReaderType,
-        schema_owned: ?OwnedSchema = null,
+        schema_ref: ?SchemaRef = null,
         dictionary_values: std.AutoHashMap(i64, ArrayRef),
 
         const Self = @This();
@@ -103,8 +106,8 @@ pub fn StreamReader(comptime ReaderType: type) type {
                 dict.release();
             }
             self.dictionary_values.deinit();
-            if (self.schema_owned) |*owned| owned.deinit();
-            self.schema_owned = null;
+            if (self.schema_ref) |*ref| ref.release();
+            self.schema_ref = null;
         }
 
         fn clearDictionaryValues(self: *Self) void {
@@ -124,17 +127,17 @@ pub fn StreamReader(comptime ReaderType: type) type {
 
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             errdefer arena.deinit();
-            const schema = try buildSchemaFromFlatbuf(arena.allocator(), msg.msg.header.Schema.?);
+            const s = try buildSchemaFromFlatbuf(arena.allocator(), msg.msg.header.Schema.?);
 
-            if (self.schema_owned) |*owned| owned.deinit();
-            self.schema_owned = .{ .arena = arena, .schema = schema };
-            return schema;
+            if (self.schema_ref) |*ref| ref.release();
+            self.schema_ref = try SchemaRef.fromArena(self.allocator, arena, s);
+            return s;
         }
 
         pub fn nextRecordBatch(self: *Self) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?RecordBatch {
-            if (self.schema_owned == null) return StreamError.SchemaNotRead;
+            if (self.schema_ref == null) return StreamError.SchemaNotRead;
 
-            const schema = self.schema_owned.?.schema;
+            const schema_ref = self.schema_ref.?;
             while (true) {
                 const maybe_msg = try readMessageOptional(self.*);
                 if (maybe_msg == null) return null;
@@ -144,11 +147,11 @@ pub fn StreamReader(comptime ReaderType: type) type {
                 switch (msg.msg.header) {
                     .DictionaryBatch => {
                         if (msg.body == null) return StreamError.InvalidBody;
-                        try ingestDictionaryBatch(self, schema, msg.msg.header.DictionaryBatch.?, msg.body.?);
+                        try ingestDictionaryBatch(self, schema_ref.schema().*, msg.msg.header.DictionaryBatch.?, msg.body.?);
                     },
                     .RecordBatch => {
                         if (msg.body == null) return StreamError.InvalidBody;
-                        return try buildRecordBatchFromFlatbuf(self.allocator, schema, msg.msg.header.RecordBatch.?, msg.body.?, &self.dictionary_values);
+                        return try buildRecordBatchFromFlatbuf(self.allocator, schema_ref.retain(), msg.msg.header.RecordBatch.?, msg.body.?, &self.dictionary_values);
                     },
                     else => return StreamError.InvalidMessage,
                 }
@@ -548,11 +551,16 @@ fn dataTypeFromIntType(int_type: datatype.IntType) DataType {
 
 fn buildRecordBatchFromFlatbuf(
     allocator: std.mem.Allocator,
-    schema: Schema,
+    schema_ref: SchemaRef,
     record_batch_t: *fbs.RecordBatchT,
     body: array_data.SharedBuffer,
     dictionary_values: *const std.AutoHashMap(i64, ArrayRef),
 ) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || error{OutOfMemory})!RecordBatch {
+    // schema_ref is already retained by the caller; track it so early‑error paths release it.
+    var schema_taken = false;
+    var mut_ref = schema_ref;
+    errdefer if (!schema_taken) mut_ref.release();
+    const schema = schema_ref.schema();
     const columns = try allocator.alloc(ArrayRef, schema.fields.len);
     var col_count: usize = 0;
     errdefer {
@@ -584,7 +592,10 @@ fn buildRecordBatchFromFlatbuf(
     }
     if (variadic_index != record_batch_t.variadicBufferCounts.items.len) return StreamError.InvalidMetadata;
 
-    const batch = try RecordBatch.init(allocator, schema, columns);
+    const batch = try RecordBatch.init(allocator, mut_ref, columns);
+    // RecordBatch.init succeeded and owns mut_ref now; cancel the schema errdefer.
+    schema_taken = true;
+    // Release the temporary column refs — batch has its own retains.
     var i: usize = 0;
     while (i < col_count) : (i += 1) columns[i].release();
     allocator.free(columns);
@@ -1873,7 +1884,7 @@ test "ipc stream roundtrip schema and batch" {
     var str_ref = try str_builder.finish();
     defer str_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{ int_ref, str_ref });
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{ int_ref, str_ref });
     defer batch.deinit();
 
     var out_buf = std.array_list.Managed(u8).init(allocator);
@@ -1929,7 +1940,7 @@ test "ipc stream roundtrip large string and binary" {
     var lb_ref = try lb_builder.finish();
     defer lb_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{ ls_ref, lb_ref });
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{ ls_ref, lb_ref });
     defer batch.deinit();
 
     var out_buf = std.array_list.Managed(u8).init(allocator);
@@ -1993,7 +2004,7 @@ test "ipc stream roundtrip temporal and decimal primitives" {
     var dec_ref = try dec_builder.finish();
     defer dec_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{ date_ref, ts_ref, dec_ref });
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{ date_ref, ts_ref, dec_ref });
     defer batch.deinit();
 
     var out_buf = std.array_list.Managed(u8).init(allocator);
@@ -2068,7 +2079,7 @@ test "ipc stream roundtrip dictionary encoded string column" {
     var dict_col = try dict_builder.finish(dict_values);
     defer dict_col.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{dict_col});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{dict_col});
     defer batch.deinit();
 
     var out_buf = std.array_list.Managed(u8).init(allocator);
@@ -2420,7 +2431,7 @@ test "ipc stream roundtrip map int32 to int32" {
     var map_ref = try map_builder.finish(entries_ref);
     defer map_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{map_ref});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{map_ref});
     defer batch.deinit();
 
     var out_buf = std.array_list.Managed(u8).init(allocator);
@@ -2510,7 +2521,7 @@ test "ipc stream roundtrip sparse union int32/bool" {
     var union_ref = try union_builder.finish(&[_]ArrayRef{ int_ref, bool_ref });
     defer union_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{union_ref});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{union_ref});
     defer batch.deinit();
 
     var out_buf = std.array_list.Managed(u8).init(allocator);
@@ -2593,7 +2604,7 @@ test "ipc stream roundtrip dense union int32/bool" {
     var union_ref = try union_builder.finish(&[_]ArrayRef{ int_ref, bool_ref });
     defer union_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{union_ref});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{union_ref});
     defer batch.deinit();
 
     var out_buf = std.array_list.Managed(u8).init(allocator);
@@ -2671,7 +2682,7 @@ test "ipc stream roundtrip run-end encoded int32 values" {
     var ree_ref = try ree_builder.finish(values_ref);
     defer ree_ref.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]ArrayRef{ree_ref});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{ree_ref});
     defer batch.deinit();
 
     var out_buf = std.array_list.Managed(u8).init(allocator);

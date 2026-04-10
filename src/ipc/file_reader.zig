@@ -433,7 +433,7 @@ test "ipc file reader roundtrips batches via stream reader" {
     var names = try name_builder.finish();
     defer names.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]zarray.ArrayRef{ ids, names });
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{ ids, names });
     defer batch.deinit();
 
     var file_bytes = std.ArrayList(u8){};
@@ -497,7 +497,7 @@ test "ipc file reader rejects footer with out-of-bounds block offset" {
     var ids = try id_builder.finish();
     defer ids.release();
 
-    var batch = try record_batch.RecordBatch.init(allocator, schema, &[_]@import("../array/array_ref.zig").ArrayRef{ids});
+    var batch = try record_batch.RecordBatch.initBorrowed(allocator, schema, &[_]@import("../array/array_ref.zig").ArrayRef{ids});
     defer batch.deinit();
 
     var file_bytes = std.ArrayList(u8){};
@@ -578,7 +578,7 @@ test "ipc file reader reconstructs stream from footer block index" {
     var ids = try id_builder.finish();
     defer ids.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]zarray.ArrayRef{ids});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{ids});
     defer batch.deinit();
 
     var file_bytes = std.ArrayList(u8){};
@@ -681,7 +681,7 @@ test "ipc file reader accepts file with leading padding before schema message" {
     var ids = try id_builder.finish();
     defer ids.release();
 
-    var batch = try RecordBatch.init(allocator, schema, &[_]zarray.ArrayRef{ids});
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{ids});
     defer batch.deinit();
 
     var file_bytes = std.ArrayList(u8){};

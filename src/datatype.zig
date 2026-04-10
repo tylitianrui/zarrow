@@ -155,6 +155,11 @@ pub const Field = struct {
     pub fn init(name: []const u8, data_type: *const DataType) Field {
         return .{ .name = name, .data_type = data_type };
     }
+
+    /// Execute eql logic for this type.
+    pub fn eql(self: Field, other: Field) bool {
+        return fieldEql(self, other);
+    }
 };
 
 pub const StructType = struct {
@@ -309,10 +314,185 @@ pub const DataType = union(TypeId) {
             .max_id => "max_id",
         };
     }
+
+    /// Execute eql logic for this type.
+    pub fn eql(self: DataType, other: DataType) bool {
+        return dataTypeEql(self, other);
+    }
 };
+
+fn dataTypePtrEql(lhs: ?*const DataType, rhs: ?*const DataType) bool {
+    if (lhs == null or rhs == null) return lhs == null and rhs == null;
+    return dataTypeEql(lhs.?.*, rhs.?.*);
+}
+
+fn metadataEql(lhs: ?[]const KeyValue, rhs: ?[]const KeyValue) bool {
+    if (lhs == null or rhs == null) return lhs == null and rhs == null;
+    const l = lhs.?;
+    const r = rhs.?;
+    if (l.len != r.len) return false;
+    for (l, r) |lv, rv| {
+        if (!std.mem.eql(u8, lv.key, rv.key)) return false;
+        if (!std.mem.eql(u8, lv.value, rv.value)) return false;
+    }
+    return true;
+}
+
+fn fieldSliceEql(lhs: []const Field, rhs: []const Field) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lf, rf| {
+        if (!fieldEql(lf, rf)) return false;
+    }
+    return true;
+}
+
+pub fn fieldEql(lhs: Field, rhs: Field) bool {
+    if (!std.mem.eql(u8, lhs.name, rhs.name)) return false;
+    if (lhs.nullable != rhs.nullable) return false;
+    if (!metadataEql(lhs.metadata, rhs.metadata)) return false;
+    return dataTypeEql(lhs.data_type.*, rhs.data_type.*);
+}
+
+pub fn dataTypeEql(lhs: DataType, rhs: DataType) bool {
+    if (lhs.id() != rhs.id()) return false;
+
+    return switch (lhs) {
+        .null,
+        .bool,
+        .uint8,
+        .int8,
+        .uint16,
+        .int16,
+        .uint32,
+        .int32,
+        .uint64,
+        .int64,
+        .half_float,
+        .float,
+        .double,
+        .string,
+        .binary,
+        .date32,
+        .date64,
+        .large_string,
+        .large_binary,
+        .string_view,
+        .binary_view,
+        .max_id,
+        => true,
+        .fixed_size_binary => |l| l.byte_width == rhs.fixed_size_binary.byte_width,
+        .timestamp => |l| blk: {
+            const r = rhs.timestamp;
+            if (l.unit != r.unit) break :blk false;
+            if (l.timezone == null or r.timezone == null) break :blk l.timezone == null and r.timezone == null;
+            break :blk std.mem.eql(u8, l.timezone.?, r.timezone.?);
+        },
+        .time32 => |l| l.unit == rhs.time32.unit,
+        .time64 => |l| l.unit == rhs.time64.unit,
+        .interval_months => |l| l.unit == rhs.interval_months.unit,
+        .interval_day_time => |l| l.unit == rhs.interval_day_time.unit,
+        .interval_month_day_nano => |l| l.unit == rhs.interval_month_day_nano.unit,
+        .decimal32 => |l| l.precision == rhs.decimal32.precision and l.scale == rhs.decimal32.scale,
+        .decimal64 => |l| l.precision == rhs.decimal64.precision and l.scale == rhs.decimal64.scale,
+        .decimal128 => |l| l.precision == rhs.decimal128.precision and l.scale == rhs.decimal128.scale,
+        .decimal256 => |l| l.precision == rhs.decimal256.precision and l.scale == rhs.decimal256.scale,
+        .list => |l| fieldEql(l.value_field, rhs.list.value_field),
+        .large_list => |l| fieldEql(l.value_field, rhs.large_list.value_field),
+        .list_view => |l| fieldEql(l.value_field, rhs.list_view.value_field),
+        .large_list_view => |l| fieldEql(l.value_field, rhs.large_list_view.value_field),
+        .fixed_size_list => |l| blk: {
+            const r = rhs.fixed_size_list;
+            break :blk l.list_size == r.list_size and fieldEql(l.value_field, r.value_field);
+        },
+        .struct_ => |l| fieldSliceEql(l.fields, rhs.struct_.fields),
+        .map => |l| blk: {
+            const r = rhs.map;
+            break :blk fieldEql(l.key_field, r.key_field) and
+                fieldEql(l.item_field, r.item_field) and
+                l.keys_sorted == r.keys_sorted and
+                dataTypePtrEql(l.entries_type, r.entries_type);
+        },
+        .sparse_union => |l| unionTypeEql(l, rhs.sparse_union),
+        .dense_union => |l| unionTypeEql(l, rhs.dense_union),
+        .dictionary => |l| blk: {
+            const r = rhs.dictionary;
+            break :blk l.id == r.id and
+                l.index_type.bit_width == r.index_type.bit_width and
+                l.index_type.signed == r.index_type.signed and
+                l.ordered == r.ordered and
+                dataTypeEql(l.value_type.*, r.value_type.*);
+        },
+        .run_end_encoded => |l| blk: {
+            const r = rhs.run_end_encoded;
+            break :blk l.run_end_type.bit_width == r.run_end_type.bit_width and
+                l.run_end_type.signed == r.run_end_type.signed and
+                dataTypeEql(l.value_type.*, r.value_type.*);
+        },
+        .extension => |l| blk: {
+            const r = rhs.extension;
+            if (!std.mem.eql(u8, l.name, r.name)) break :blk false;
+            if (!dataTypeEql(l.storage_type.*, r.storage_type.*)) break :blk false;
+            if (l.metadata == null or r.metadata == null) break :blk l.metadata == null and r.metadata == null;
+            break :blk std.mem.eql(u8, l.metadata.?, r.metadata.?);
+        },
+        .duration => |l| l.unit == rhs.duration.unit,
+    };
+}
+
+fn unionTypeEql(lhs: UnionType, rhs: UnionType) bool {
+    if (lhs.mode != rhs.mode) return false;
+    if (!std.mem.eql(i8, lhs.type_ids, rhs.type_ids)) return false;
+    return fieldSliceEql(lhs.fields, rhs.fields);
+}
 
 comptime {
     std.debug.assert(@intFromEnum(TypeId.null) == 0);
     std.debug.assert(@intFromEnum(TypeId.bool) == 1);
     std.debug.assert(@intFromEnum(TypeId.decimal64) == 44);
+}
+
+test "data type eql compares nested pointer content" {
+    const dict_value_1 = DataType{ .string = {} };
+    const dict_value_2 = DataType{ .string = {} };
+    const lhs = DataType{
+        .dictionary = .{
+            .id = 7,
+            .index_type = .{ .bit_width = 32, .signed = true },
+            .value_type = &dict_value_1,
+            .ordered = false,
+        },
+    };
+    const rhs = DataType{
+        .dictionary = .{
+            .id = 7,
+            .index_type = .{ .bit_width = 32, .signed = true },
+            .value_type = &dict_value_2,
+            .ordered = false,
+        },
+    };
+    try std.testing.expect(lhs.eql(rhs));
+}
+
+test "field eql compares metadata and nested type" {
+    const value_type_1 = DataType{ .int32 = {} };
+    const value_type_2 = DataType{ .int32 = {} };
+    const meta_1 = [_]KeyValue{
+        .{ .key = "k", .value = "v" },
+    };
+    const meta_2 = [_]KeyValue{
+        .{ .key = "k", .value = "v" },
+    };
+    const lhs = Field{
+        .name = "id",
+        .data_type = &value_type_1,
+        .nullable = false,
+        .metadata = meta_1[0..],
+    };
+    const rhs = Field{
+        .name = "id",
+        .data_type = &value_type_2,
+        .nullable = false,
+        .metadata = meta_2[0..],
+    };
+    try std.testing.expect(lhs.eql(rhs));
 }

@@ -129,7 +129,7 @@ fn writeReeFixture(allocator: std.mem.Allocator, writer: anytype) !void {
     var ree = try ree_builder.finish(values);
     defer ree.release();
 
-    var batch = try zarrow.RecordBatch.init(allocator, schema, &[_]zarrow.ArrayRef{ree});
+    var batch = try zarrow.RecordBatch.initBorrowed(allocator, schema, &[_]zarrow.ArrayRef{ree});
     defer batch.deinit();
 
     try writer.writeSchema(schema);
@@ -167,7 +167,7 @@ fn writeCanonicalFixture(allocator: std.mem.Allocator, writer: anytype) !void {
     var names = try names_builder.finish();
     defer names.release();
 
-    var batch = try zarrow.RecordBatch.init(allocator, schema, &[_]zarrow.ArrayRef{ ids, names });
+    var batch = try zarrow.RecordBatch.initBorrowed(allocator, schema, &[_]zarrow.ArrayRef{ ids, names });
     defer batch.deinit();
 
     try writer.writeSchema(schema);
@@ -215,7 +215,7 @@ fn writeDictionaryDeltaFixture(allocator: std.mem.Allocator, writer: anytype) !v
     try dict_builder_1.appendIndex(1);
     var dict_col_1 = try dict_builder_1.finish(dict_values_1);
     defer dict_col_1.release();
-    var batch_1 = try zarrow.RecordBatch.init(allocator, schema, &[_]zarrow.ArrayRef{dict_col_1});
+    var batch_1 = try zarrow.RecordBatch.initBorrowed(allocator, schema, &[_]zarrow.ArrayRef{dict_col_1});
     defer batch_1.deinit();
 
     var dict_values_builder_2 = try zarrow.StringBuilder.init(allocator, 1, 5);
@@ -238,7 +238,7 @@ fn writeDictionaryDeltaFixture(allocator: std.mem.Allocator, writer: anytype) !v
     try dict_builder_2.appendIndex(0);
     var dict_col_2 = try dict_builder_2.finish(dict_values_2);
     defer dict_col_2.release();
-    var batch_2 = try zarrow.RecordBatch.init(allocator, schema, &[_]zarrow.ArrayRef{dict_col_2});
+    var batch_2 = try zarrow.RecordBatch.initBorrowed(allocator, schema, &[_]zarrow.ArrayRef{dict_col_2});
     defer batch_2.deinit();
 
     try writer.writeSchema(schema);
@@ -409,7 +409,7 @@ fn writeComplexFixture(allocator: std.mem.Allocator, writer: anytype) !void {
     var ts_col = try ts_builder.finish();
     defer ts_col.release();
 
-    var batch = try zarrow.RecordBatch.init(
+    var batch = try zarrow.RecordBatch.initBorrowed(
         allocator,
         schema,
         &[_]zarrow.ArrayRef{ list_col, struct_col, map_col, union_col, decimal_col, ts_col },

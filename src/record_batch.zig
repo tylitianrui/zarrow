@@ -5,6 +5,7 @@ const array = @import("array/array.zig");
 // Tabular wrapper around aligned Arrow columns plus a schema contract.
 
 pub const Schema = schema_mod.Schema;
+pub const SchemaRef = schema_mod.SchemaRef;
 pub const Field = schema_mod.Field;
 pub const ArrayRef = array.ArrayRef;
 pub const ArrayData = array.ArrayData;
@@ -28,23 +29,25 @@ pub const RecordBatchBuilderError = error{
 
 pub const RecordBatch = struct {
     allocator: std.mem.Allocator,
-    schema: Schema,
+    schema_ref: SchemaRef,
     columns: []ArrayRef,
     num_rows: usize,
 
     const Self = @This();
 
-    /// Initialize and return a new instance.
-    pub fn init(allocator: std.mem.Allocator, schema: Schema, columns: []const ArrayRef) !Self {
-        if (schema.fields.len != columns.len) return RecordBatchError.InvalidColumnCount;
+    /// Initialize and return a new instance. Takes ownership of `schema_ref`
+    /// (caller must retain before passing if the ref is still needed elsewhere).
+    pub fn init(allocator: std.mem.Allocator, schema_ref: SchemaRef, columns: []const ArrayRef) !Self {
+        const sc = schema_ref.schema();
+        if (sc.fields.len != columns.len) return RecordBatchError.InvalidColumnCount;
 
         const num_rows = if (columns.len == 0) 0 else columns[0].data().length;
         for (columns, 0..) |col_ref, i| {
             const data = col_ref.data();
             try data.validateLayout();
             if (data.length != num_rows) return RecordBatchError.InvalidColumnLength;
-            if (!std.meta.eql(data.data_type, schema.fields[i].data_type.*)) return RecordBatchError.InvalidColumnType;
-            if (!schema.fields[i].nullable and data.hasNulls()) return RecordBatchError.NullInNonNullableField;
+            if (!data.data_type.eql(sc.fields[i].data_type.*)) return RecordBatchError.InvalidColumnType;
+            if (!sc.fields[i].nullable and data.hasNulls()) return RecordBatchError.NullInNonNullableField;
         }
 
         const owned_columns = try allocator.alloc(ArrayRef, columns.len);
@@ -55,10 +58,17 @@ pub const RecordBatch = struct {
 
         return .{
             .allocator = allocator,
-            .schema = schema,
+            .schema_ref = schema_ref,
             .columns = owned_columns,
             .num_rows = num_rows,
         };
+    }
+
+    /// Convenience: wrap a borrowed Schema into a SchemaRef and call init.
+    pub fn initBorrowed(allocator: std.mem.Allocator, borrowed_schema: Schema, columns: []const ArrayRef) !Self {
+        var ref = try SchemaRef.fromBorrowed(allocator, borrowed_schema);
+        errdefer ref.release();
+        return init(allocator, ref, columns);
     }
 
     /// Release resources owned by this instance.
@@ -68,6 +78,7 @@ pub const RecordBatch = struct {
             owned.release();
         }
         self.allocator.free(self.columns);
+        self.schema_ref.release();
     }
 
     /// Execute numRows logic for this type.
@@ -86,9 +97,14 @@ pub const RecordBatch = struct {
         return &self.columns[index];
     }
 
+    /// Execute schema logic for this type.
+    pub fn schema(self: *const Self) *const Schema {
+        return self.schema_ref.schema();
+    }
+
     /// Execute columnByName logic for this type.
     pub fn columnByName(self: *const Self, name: []const u8) ?*const ArrayRef {
-        for (self.schema.fields, 0..) |field, i| {
+        for (self.schema_ref.schema().fields, 0..) |field, i| {
             if (std.mem.eql(u8, field.name, name)) return &self.columns[i];
         }
         return null;
@@ -115,7 +131,7 @@ pub const RecordBatch = struct {
 
         return .{
             .allocator = self.allocator,
-            .schema = self.schema,
+            .schema_ref = self.schema_ref.retain(),
             .columns = sliced_columns,
             .num_rows = length,
         };
@@ -124,27 +140,35 @@ pub const RecordBatch = struct {
 
 pub const RecordBatchBuilder = struct {
     allocator: std.mem.Allocator,
-    schema: Schema,
+    schema_ref: SchemaRef,
     columns: []?ArrayRef,
     finished: bool = false,
 
     const Self = @This();
 
-    /// Initialize and return a new instance.
-    pub fn init(allocator: std.mem.Allocator, schema: Schema) !Self {
-        const slots = try allocator.alloc(?ArrayRef, schema.fields.len);
+    /// Initialize and return a new instance. Takes ownership of `schema_ref`.
+    pub fn init(allocator: std.mem.Allocator, schema_ref: SchemaRef) !Self {
+        const slots = try allocator.alloc(?ArrayRef, schema_ref.schema().fields.len);
         @memset(slots, null);
         return .{
             .allocator = allocator,
-            .schema = schema,
+            .schema_ref = schema_ref,
             .columns = slots,
         };
+    }
+
+    /// Convenience: wrap a borrowed Schema into a SchemaRef and call init.
+    pub fn initBorrowed(allocator: std.mem.Allocator, borrowed_schema: Schema) !Self {
+        var ref = try SchemaRef.fromBorrowed(allocator, borrowed_schema);
+        errdefer ref.release();
+        return init(allocator, ref);
     }
 
     /// Release resources owned by this instance.
     pub fn deinit(self: *Self) void {
         self.releaseColumns();
         self.allocator.free(self.columns);
+        self.schema_ref.release();
     }
 
     /// Execute releaseColumns logic for this type.
@@ -169,7 +193,7 @@ pub const RecordBatchBuilder = struct {
     /// Execute setColumnByName logic for this type.
     pub fn setColumnByName(self: *Self, name: []const u8, column_ref: ArrayRef) RecordBatchBuilderError!void {
         if (self.finished) return RecordBatchBuilderError.AlreadyFinished;
-        for (self.schema.fields, 0..) |field, i| {
+        for (self.schema_ref.schema().fields, 0..) |field, i| {
             if (std.mem.eql(u8, field.name, name)) return self.setColumn(i, column_ref);
         }
         return RecordBatchBuilderError.UnknownField;
@@ -187,7 +211,7 @@ pub const RecordBatchBuilder = struct {
             refs[i] = col_ref;
         }
 
-        const batch = try RecordBatch.init(self.allocator, self.schema, refs);
+        const batch = try RecordBatch.init(self.allocator, self.schema_ref.retain(), refs);
         // The resulting batch now owns retained column refs, so the builder
         // should not keep additional holds after a successful finish.
         self.releaseColumns();
@@ -234,7 +258,7 @@ test "record batch init and accessors" {
     var bool_ref = try bool_builder.finish();
     defer bool_ref.release();
 
-    var batch = try RecordBatch.init(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{ int_ref, bool_ref });
+    var batch = try RecordBatch.initBorrowed(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{ int_ref, bool_ref });
     defer batch.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), batch.numRows());
@@ -254,7 +278,7 @@ test "record batch rejects mismatched column count" {
 
     try std.testing.expectError(
         RecordBatchError.InvalidColumnCount,
-        RecordBatch.init(allocator, .{ .fields = &[_]Field{} }, &[_]ArrayRef{int_ref}),
+        RecordBatch.initBorrowed(allocator, .{ .fields = &[_]Field{} }, &[_]ArrayRef{int_ref}),
     );
 }
 
@@ -272,7 +296,7 @@ test "record batch rejects nullable violation" {
 
     try std.testing.expectError(
         RecordBatchError.NullInNonNullableField,
-        RecordBatch.init(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{int_ref}),
+        RecordBatch.initBorrowed(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{int_ref}),
     );
 }
 
@@ -300,7 +324,7 @@ test "record batch rejects mismatched column length" {
 
     try std.testing.expectError(
         RecordBatchError.InvalidColumnLength,
-        RecordBatch.init(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{ a_ref, b_ref }),
+        RecordBatch.initBorrowed(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{ a_ref, b_ref }),
     );
 }
 
@@ -319,7 +343,7 @@ test "record batch slice returns sliced columns" {
     var col_ref = try builder.finish();
     defer col_ref.release();
 
-    var batch = try RecordBatch.init(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{col_ref});
+    var batch = try RecordBatch.initBorrowed(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{col_ref});
     defer batch.deinit();
 
     var sliced = try batch.slice(1, 2);
@@ -347,7 +371,7 @@ test "record batch slice rejects out of bounds" {
     var col_ref = try builder.finish();
     defer col_ref.release();
 
-    var batch = try RecordBatch.init(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{col_ref});
+    var batch = try RecordBatch.initBorrowed(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{col_ref});
     defer batch.deinit();
 
     try std.testing.expectError(RecordBatchError.SliceOutOfBounds, batch.slice(3, 1));
@@ -377,7 +401,7 @@ test "record batch builder builds batch" {
     var bool_ref = try bool_builder.finish();
     defer bool_ref.release();
 
-    var builder = try RecordBatchBuilder.init(allocator, .{ .fields = fields[0..] });
+    var builder = try RecordBatchBuilder.initBorrowed(allocator, .{ .fields = fields[0..] });
     defer builder.deinit();
 
     try builder.setColumn(0, int_ref);
@@ -405,7 +429,7 @@ test "record batch builder rejects missing column" {
     var int_ref = try int_builder.finish();
     defer int_ref.release();
 
-    var builder = try RecordBatchBuilder.init(allocator, .{ .fields = fields[0..] });
+    var builder = try RecordBatchBuilder.initBorrowed(allocator, .{ .fields = fields[0..] });
     defer builder.deinit();
     try builder.setColumnByName("id", int_ref);
 
@@ -429,7 +453,7 @@ test "record batch builder reset allows reuse" {
     var b_ref = try b_builder.finish();
     defer b_ref.release();
 
-    var builder = try RecordBatchBuilder.init(allocator, .{ .fields = fields[0..] });
+    var builder = try RecordBatchBuilder.initBorrowed(allocator, .{ .fields = fields[0..] });
     defer builder.deinit();
 
     try builder.setColumn(0, a_ref);
@@ -455,7 +479,7 @@ test "record batch builder clear before finish releases slots" {
     var int_ref = try int_builder.finish();
     defer int_ref.release();
 
-    var builder = try RecordBatchBuilder.init(allocator, .{ .fields = fields[0..] });
+    var builder = try RecordBatchBuilder.initBorrowed(allocator, .{ .fields = fields[0..] });
     defer builder.deinit();
 
     try builder.setColumn(0, int_ref);
@@ -478,7 +502,7 @@ test "record batch builder reset before finish releases slots" {
     var int_ref = try int_builder.finish();
     defer int_ref.release();
 
-    var builder = try RecordBatchBuilder.init(allocator, .{ .fields = fields[0..] });
+    var builder = try RecordBatchBuilder.initBorrowed(allocator, .{ .fields = fields[0..] });
     defer builder.deinit();
 
     try builder.setColumn(0, int_ref);
@@ -505,7 +529,7 @@ test "record batch rejects new-type column mismatch" {
 
     try std.testing.expectError(
         RecordBatchError.InvalidColumnType,
-        RecordBatch.init(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{binary_ref}),
+        RecordBatch.initBorrowed(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{binary_ref}),
     );
 }
 
@@ -534,6 +558,6 @@ test "record batch rejects new-type length mismatch" {
 
     try std.testing.expectError(
         RecordBatchError.InvalidColumnLength,
-        RecordBatch.init(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{ fsb_ref, ls_ref }),
+        RecordBatch.initBorrowed(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{ fsb_ref, ls_ref }),
     );
 }
