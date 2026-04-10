@@ -70,7 +70,7 @@ fn runBenchmark(allocator: std.mem.Allocator, cfg: BenchConfig, emit_csv: bool, 
         .{ .name = "ok", .data_type = &bool_type, .nullable = false },
     };
 
-    var batch_builder = try zarrow.RecordBatchBuilder.init(allocator, .{ .fields = fields[0..] });
+    var batch_builder = try zarrow.RecordBatchBuilder.initBorrowed(allocator, .{ .fields = fields[0..] });
     defer batch_builder.deinit();
 
     var warmup: usize = 0;
