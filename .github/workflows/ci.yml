@@ -121,21 +121,37 @@ jobs:
       - name: Generate zarrow fixtures
         run: |
           mkdir -p .interop-fixtures
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex.arrow complex stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_file.arrow canonical file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_file.arrow ree file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex_file.arrow complex file
 
       - name: PyArrow roundtrip checks
         run: |
-          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow.arrow
-          zig build interop-fixture-check -- .interop-fixtures/pyarrow.arrow
-          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow.arrow
-          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_dict_delta.arrow dict-delta
-          zig build interop-fixture-check -- .interop-fixtures/pyarrow_dict_delta.arrow dict-delta
-          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_dict_delta.arrow dict-delta
-          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree.arrow ree
-          zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree.arrow ree
-          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree.arrow ree
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow.arrow canonical stream
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow.arrow canonical stream
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow.arrow canonical stream
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_dict_delta.arrow dict-delta stream
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_dict_delta.arrow dict-delta stream
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree.arrow ree stream
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree.arrow ree stream
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree.arrow ree stream
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_complex.arrow complex stream
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_complex.arrow complex stream
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_complex.arrow complex stream
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_file.arrow canonical file
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_file.arrow canonical file
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_file.arrow canonical file
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree_file.arrow ree file
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree_file.arrow ree file
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree_file.arrow ree file
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_complex_file.arrow complex file
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_complex_file.arrow complex file
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_complex_file.arrow complex file
 
   interop-arrow-rs:
     name: IPC Interop (zarrow <-> arrow-rs)
@@ -155,21 +171,29 @@ jobs:
       - name: Generate zarrow fixtures
         run: |
           mkdir -p .interop-fixtures
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_file.arrow canonical file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_file.arrow ree file
 
       - name: Arrow-RS roundtrip checks
         run: |
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs.arrow
-          zig build interop-fixture-check -- .interop-fixtures/arrow_rs.arrow
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow.arrow
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta
-          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_dict_delta.arrow dict-delta
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree.arrow ree
-          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree.arrow ree
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree.arrow ree
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs.arrow canonical stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs.arrow canonical stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow.arrow canonical stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree.arrow ree stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree.arrow ree stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree.arrow ree stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_file.arrow canonical file
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_file.arrow canonical file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_file.arrow canonical file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_file.arrow ree file
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_file.arrow ree file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_file.arrow ree file
 
   interop-arrow-cpp:
     name: IPC Interop (zarrow <-> Arrow C++)
@@ -207,28 +231,36 @@ jobs:
       - name: Generate zarrow fixtures
         run: |
           mkdir -p .interop-fixtures
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_file.arrow canonical file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_file.arrow ree file
 
       - name: Arrow C++ generate fixtures
         shell: bash -l {0}
         run: |
           conda activate arrow-cpp-env
-          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp.arrow
-          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_dict_delta.arrow dict-delta
-          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree.arrow ree
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp.arrow canonical stream
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_dict_delta.arrow dict-delta stream
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree.arrow ree stream
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_file.arrow canonical file
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree_file.arrow ree file
 
       - name: Validate Arrow C++ fixtures with zarrow
         run: |
-          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp.arrow
-          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_dict_delta.arrow dict-delta
-          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree.arrow ree
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp.arrow canonical stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_dict_delta.arrow dict-delta stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree.arrow ree stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_file.arrow canonical file
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree_file.arrow ree file
 
       - name: Arrow C++ validate zarrow fixtures
         shell: bash -l {0}
         run: |
           conda activate arrow-cpp-env
-          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow.arrow
-          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_dict_delta.arrow dict-delta
-          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree.arrow ree
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow.arrow canonical stream
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree.arrow ree stream
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_file.arrow canonical file
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree_file.arrow ree file

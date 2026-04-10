@@ -5,9 +5,15 @@ use std::sync::Arc;
 use arrow_array::builder::StringDictionaryBuilder;
 use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayRef, DictionaryArray, Int32Array, RecordBatch, RunArray, StringArray};
-use arrow_ipc::reader::StreamReader;
-use arrow_ipc::writer::StreamWriter;
+use arrow_ipc::reader::{FileReader, StreamReader};
+use arrow_ipc::writer::{FileWriter, StreamWriter};
 use arrow_schema::{DataType, Field, Schema};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContainerMode {
+    Stream,
+    File,
+}
 
 fn canonical_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -16,7 +22,7 @@ fn canonical_schema() -> Arc<Schema> {
     ]))
 }
 
-fn generate(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn generate(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std::error::Error>> {
     // Writes one stream with:
     // - schema: id: int32 (non-null), name: utf8 (nullable)
     // - one record batch (3 rows)
@@ -28,9 +34,18 @@ fn generate(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let batch = RecordBatch::try_new(schema.clone(), vec![ids, names])?;
 
     let file = File::create(path)?;
-    let mut writer = StreamWriter::try_new(file, &schema)?;
-    writer.write(&batch)?;
-    writer.finish()?;
+    match container {
+        ContainerMode::Stream => {
+            let mut writer = StreamWriter::try_new(file, &schema)?;
+            writer.write(&batch)?;
+            writer.finish()?;
+        }
+        ContainerMode::File => {
+            let mut writer = FileWriter::try_new(file, &schema)?;
+            writer.write(&batch)?;
+            writer.finish()?;
+        }
+    }
     Ok(())
 }
 
@@ -42,7 +57,7 @@ fn dict_delta_schema() -> Arc<Schema> {
     )]))
 }
 
-fn generate_dict_delta(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn generate_dict_delta(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std::error::Error>> {
     // Writes one stream with dictionary-encoded column "color":
     // - schema: color: dictionary<int32, utf8>
     // - two record batches to exercise dictionary delta behavior
@@ -63,10 +78,20 @@ fn generate_dict_delta(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let second_batch = RecordBatch::try_new(schema.clone(), vec![second_col])?;
 
     let file = File::create(path)?;
-    let mut writer = StreamWriter::try_new(file, &schema)?;
-    writer.write(&first_batch)?;
-    writer.write(&second_batch)?;
-    writer.finish()?;
+    match container {
+        ContainerMode::Stream => {
+            let mut writer = StreamWriter::try_new(file, &schema)?;
+            writer.write(&first_batch)?;
+            writer.write(&second_batch)?;
+            writer.finish()?;
+        }
+        ContainerMode::File => {
+            let mut writer = FileWriter::try_new(file, &schema)?;
+            writer.write(&first_batch)?;
+            writer.write(&second_batch)?;
+            writer.finish()?;
+        }
+    }
     Ok(())
 }
 
@@ -81,7 +106,7 @@ fn ree_schema() -> Arc<Schema> {
     )]))
 }
 
-fn generate_ree(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn generate_ree(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std::error::Error>> {
     // Writes one stream with:
     // - schema: ree: run_end_encoded<int32, int32>
     // - one record batch (5 rows)
@@ -94,19 +119,31 @@ fn generate_ree(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let batch = RecordBatch::try_new(schema.clone(), vec![ree])?;
 
     let file = File::create(path)?;
-    let mut writer = StreamWriter::try_new(file, &schema)?;
-    writer.write(&batch)?;
-    writer.finish()?;
+    match container {
+        ContainerMode::Stream => {
+            let mut writer = StreamWriter::try_new(file, &schema)?;
+            writer.write(&batch)?;
+            writer.finish()?;
+        }
+        ContainerMode::File => {
+            let mut writer = FileWriter::try_new(file, &schema)?;
+            writer.write(&batch)?;
+            writer.finish()?;
+        }
+    }
     Ok(())
 }
 
-fn validate(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn validate(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std::error::Error>> {
     // Expected decoded content:
     // - one batch with 3 rows
     // - id=[1, 2, 3]
     // - name=["alice", null, "bob"]
     let file = File::open(path)?;
-    let mut reader = StreamReader::try_new(file, None)?;
+    let mut reader = match container {
+        ContainerMode::Stream => EitherReader::Stream(StreamReader::try_new(file, None)?),
+        ContainerMode::File => EitherReader::File(FileReader::try_new(file, None)?),
+    };
     let schema = reader.schema();
     if schema.fields().len() != 2 {
         return Err("invalid schema field count".into());
@@ -118,11 +155,11 @@ fn validate(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         return Err("invalid name field".into());
     }
 
-    let batch = reader.next().ok_or("missing batch")??;
+    let batch = reader.next_batch()?.ok_or("missing batch")?;
     if batch.num_rows() != 3 {
         return Err("invalid row count".into());
     }
-    if reader.next().is_some() {
+    if reader.next_batch()?.is_some() {
         return Err("unexpected extra batch".into());
     }
 
@@ -146,13 +183,16 @@ fn validate(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn validate_dict_delta(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_dict_delta(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std::error::Error>> {
     // Expected decoded content:
     // - two batches
     //   batch1 values=["red", "blue"]
     //   batch2 values=["green"]
     let file = File::open(path)?;
-    let mut reader = StreamReader::try_new(file, None)?;
+    let mut reader = match container {
+        ContainerMode::Stream => EitherReader::Stream(StreamReader::try_new(file, None)?),
+        ContainerMode::File => EitherReader::File(FileReader::try_new(file, None)?),
+    };
     let schema = reader.schema();
     if schema.fields().len() != 1 {
         return Err("invalid schema field count".into());
@@ -165,9 +205,9 @@ fn validate_dict_delta(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("color field must be dictionary utf8".into()),
     }
 
-    let first = reader.next().ok_or("missing first batch")??;
-    let second = reader.next().ok_or("missing second batch")??;
-    if reader.next().is_some() {
+    let first = reader.next_batch()?.ok_or("missing first batch")?;
+    let second = reader.next_batch()?.ok_or("missing second batch")?;
+    if reader.next_batch()?.is_some() {
         return Err("unexpected extra batch".into());
     }
 
@@ -211,12 +251,15 @@ fn validate_dict_delta(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn validate_ree(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_ree(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std::error::Error>> {
     // Expected decoded content:
     // - one batch with 5 rows
     // - logical values=[100, 100, 200, 200, 200]
     let file = File::open(path)?;
-    let mut reader = StreamReader::try_new(file, None)?;
+    let mut reader = match container {
+        ContainerMode::Stream => EitherReader::Stream(StreamReader::try_new(file, None)?),
+        ContainerMode::File => EitherReader::File(FileReader::try_new(file, None)?),
+    };
     let schema = reader.schema();
     if schema.fields().len() != 1 {
         return Err("invalid schema field count".into());
@@ -230,8 +273,8 @@ fn validate_ree(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("ree field must be run_end_encoded<int32,int32>".into()),
     }
 
-    let batch = reader.next().ok_or("missing batch")??;
-    if reader.next().is_some() {
+    let batch = reader.next_batch()?.ok_or("missing batch")?;
+    if reader.next_batch()?.is_some() {
         return Err("unexpected extra batch".into());
     }
     if batch.num_rows() != 5 {
@@ -253,21 +296,63 @@ fn validate_ree(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+enum EitherReader {
+    Stream(StreamReader<File>),
+    File(FileReader<File>),
+}
+
+impl EitherReader {
+    fn schema(&self) -> Arc<Schema> {
+        match self {
+            EitherReader::Stream(r) => r.schema(),
+            EitherReader::File(r) => r.schema(),
+        }
+    }
+
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>, Box<dyn std::error::Error>> {
+        match self {
+            EitherReader::Stream(r) => Ok(r.next().transpose()?),
+            EitherReader::File(r) => Ok(r.next().transpose()?),
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args();
     let _exe = args.next();
     let mode = args.next().ok_or("usage: <generate|validate> <path.arrow>")?;
     let path = args.next().ok_or("usage: <generate|validate> <path.arrow>")?;
     let path = Path::new(&path);
-    let case = args.next().unwrap_or_else(|| "canonical".to_string());
+    let mut case = "canonical".to_string();
+    let mut container = ContainerMode::Stream;
+    if let Some(arg3) = args.next() {
+        if arg3 == "stream" || arg3 == "file" {
+            container = if arg3 == "file" { ContainerMode::File } else { ContainerMode::Stream };
+        } else {
+            case = arg3;
+            if let Some(arg4) = args.next() {
+                if arg4 == "stream" || arg4 == "file" {
+                    container = if arg4 == "file" { ContainerMode::File } else { ContainerMode::Stream };
+                } else {
+                    return Err("usage: <generate|validate> <path.arrow> [canonical|dict-delta|ree] [stream|file]".into());
+                }
+            }
+        }
+    }
+    if case == "dict-delta" && container == ContainerMode::File {
+        return Err(
+            "dict-delta fixture is stream-only: IPC file format disallows dictionary replacement across batches"
+                .into(),
+        );
+    }
 
     match (mode.as_str(), case.as_str()) {
-        ("generate", "canonical") => generate(path),
-        ("validate", "canonical") => validate(path),
-        ("generate", "dict-delta") => generate_dict_delta(path),
-        ("validate", "dict-delta") => validate_dict_delta(path),
-        ("generate", "ree") => generate_ree(path),
-        ("validate", "ree") => validate_ree(path),
-        _ => Err("usage: <generate|validate> <path.arrow> [canonical|dict-delta|ree]".into()),
+        ("generate", "canonical") => generate(path, container),
+        ("validate", "canonical") => validate(path, container),
+        ("generate", "dict-delta") => generate_dict_delta(path, container),
+        ("validate", "dict-delta") => validate_dict_delta(path, container),
+        ("generate", "ree") => generate_ree(path, container),
+        ("validate", "ree") => validate_ree(path, container),
+        _ => Err("usage: <generate|validate> <path.arrow> [canonical|dict-delta|ree] [stream|file]".into()),
     }
 }

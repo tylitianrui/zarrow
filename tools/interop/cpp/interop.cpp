@@ -10,6 +10,11 @@
 
 namespace {
 
+enum class ContainerMode {
+  kStream,
+  kFile,
+};
+
 std::shared_ptr<arrow::Schema> CanonicalSchema() {
   return arrow::schema({
       arrow::field("id", arrow::int32(), false),
@@ -17,7 +22,7 @@ std::shared_ptr<arrow::Schema> CanonicalSchema() {
   });
 }
 
-arrow::Status Generate(const std::string& path) {
+arrow::Status Generate(const std::string& path, ContainerMode container) {
   // Writes one stream with:
   // - schema: id: int32 (non-null), name: utf8 (nullable)
   // - one record batch (3 rows)
@@ -39,13 +44,19 @@ arrow::Status Generate(const std::string& path) {
 
   auto batch = arrow::RecordBatch::Make(schema, 3, {ids, names});
   ARROW_ASSIGN_OR_RAISE(auto out, arrow::io::FileOutputStream::Open(path));
-  ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeStreamWriter(out.get(), schema));
-  ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*batch));
-  ARROW_RETURN_NOT_OK(writer->Close());
+  if (container == ContainerMode::kStream) {
+    ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeStreamWriter(out.get(), schema));
+    ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*batch));
+    ARROW_RETURN_NOT_OK(writer->Close());
+  } else {
+    ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeFileWriter(out.get(), schema));
+    ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*batch));
+    ARROW_RETURN_NOT_OK(writer->Close());
+  }
   return out->Close();
 }
 
-arrow::Status GenerateDictDelta(const std::string& path) {
+arrow::Status GenerateDictDelta(const std::string& path, ContainerMode container) {
   // Writes one stream with dictionary-encoded column "color":
   // - schema: color: dictionary<int32, utf8>
   // - two record batches to exercise dictionary delta behavior
@@ -72,14 +83,21 @@ arrow::Status GenerateDictDelta(const std::string& path) {
   auto second_batch = arrow::RecordBatch::Make(schema, 1, {second_encoded});
 
   ARROW_ASSIGN_OR_RAISE(auto out, arrow::io::FileOutputStream::Open(path));
-  ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeStreamWriter(out.get(), schema));
-  ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*first_batch));
-  ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*second_batch));
-  ARROW_RETURN_NOT_OK(writer->Close());
+  if (container == ContainerMode::kStream) {
+    ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeStreamWriter(out.get(), schema));
+    ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*first_batch));
+    ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*second_batch));
+    ARROW_RETURN_NOT_OK(writer->Close());
+  } else {
+    ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeFileWriter(out.get(), schema));
+    ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*first_batch));
+    ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*second_batch));
+    ARROW_RETURN_NOT_OK(writer->Close());
+  }
   return out->Close();
 }
 
-arrow::Status GenerateRee(const std::string& path) {
+arrow::Status GenerateRee(const std::string& path, ContainerMode container) {
   // Writes one stream with:
   // - schema: ree: run_end_encoded<int32, int32>
   // - one record batch (5 rows)
@@ -104,20 +122,42 @@ arrow::Status GenerateRee(const std::string& path) {
   auto batch = arrow::RecordBatch::Make(schema, 5, std::move(columns));
 
   ARROW_ASSIGN_OR_RAISE(auto out, arrow::io::FileOutputStream::Open(path));
-  ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeStreamWriter(out.get(), schema));
-  ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*batch));
-  ARROW_RETURN_NOT_OK(writer->Close());
+  if (container == ContainerMode::kStream) {
+    ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeStreamWriter(out.get(), schema));
+    ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*batch));
+    ARROW_RETURN_NOT_OK(writer->Close());
+  } else {
+    ARROW_ASSIGN_OR_RAISE(auto writer, arrow::ipc::MakeFileWriter(out.get(), schema));
+    ARROW_RETURN_NOT_OK(writer->WriteRecordBatch(*batch));
+    ARROW_RETURN_NOT_OK(writer->Close());
+  }
   return out->Close();
 }
 
-arrow::Status Validate(const std::string& path) {
+arrow::Status Validate(const std::string& path, ContainerMode container) {
   // Expected decoded content:
   // - one batch with 3 rows
   // - id=[1, 2, 3]
   // - name=["alice", null, "bob"]
   ARROW_ASSIGN_OR_RAISE(auto in, arrow::io::ReadableFile::Open(path));
-  ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchStreamReader::Open(in));
-  auto schema = reader->schema();
+  std::shared_ptr<arrow::Schema> schema;
+  std::shared_ptr<arrow::RecordBatch> batch;
+  std::shared_ptr<arrow::RecordBatch> extra;
+  if (container == ContainerMode::kStream) {
+    ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchStreamReader::Open(in));
+    schema = reader->schema();
+    ARROW_RETURN_NOT_OK(reader->ReadNext(&batch));
+    ARROW_RETURN_NOT_OK(reader->ReadNext(&extra));
+  } else {
+    ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchFileReader::Open(in));
+    schema = reader->schema();
+    if (reader->num_record_batches() > 0) {
+      ARROW_ASSIGN_OR_RAISE(batch, reader->ReadRecordBatch(0));
+    }
+    if (reader->num_record_batches() > 1) {
+      ARROW_ASSIGN_OR_RAISE(extra, reader->ReadRecordBatch(1));
+    }
+  }
   if (schema->num_fields() != 2) return arrow::Status::Invalid("invalid field count");
   if (schema->field(0)->name() != "id" || schema->field(0)->type()->id() != arrow::Type::INT32) {
     return arrow::Status::Invalid("invalid id field");
@@ -126,13 +166,9 @@ arrow::Status Validate(const std::string& path) {
     return arrow::Status::Invalid("invalid name field");
   }
 
-  std::shared_ptr<arrow::RecordBatch> batch;
-  ARROW_RETURN_NOT_OK(reader->ReadNext(&batch));
   if (!batch) return arrow::Status::Invalid("missing batch");
   if (batch->num_rows() != 3) return arrow::Status::Invalid("invalid row count");
 
-  std::shared_ptr<arrow::RecordBatch> extra;
-  ARROW_RETURN_NOT_OK(reader->ReadNext(&extra));
   if (extra) return arrow::Status::Invalid("unexpected extra batch");
 
   auto ids = std::static_pointer_cast<arrow::Int32Array>(batch->column(0));
@@ -158,24 +194,41 @@ arrow::Result<std::string> DecodeDictionaryString(const std::shared_ptr<arrow::A
   return values->GetString(key);
 }
 
-arrow::Status ValidateDictDelta(const std::string& path) {
+arrow::Status ValidateDictDelta(const std::string& path, ContainerMode container) {
   // Expected decoded content:
   // - two batches
   //   batch1 values=["red", "blue"]
   //   batch2 values=["green"]
   ARROW_ASSIGN_OR_RAISE(auto in, arrow::io::ReadableFile::Open(path));
-  ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchStreamReader::Open(in));
-  auto schema = reader->schema();
+  std::shared_ptr<arrow::Schema> schema;
+  std::shared_ptr<arrow::RecordBatch> first;
+  std::shared_ptr<arrow::RecordBatch> second;
+  std::shared_ptr<arrow::RecordBatch> extra;
+  if (container == ContainerMode::kStream) {
+    ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchStreamReader::Open(in));
+    schema = reader->schema();
+    ARROW_RETURN_NOT_OK(reader->ReadNext(&first));
+    ARROW_RETURN_NOT_OK(reader->ReadNext(&second));
+    ARROW_RETURN_NOT_OK(reader->ReadNext(&extra));
+  } else {
+    ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchFileReader::Open(in));
+    schema = reader->schema();
+    if (reader->num_record_batches() > 0) {
+      ARROW_ASSIGN_OR_RAISE(first, reader->ReadRecordBatch(0));
+    }
+    if (reader->num_record_batches() > 1) {
+      ARROW_ASSIGN_OR_RAISE(second, reader->ReadRecordBatch(1));
+    }
+    if (reader->num_record_batches() > 2) {
+      ARROW_ASSIGN_OR_RAISE(extra, reader->ReadRecordBatch(2));
+    }
+  }
   if (schema->num_fields() != 1) return arrow::Status::Invalid("invalid field count");
   if (schema->field(0)->name() != "color") return arrow::Status::Invalid("invalid color field");
   if (schema->field(0)->type()->id() != arrow::Type::DICTIONARY) {
     return arrow::Status::Invalid("color field must be dictionary type");
   }
 
-  std::shared_ptr<arrow::RecordBatch> first;
-  std::shared_ptr<arrow::RecordBatch> second;
-  ARROW_RETURN_NOT_OK(reader->ReadNext(&first));
-  ARROW_RETURN_NOT_OK(reader->ReadNext(&second));
   if (!first || !second) return arrow::Status::Invalid("missing batches");
   if (first->num_rows() != 2 || second->num_rows() != 1) return arrow::Status::Invalid("invalid row counts");
 
@@ -185,19 +238,33 @@ arrow::Status ValidateDictDelta(const std::string& path) {
   if (first0 != "red" || first1 != "blue") return arrow::Status::Invalid("invalid first batch values");
   if (second0 != "green") return arrow::Status::Invalid("invalid second batch values");
 
-  std::shared_ptr<arrow::RecordBatch> extra;
-  ARROW_RETURN_NOT_OK(reader->ReadNext(&extra));
   if (extra) return arrow::Status::Invalid("unexpected extra batch");
   return arrow::Status::OK();
 }
 
-arrow::Status ValidateRee(const std::string& path) {
+arrow::Status ValidateRee(const std::string& path, ContainerMode container) {
   // Expected decoded content:
   // - one batch with 5 rows
   // - logical values=[100, 100, 200, 200, 200]
   ARROW_ASSIGN_OR_RAISE(auto in, arrow::io::ReadableFile::Open(path));
-  ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchStreamReader::Open(in));
-  auto schema = reader->schema();
+  std::shared_ptr<arrow::Schema> schema;
+  std::shared_ptr<arrow::RecordBatch> batch;
+  std::shared_ptr<arrow::RecordBatch> extra;
+  if (container == ContainerMode::kStream) {
+    ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchStreamReader::Open(in));
+    schema = reader->schema();
+    ARROW_RETURN_NOT_OK(reader->ReadNext(&batch));
+    ARROW_RETURN_NOT_OK(reader->ReadNext(&extra));
+  } else {
+    ARROW_ASSIGN_OR_RAISE(auto reader, arrow::ipc::RecordBatchFileReader::Open(in));
+    schema = reader->schema();
+    if (reader->num_record_batches() > 0) {
+      ARROW_ASSIGN_OR_RAISE(batch, reader->ReadRecordBatch(0));
+    }
+    if (reader->num_record_batches() > 1) {
+      ARROW_ASSIGN_OR_RAISE(extra, reader->ReadRecordBatch(1));
+    }
+  }
   if (schema->num_fields() != 1) return arrow::Status::Invalid("invalid field count");
   if (schema->field(0)->name() != "ree") return arrow::Status::Invalid("invalid ree field");
   if (schema->field(0)->type()->id() != arrow::Type::RUN_END_ENCODED) {
@@ -212,8 +279,6 @@ arrow::Status ValidateRee(const std::string& path) {
     return arrow::Status::Invalid("ree value_type must be int32");
   }
 
-  std::shared_ptr<arrow::RecordBatch> batch;
-  ARROW_RETURN_NOT_OK(reader->ReadNext(&batch));
   if (!batch) return arrow::Status::Invalid("missing batch");
   if (batch->num_rows() != 5) return arrow::Status::Invalid("invalid row count");
 
@@ -237,8 +302,6 @@ arrow::Status ValidateRee(const std::string& path) {
     return arrow::Status::Invalid("invalid ree values");
   }
 
-  std::shared_ptr<arrow::RecordBatch> extra;
-  ARROW_RETURN_NOT_OK(reader->ReadNext(&extra));
   if (extra) return arrow::Status::Invalid("unexpected extra batch");
   return arrow::Status::OK();
 }
@@ -246,21 +309,46 @@ arrow::Status ValidateRee(const std::string& path) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 3 && argc != 4) {
-    std::cerr << "usage: interop_cpp <generate|validate> <path.arrow> [canonical|dict-delta|ree]\n";
+  if (argc < 3 || argc > 5) {
+    std::cerr << "usage: interop_cpp <generate|validate> <path.arrow> [canonical|dict-delta|ree] [stream|file]\n";
     return 2;
   }
   const std::string mode = argv[1];
   const std::string path = argv[2];
-  const std::string case_name = argc == 4 ? argv[3] : "canonical";
+  std::string case_name = "canonical";
+  ContainerMode container = ContainerMode::kStream;
+  if (argc >= 4) {
+    const std::string arg3 = argv[3];
+    if (arg3 == "stream" || arg3 == "file") {
+      container = arg3 == "file" ? ContainerMode::kFile : ContainerMode::kStream;
+    } else {
+      case_name = arg3;
+      if (argc == 5) {
+        const std::string arg4 = argv[4];
+        if (arg4 == "stream")
+          container = ContainerMode::kStream;
+        else if (arg4 == "file")
+          container = ContainerMode::kFile;
+        else {
+          std::cerr << "usage: interop_cpp <generate|validate> <path.arrow> [canonical|dict-delta|ree] [stream|file]\n";
+          return 2;
+        }
+      }
+    }
+  }
+  if (case_name == "dict-delta" && container == ContainerMode::kFile) {
+    std::cerr
+        << "dict-delta fixture is stream-only: IPC file format disallows dictionary replacement across batches\n";
+    return 2;
+  }
 
   arrow::Status st = arrow::Status::Invalid("unsupported mode/case");
-  if (mode == "generate" && case_name == "canonical") st = Generate(path);
-  if (mode == "validate" && case_name == "canonical") st = Validate(path);
-  if (mode == "generate" && case_name == "dict-delta") st = GenerateDictDelta(path);
-  if (mode == "validate" && case_name == "dict-delta") st = ValidateDictDelta(path);
-  if (mode == "generate" && case_name == "ree") st = GenerateRee(path);
-  if (mode == "validate" && case_name == "ree") st = ValidateRee(path);
+  if (mode == "generate" && case_name == "canonical") st = Generate(path, container);
+  if (mode == "validate" && case_name == "canonical") st = Validate(path, container);
+  if (mode == "generate" && case_name == "dict-delta") st = GenerateDictDelta(path, container);
+  if (mode == "validate" && case_name == "dict-delta") st = ValidateDictDelta(path, container);
+  if (mode == "generate" && case_name == "ree") st = GenerateRee(path, container);
+  if (mode == "validate" && case_name == "ree") st = ValidateRee(path, container);
   if (!st.ok()) {
     std::cerr << st.ToString() << "\n";
     return 1;

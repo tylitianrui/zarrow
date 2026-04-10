@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Validate canonical IPC stream fixture semantics via PyArrow."""
+"""Validate IPC fixture semantics via PyArrow."""
 
 from __future__ import annotations
 
 import pathlib
 import sys
+from decimal import Decimal
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -25,12 +26,27 @@ def decode_dictionary_values(column: pa.Array) -> list[str]:
     return out
 
 
-def validate_canonical(in_path: pathlib.Path) -> None:
+def _open_reader(in_path: pathlib.Path, container: str):
+    if container == "stream":
+        return ipc.open_stream(in_path)
+    if container == "file":
+        return ipc.open_file(in_path)
+    raise ValueError(f"unknown container mode: {container}")
+
+
+def _read_all_batches(reader) -> list[pa.RecordBatch]:
+    # Stream readers are iterable, file readers expose random-access batch APIs.
+    if hasattr(reader, "num_record_batches"):
+        return [reader.get_batch(i) for i in range(reader.num_record_batches)]
+    return list(reader)
+
+
+def validate_canonical(in_path: pathlib.Path, container: str) -> None:
     # Expected decoded content:
     # - one batch with 3 rows
     # - id=[1, 2, 3]
     # - name=["alice", null, "bob"]
-    with ipc.open_stream(in_path) as reader:
+    with _open_reader(in_path, container) as reader:
         schema = reader.schema
         if len(schema) != 2:
             raise RuntimeError("invalid schema field count")
@@ -39,7 +55,7 @@ def validate_canonical(in_path: pathlib.Path) -> None:
         if schema[1].name != "name" or schema[1].type != pa.string():
             raise RuntimeError("invalid name field")
 
-        batches = list(reader)
+        batches = _read_all_batches(reader)
     if len(batches) != 1:
         raise RuntimeError("expected exactly one batch")
     batch = batches[0]
@@ -54,12 +70,12 @@ def validate_canonical(in_path: pathlib.Path) -> None:
         raise RuntimeError(f"invalid names: {names!r}")
 
 
-def validate_dict_delta(in_path: pathlib.Path) -> None:
+def validate_dict_delta(in_path: pathlib.Path, container: str) -> None:
     # Expected decoded content:
     # - two batches
     #   batch1 values=["red", "blue"]
     #   batch2 values=["green"]
-    with ipc.open_stream(in_path) as reader:
+    with _open_reader(in_path, container) as reader:
         schema = reader.schema
         if len(schema) != 1:
             raise RuntimeError("invalid schema field count")
@@ -68,7 +84,7 @@ def validate_dict_delta(in_path: pathlib.Path) -> None:
         if not pa.types.is_dictionary(schema[0].type):
             raise RuntimeError("color field must be dictionary type")
 
-        batches = list(reader)
+        batches = _read_all_batches(reader)
     if len(batches) != 2:
         raise RuntimeError("expected exactly two batches")
 
@@ -82,11 +98,11 @@ def validate_dict_delta(in_path: pathlib.Path) -> None:
         raise RuntimeError("invalid second batch values")
 
 
-def validate_ree(in_path: pathlib.Path) -> None:
+def validate_ree(in_path: pathlib.Path, container: str) -> None:
     # Expected decoded content:
     # - one batch with 5 rows
     # - logical values=[100, 100, 200, 200, 200]
-    with ipc.open_stream(in_path) as reader:
+    with _open_reader(in_path, container) as reader:
         schema = reader.schema
         if len(schema) != 1:
             raise RuntimeError("invalid schema field count")
@@ -100,7 +116,7 @@ def validate_ree(in_path: pathlib.Path) -> None:
         if ree_type.value_type != pa.int32():
             raise RuntimeError("ree value_type must be int32")
 
-        batches = list(reader)
+        batches = _read_all_batches(reader)
     if len(batches) != 1:
         raise RuntimeError("expected exactly one batch")
 
@@ -113,21 +129,77 @@ def validate_ree(in_path: pathlib.Path) -> None:
         raise RuntimeError(f"invalid ree values: {values!r}")
 
 
+def validate_complex(in_path: pathlib.Path, container: str) -> None:
+    with _open_reader(in_path, container) as reader:
+        schema = reader.schema
+        if len(schema) != 6:
+            raise RuntimeError("invalid schema field count")
+        expected_names = ["list_i32", "struct_pair", "map_i32_i32", "u_dense", "dec", "ts"]
+        if [f.name for f in schema] != expected_names:
+            raise RuntimeError("invalid field names")
+        if not pa.types.is_list(schema[0].type):
+            raise RuntimeError("list_i32 must be list type")
+        if not pa.types.is_struct(schema[1].type):
+            raise RuntimeError("struct_pair must be struct type")
+        if not pa.types.is_map(schema[2].type):
+            raise RuntimeError("map_i32_i32 must be map type")
+        if not pa.types.is_union(schema[3].type):
+            raise RuntimeError("u_dense must be union type")
+        if not pa.types.is_decimal(schema[4].type):
+            raise RuntimeError("dec must be decimal type")
+        if not pa.types.is_timestamp(schema[5].type):
+            raise RuntimeError("ts must be timestamp type")
+
+        batches = _read_all_batches(reader)
+    if len(batches) != 1:
+        raise RuntimeError("expected exactly one batch")
+    batch = batches[0]
+    if batch.num_rows != 3:
+        raise RuntimeError("invalid row count")
+
+    if batch.column(0).to_pylist() != [[1, 2], None, [3]]:
+        raise RuntimeError("invalid list values")
+    if batch.column(1).to_pylist() != [{"id": 10, "name": "aa"}, None, {"id": 30, "name": "cc"}]:
+        raise RuntimeError("invalid struct values")
+    if batch.column(2).to_pylist() != [[(1, 10), (2, 20)], None, [(3, 30)]]:
+        raise RuntimeError("invalid map values")
+    if batch.column(3).to_pylist() != [100, True, 200]:
+        raise RuntimeError("invalid union values")
+    if batch.column(4).to_pylist() != [Decimal("123.45"), Decimal("-0.42"), Decimal("0.00")]:
+        raise RuntimeError("invalid decimal values")
+    ts_values = batch.column(5).to_pylist()
+    if [int(v.timestamp() * 1000) for v in ts_values] != [1700000000000, 1700000001000, 1700000002000]:
+        raise RuntimeError("invalid timestamp values")
+
+
 def main() -> int:
-    if len(sys.argv) not in (2, 3):
-        print("usage: pyarrow_validate.py <in.arrow> [canonical|dict-delta|ree]", file=sys.stderr)
+    if len(sys.argv) not in (2, 3, 4):
+        print("usage: pyarrow_validate.py <in.arrow> [canonical|dict-delta|ree|complex] [stream|file]", file=sys.stderr)
         return 2
 
     in_path = pathlib.Path(sys.argv[1])
-    mode = sys.argv[2] if len(sys.argv) == 3 else "canonical"
+    mode = sys.argv[2] if len(sys.argv) >= 3 else "canonical"
+    container = sys.argv[3] if len(sys.argv) == 4 else "stream"
+    if container not in ("stream", "file"):
+        print(f"unknown container mode: {container}", file=sys.stderr)
+        return 2
+    if mode == "dict-delta" and container == "file":
+        print(
+            "dict-delta fixture is stream-only: IPC file format disallows dictionary replacement across batches",
+            file=sys.stderr,
+        )
+        return 2
     if mode == "canonical":
-        validate_canonical(in_path)
+        validate_canonical(in_path, container)
         return 0
     if mode == "dict-delta":
-        validate_dict_delta(in_path)
+        validate_dict_delta(in_path, container)
         return 0
     if mode == "ree":
-        validate_ree(in_path)
+        validate_ree(in_path, container)
+        return 0
+    if mode == "complex":
+        validate_complex(in_path, container)
         return 0
     print(f"unknown mode: {mode}", file=sys.stderr)
     return 2
