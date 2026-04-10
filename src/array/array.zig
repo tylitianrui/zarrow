@@ -24,6 +24,7 @@ pub const TimestampArray = PrimitiveArray(i64);
 pub const DurationArray = PrimitiveArray(i64);
 pub const IntervalMonthsArray = PrimitiveArray(i32);
 pub const IntervalDayTimeArray = PrimitiveArray(i64);
+pub const IntervalMonthDayNanoArray = PrimitiveArray(i128);
 pub const Decimal32Array = PrimitiveArray(i32);
 pub const Decimal64Array = PrimitiveArray(i64);
 pub const Decimal128Array = PrimitiveArray(i128);
@@ -32,6 +33,7 @@ pub const UInt8Array = PrimitiveArray(u8);
 pub const UInt16Array = PrimitiveArray(u16);
 pub const UInt32Array = PrimitiveArray(u32);
 pub const UInt64Array = PrimitiveArray(u64);
+pub const HalfFloatArray = PrimitiveArray(f16);
 pub const Float32Array = PrimitiveArray(f32);
 pub const Float64Array = PrimitiveArray(f64);
 pub const Int8Builder = PrimitiveBuilder(i8, DataType{ .int8 = {} });
@@ -60,6 +62,10 @@ pub fn IntervalDayTimeBuilder(comptime interval: datatype.IntervalType) type {
     comptime std.debug.assert(interval.unit == .day_time);
     return PrimitiveBuilder(i64, DataType{ .interval_day_time = interval });
 }
+pub fn IntervalMonthDayNanoBuilder(comptime interval: datatype.IntervalType) type {
+    comptime std.debug.assert(interval.unit == .month_day_nano);
+    return PrimitiveBuilder(i128, DataType{ .interval_month_day_nano = interval });
+}
 pub fn Decimal32Builder(comptime params: datatype.DecimalParams) type {
     return PrimitiveBuilder(i32, DataType{ .decimal32 = params });
 }
@@ -76,6 +82,7 @@ pub const UInt8Builder = PrimitiveBuilder(u8, DataType{ .uint8 = {} });
 pub const UInt16Builder = PrimitiveBuilder(u16, DataType{ .uint16 = {} });
 pub const UInt32Builder = PrimitiveBuilder(u32, DataType{ .uint32 = {} });
 pub const UInt64Builder = PrimitiveBuilder(u64, DataType{ .uint64 = {} });
+pub const HalfFloatBuilder = PrimitiveBuilder(f16, DataType{ .half_float = {} });
 pub const Float32Builder = PrimitiveBuilder(f32, DataType{ .float = {} });
 pub const Float64Builder = PrimitiveBuilder(f64, DataType{ .double = {} });
 pub const BooleanArray = @import("boolean_array.zig").BooleanArray;
@@ -298,6 +305,44 @@ test "interval day time builder alias builds primitive i64 with interval_day_tim
     try std.testing.expectEqual(@as(i64, -43_200_000), built.value(2));
     try std.testing.expect(array_handle.data().data_type == .interval_day_time);
     try std.testing.expectEqual(datatype.IntervalUnit.day_time, array_handle.data().data_type.interval_day_time.unit);
+}
+
+test "half float aliases build primitive f16 with half_float type" {
+    var builder = try HalfFloatBuilder.init(std.testing.allocator, 2);
+    defer builder.deinit();
+
+    try builder.append(@as(f16, 1.5));
+    try builder.appendNull();
+    try builder.append(@as(f16, -2.0));
+
+    var array_handle = try builder.finish();
+    defer array_handle.release();
+
+    const built = HalfFloatArray{ .data = array_handle.data() };
+    try std.testing.expectEqual(@as(usize, 3), built.len());
+    try std.testing.expect(built.isNull(1));
+    try std.testing.expectEqual(@as(f16, -2.0), built.value(2));
+    try std.testing.expect(array_handle.data().data_type == .half_float);
+}
+
+test "interval month day nano builder alias builds primitive i128 with interval_month_day_nano type" {
+    const interval = datatype.IntervalType{ .unit = .month_day_nano };
+    var builder = try IntervalMonthDayNanoBuilder(interval).init(std.testing.allocator, 2);
+    defer builder.deinit();
+
+    try builder.append(@as(i128, 123_456_789_012_345_678));
+    try builder.appendNull();
+    try builder.append(@as(i128, -123_456_789_012_345_678));
+
+    var array_handle = try builder.finish();
+    defer array_handle.release();
+
+    const built = IntervalMonthDayNanoArray{ .data = array_handle.data() };
+    try std.testing.expectEqual(@as(usize, 3), built.len());
+    try std.testing.expect(built.isNull(1));
+    try std.testing.expectEqual(@as(i128, -123_456_789_012_345_678), built.value(2));
+    try std.testing.expect(array_handle.data().data_type == .interval_month_day_nano);
+    try std.testing.expectEqual(datatype.IntervalUnit.month_day_nano, array_handle.data().data_type.interval_month_day_nano.unit);
 }
 
 test "decimal32 builder alias builds primitive i32 with decimal32 params" {
