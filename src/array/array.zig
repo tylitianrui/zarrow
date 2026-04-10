@@ -18,6 +18,8 @@ pub const Int32Array = PrimitiveArray(i32);
 pub const Int64Array = PrimitiveArray(i64);
 pub const Date32Array = PrimitiveArray(i32);
 pub const Date64Array = PrimitiveArray(i64);
+pub const Time32Array = PrimitiveArray(i32);
+pub const Time64Array = PrimitiveArray(i64);
 pub const UInt8Array = PrimitiveArray(u8);
 pub const UInt16Array = PrimitiveArray(u16);
 pub const UInt32Array = PrimitiveArray(u32);
@@ -30,6 +32,12 @@ pub const Int32Builder = PrimitiveBuilder(i32, DataType{ .int32 = {} });
 pub const Int64Builder = PrimitiveBuilder(i64, DataType{ .int64 = {} });
 pub const Date32Builder = PrimitiveBuilder(i32, DataType{ .date32 = {} });
 pub const Date64Builder = PrimitiveBuilder(i64, DataType{ .date64 = {} });
+pub fn Time32Builder(comptime unit: datatype.TimeUnit) type {
+    return PrimitiveBuilder(i32, DataType{ .time32 = .{ .unit = unit } });
+}
+pub fn Time64Builder(comptime unit: datatype.TimeUnit) type {
+    return PrimitiveBuilder(i64, DataType{ .time64 = .{ .unit = unit } });
+}
 pub const UInt8Builder = PrimitiveBuilder(u8, DataType{ .uint8 = {} });
 pub const UInt16Builder = PrimitiveBuilder(u16, DataType{ .uint16 = {} });
 pub const UInt32Builder = PrimitiveBuilder(u32, DataType{ .uint32 = {} });
@@ -101,4 +109,42 @@ test "date64 aliases build primitive i64 with date64 logical type" {
     try std.testing.expect(built.isNull(1));
     try std.testing.expectEqual(@as(i64, 1_609_545_600_000), built.value(2));
     try std.testing.expect(array_handle.data().data_type == .date64);
+}
+
+test "time32 builder alias builds primitive i32 with configured unit" {
+    var builder = try Time32Builder(.millisecond).init(std.testing.allocator, 2);
+    defer builder.deinit();
+
+    try builder.append(1000);
+    try builder.appendNull();
+    try builder.append(2500);
+
+    var array_handle = try builder.finish();
+    defer array_handle.release();
+
+    const built = Time32Array{ .data = array_handle.data() };
+    try std.testing.expectEqual(@as(usize, 3), built.len());
+    try std.testing.expect(built.isNull(1));
+    try std.testing.expectEqual(@as(i32, 2500), built.value(2));
+    try std.testing.expect(array_handle.data().data_type == .time32);
+    try std.testing.expectEqual(datatype.TimeUnit.millisecond, array_handle.data().data_type.time32.unit);
+}
+
+test "time64 builder alias builds primitive i64 with configured unit" {
+    var builder = try Time64Builder(.nanosecond).init(std.testing.allocator, 2);
+    defer builder.deinit();
+
+    try builder.append(1_000_000);
+    try builder.appendNull();
+    try builder.append(2_500_000);
+
+    var array_handle = try builder.finish();
+    defer array_handle.release();
+
+    const built = Time64Array{ .data = array_handle.data() };
+    try std.testing.expectEqual(@as(usize, 3), built.len());
+    try std.testing.expect(built.isNull(1));
+    try std.testing.expectEqual(@as(i64, 2_500_000), built.value(2));
+    try std.testing.expect(array_handle.data().data_type == .time64);
+    try std.testing.expectEqual(datatype.TimeUnit.nanosecond, array_handle.data().data_type.time64.unit);
 }
