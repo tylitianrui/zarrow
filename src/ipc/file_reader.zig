@@ -5,6 +5,7 @@ const stream_reader = @import("stream_reader.zig");
 const format = @import("format.zig");
 const file_writer = @import("file_writer.zig");
 const array_data = @import("../array/array_data.zig");
+const buffer = @import("../buffer.zig");
 const fb = @import("flatbufferz");
 const arrow_fbs = @import("arrow_fbs");
 
@@ -29,7 +30,6 @@ const fbs = struct {
 };
 
 const IndexedFile = struct {
-    schema_block: IndexedBlock,
     dictionaries: []IndexedBlock,
     record_batches: []IndexedBlock,
     message_order: []IndexedBlock, // dictionaries + record batches sorted by offset
@@ -45,11 +45,22 @@ const IndexedFile = struct {
 };
 
 pub fn FileReader(comptime ReaderType: type) type {
+    const ReaderReadError = @TypeOf(@as(ReaderType, undefined)).Error;
+    const ReaderContextPtr = @TypeOf(@as(ReaderType, undefined).context);
+    const ReaderContext = switch (@typeInfo(ReaderContextPtr)) {
+        .pointer => |p| p.child,
+        else => ReaderContextPtr,
+    };
+    const ReaderSeekToReturn = @typeInfo(@TypeOf(ReaderContext.seekTo)).@"fn".return_type.?;
+    const ReaderSeekError = @typeInfo(ReaderSeekToReturn).error_union.error_set;
+    const ReaderGetEndPosReturn = @typeInfo(@TypeOf(ReaderContext.getEndPos)).@"fn".return_type.?;
+    const ReaderGetEndPosError = @typeInfo(ReaderGetEndPosReturn).error_union.error_set;
+    const ReaderIoError = ReaderReadError || ReaderSeekError || ReaderGetEndPosError || error{EndOfStream};
+
     return struct {
         allocator: std.mem.Allocator,
         reader: ReaderType,
         loaded: bool = false,
-        backing_bytes: []u8 = &.{},
         indexed: ?IndexedFile = null,
         schema_ref: ?SchemaRef = null,
         dictionary_values: std.AutoHashMap(i64, array_data.ArrayRef),
@@ -73,21 +84,19 @@ pub fn FileReader(comptime ReaderType: type) type {
             self.schema_ref = null;
             if (self.indexed) |*idx| idx.deinit(self.allocator);
             self.indexed = null;
-            if (self.backing_bytes.len > 0) self.allocator.free(self.backing_bytes);
-            self.backing_bytes = &.{};
         }
 
-        pub fn readSchema(self: *Self) (FileError || @TypeOf(self.reader).Error)!Schema {
+        pub fn readSchema(self: *Self) (FileError || ReaderIoError)!Schema {
             try self.ensureLoaded();
             return self.schema_ref.?.schema().*;
         }
 
-        pub fn recordBatchCount(self: *Self) (FileError || @TypeOf(self.reader).Error)!usize {
+        pub fn recordBatchCount(self: *Self) (FileError || ReaderIoError)!usize {
             try self.ensureLoaded();
             return self.indexed.?.record_batches.len;
         }
 
-        pub fn readRecordBatchAt(self: *Self, index: usize) (FileError || @TypeOf(self.reader).Error)!RecordBatch {
+        pub fn readRecordBatchAt(self: *Self, index: usize) (FileError || ReaderIoError)!RecordBatch {
             try self.ensureLoaded();
             const idx = self.indexed.?;
             if (index >= idx.record_batches.len) return error.InvalidFile;
@@ -97,16 +106,14 @@ pub fn FileReader(comptime ReaderType: type) type {
             const block = idx.message_order[message_pos];
             if (block.header != .record_batch) return error.InvalidFile;
 
-            const metadata = self.backing_bytes[block.parsed.metadata_start..block.parsed.metadata_end];
-            const body = array_data.SharedBuffer.fromSlice(
-                self.backing_bytes[block.parsed.body_start..block.parsed.body_end],
-            );
+            var decoded_block = try self.readDecodedBlock(block);
+            defer decoded_block.deinit(self.allocator);
             const batch = try stream_reader.buildRecordBatchFromMessageMetadata(
                 self.allocator,
                 self.schema_ref.?.retain(),
                 &self.dictionary_values,
-                metadata,
-                body,
+                decoded_block.metadata,
+                decoded_block.body,
             );
 
             self.decode_message_cursor = message_pos + 1;
@@ -114,34 +121,54 @@ pub fn FileReader(comptime ReaderType: type) type {
             return batch;
         }
 
-        pub fn nextRecordBatch(self: *Self) (FileError || @TypeOf(self.reader).Error)!?RecordBatch {
+        pub fn nextRecordBatch(self: *Self) (FileError || ReaderIoError)!?RecordBatch {
             try self.ensureLoaded();
             const idx = self.indexed.?;
             if (self.next_record_index >= idx.record_batches.len) return null;
             return try self.readRecordBatchAt(self.next_record_index);
         }
 
-        fn ensureLoaded(self: *Self) (FileError || @TypeOf(self.reader).Error)!void {
+        fn ensureLoaded(self: *Self) (FileError || ReaderIoError)!void {
             if (self.loaded) return;
 
-            var all = std.ArrayList(u8){};
-            defer all.deinit(self.allocator);
+            const header_len = FileMagic.len + 2;
+            const trailer_len = 4 + FileMagic.len;
+            const end_pos = try self.reader.context.getEndPos();
+            const file_len = std.math.cast(usize, end_pos) orelse return error.FooterTooLarge;
+            if (file_len < header_len + trailer_len) return error.InvalidFile;
 
-            var chunk: [4096]u8 = undefined;
-            while (true) {
-                const read_n = try self.reader.read(&chunk);
-                if (read_n == 0) break;
-                try all.appendSlice(self.allocator, chunk[0..read_n]);
-            }
-            self.backing_bytes = try all.toOwnedSlice(self.allocator);
+            var header_magic: [FileMagic.len]u8 = undefined;
+            try self.readAtNoEof(0, header_magic[0..]);
+            if (!std.mem.eql(u8, header_magic[0..], FileMagic)) return error.InvalidFile;
 
-            self.indexed = try buildIndexedFileFromFile(self.allocator, self.backing_bytes);
+            var trailer: [4 + FileMagic.len]u8 = undefined;
+            const footer_len_pos = file_len - trailer_len;
+            try self.readAtNoEof(footer_len_pos, trailer[0..]);
+            if (!std.mem.eql(u8, trailer[4..], FileMagic)) return error.InvalidFile;
 
-            const schema_block = self.indexed.?.schema_block;
-            const schema_metadata = self.backing_bytes[schema_block.parsed.metadata_start..schema_block.parsed.metadata_end];
+            const footer_len_u32 = readU32Le(trailer[0..4]);
+            const footer_len = std.math.cast(usize, footer_len_u32) orelse return error.FooterTooLarge;
+            const footer_end = footer_len_pos;
+            if (footer_len > footer_end - header_len) return error.InvalidFile;
+            const footer_start = footer_end - footer_len;
+            if (footer_start < header_len) return error.InvalidFile;
+
+            const footer_bytes = try self.allocator.alloc(u8, footer_len);
+            defer self.allocator.free(footer_bytes);
+            try self.readAtNoEof(footer_start, footer_bytes);
+            if (!isSaneFlatbufferTable(footer_bytes)) return error.InvalidFile;
+
+            const footer = fbs.Footer.GetRootAs(@constCast(footer_bytes), 0);
+            const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
+            var footer_t = try fbs.FooterT.Unpack(footer, opts);
+            defer footer_t.deinit(self.allocator);
+            if (footer_t.schema == null) return error.InvalidFile;
+
+            self.indexed = try self.buildIndexedFromFooter(footer_t, header_len, footer_start);
+
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             errdefer arena.deinit();
-            const schema = try stream_reader.decodeSchemaFromMessageMetadata(arena.allocator(), schema_metadata);
+            const schema = try stream_reader.buildSchemaFromFlatbuf(arena.allocator(), footer_t.schema.?);
             self.schema_ref = try SchemaRef.fromArena(self.allocator, arena, schema);
 
             self.resetDecodeState();
@@ -163,7 +190,7 @@ pub fn FileReader(comptime ReaderType: type) type {
             self.next_record_index = 0;
         }
 
-        fn ensureDictionaryStateForRecord(self: *Self, record_index: usize) FileError!void {
+        fn ensureDictionaryStateForRecord(self: *Self, record_index: usize) (FileError || ReaderIoError)!void {
             const idx = self.indexed orelse return error.InvalidFile;
             const target_pos = idx.record_message_positions[record_index];
 
@@ -174,18 +201,233 @@ pub fn FileReader(comptime ReaderType: type) type {
             while (self.decode_message_cursor < target_pos) : (self.decode_message_cursor += 1) {
                 const block = idx.message_order[self.decode_message_cursor];
                 if (block.header != .dictionary_batch) continue;
-                const metadata = self.backing_bytes[block.parsed.metadata_start..block.parsed.metadata_end];
-                const body = array_data.SharedBuffer.fromSlice(
-                    self.backing_bytes[block.parsed.body_start..block.parsed.body_end],
-                );
+                var decoded_block = try self.readDecodedBlock(block);
+                defer decoded_block.deinit(self.allocator);
                 try stream_reader.ingestDictionaryBatchFromMessageMetadata(
                     self.allocator,
                     self.schema_ref.?.schema().*,
                     &self.dictionary_values,
-                    metadata,
-                    body,
+                    decoded_block.metadata,
+                    decoded_block.body,
                 );
             }
+        }
+
+        const DecodedBlock = struct {
+            metadata: []u8,
+            body: array_data.SharedBuffer,
+
+            fn deinit(self: *DecodedBlock, allocator: std.mem.Allocator) void {
+                allocator.free(self.metadata);
+                self.body.release();
+            }
+        };
+
+        fn readDecodedBlock(self: *Self, block: IndexedBlock) (FileError || ReaderIoError)!DecodedBlock {
+            const metadata_len = block.parsed.metadata_end - block.parsed.metadata_start;
+            const metadata = try self.allocator.alloc(u8, metadata_len);
+            errdefer self.allocator.free(metadata);
+            try self.readAtNoEof(block.parsed.metadata_start, metadata);
+
+            var body = try self.readSharedAt(block.parsed.body_start, block.parsed.body_len);
+            errdefer body.release();
+
+            return .{
+                .metadata = metadata,
+                .body = body,
+            };
+        }
+
+        fn readSharedAt(self: *Self, offset: usize, len: usize) (FileError || ReaderIoError)!array_data.SharedBuffer {
+            if (len == 0) return array_data.SharedBuffer.empty;
+            var owned = try buffer.OwnedBuffer.init(self.allocator, len);
+            errdefer owned.deinit();
+            try self.readAtNoEof(offset, owned.data[0..len]);
+            return try owned.toShared(len);
+        }
+
+        fn readAtNoEof(self: *Self, offset: usize, out: []u8) ReaderIoError!void {
+            try self.reader.context.seekTo(@intCast(offset));
+            if (out.len == 0) return;
+            try self.reader.readNoEof(out);
+        }
+
+        fn buildIndexedFromFooter(
+            self: *Self,
+            footer_t: fbs.FooterT,
+            header_len: usize,
+            footer_start: usize,
+        ) (FileError || ReaderIoError)!IndexedFile {
+            var indexed_blocks = try self.collectIndexedBlocks(footer_t, header_len, footer_start);
+            defer indexed_blocks.deinit(self.allocator);
+
+            const message_order = try indexed_blocks.toOwnedSlice(self.allocator);
+            errdefer self.allocator.free(message_order);
+
+            var dictionary_count: usize = 0;
+            var record_count: usize = 0;
+            for (message_order) |blk| {
+                switch (blk.header) {
+                    .dictionary_batch => dictionary_count += 1,
+                    .record_batch => record_count += 1,
+                    else => return error.InvalidFile,
+                }
+            }
+
+            const dictionaries = try self.allocator.alloc(IndexedBlock, dictionary_count);
+            errdefer self.allocator.free(dictionaries);
+            const record_batches = try self.allocator.alloc(IndexedBlock, record_count);
+            errdefer self.allocator.free(record_batches);
+            const record_message_positions = try self.allocator.alloc(usize, record_count);
+            errdefer self.allocator.free(record_message_positions);
+
+            var d_i: usize = 0;
+            var r_i: usize = 0;
+            for (message_order, 0..) |blk, pos| {
+                switch (blk.header) {
+                    .dictionary_batch => {
+                        dictionaries[d_i] = blk;
+                        d_i += 1;
+                    },
+                    .record_batch => {
+                        record_batches[r_i] = blk;
+                        record_message_positions[r_i] = pos;
+                        r_i += 1;
+                    },
+                    else => return error.InvalidFile,
+                }
+            }
+
+            return .{
+                .dictionaries = dictionaries,
+                .record_batches = record_batches,
+                .message_order = message_order,
+                .record_message_positions = record_message_positions,
+            };
+        }
+
+        fn collectIndexedBlocks(
+            self: *Self,
+            footer_t: fbs.FooterT,
+            header_len: usize,
+            footer_start: usize,
+        ) (FileError || ReaderIoError)!std.ArrayList(IndexedBlock) {
+            const total_blocks = std.math.add(usize, footer_t.dictionaries.items.len, footer_t.recordBatches.items.len) catch return error.InvalidFile;
+            var blocks = try std.ArrayList(IndexedBlock).initCapacity(self.allocator, total_blocks);
+            errdefer blocks.deinit(self.allocator);
+
+            for (footer_t.dictionaries.items) |block| {
+                try self.appendCheckedBlock(&blocks, block, .dictionary_batch, header_len, footer_start);
+            }
+            for (footer_t.recordBatches.items) |block| {
+                try self.appendCheckedBlock(&blocks, block, .record_batch, header_len, footer_start);
+            }
+
+            std.mem.sort(IndexedBlock, blocks.items, {}, struct {
+                fn lessThan(_: void, lhs: IndexedBlock, rhs: IndexedBlock) bool {
+                    return lhs.offset < rhs.offset;
+                }
+            }.lessThan);
+
+            // Footer blocks must not overlap each other.
+            var prev_end: usize = 0;
+            var have_prev = false;
+            for (blocks.items) |blk| {
+                if (have_prev and blk.offset < prev_end) return error.InvalidFile;
+                prev_end = std.math.add(usize, blk.offset, blk.parsed.total_len) catch return error.InvalidFile;
+                have_prev = true;
+            }
+
+            return blocks;
+        }
+
+        fn appendCheckedBlock(
+            self: *Self,
+            blocks: *std.ArrayList(IndexedBlock),
+            block: fbs.BlockT,
+            expected_header: MessageHeaderKind,
+            header_len: usize,
+            footer_start: usize,
+        ) (FileError || ReaderIoError)!void {
+            if (block.offset < 0) return error.InvalidFile;
+            const offset = std.math.cast(usize, block.offset) orelse return error.InvalidFile;
+            if (offset < header_len or offset >= footer_start) return error.InvalidFile;
+
+            if (block.metaDataLength <= 0) return error.InvalidFile;
+            const expected_meta_len = std.math.cast(usize, block.metaDataLength) orelse return error.InvalidFile;
+            if (block.bodyLength < 0) return error.InvalidFile;
+            const expected_body_len = std.math.cast(usize, block.bodyLength) orelse return error.InvalidFile;
+
+            const parsed = try self.parseMessageAt(offset, footer_start);
+            if (parsed.meta_len != expected_meta_len) return error.InvalidFile;
+            if (parsed.body_len != expected_body_len) return error.InvalidFile;
+            if (parsed.header != expected_header) return error.InvalidFile;
+
+            try blocks.append(self.allocator, .{
+                .offset = offset,
+                .parsed = parsed,
+                .header = expected_header,
+            });
+        }
+
+        fn parseMessageAt(self: *Self, offset: usize, limit: usize) (FileError || ReaderIoError)!ParsedMessage {
+            if (offset >= limit) return error.InvalidFile;
+
+            if (limit - offset < 4) return error.InvalidFile;
+            var first_buf: [4]u8 = undefined;
+            try self.readAtNoEof(offset, first_buf[0..]);
+            const first = readU32Le(first_buf[0..]);
+
+            var prefix_len: usize = 4;
+            var metadata_len_u32 = first;
+            if (first == format.ContinuationMarker) {
+                if (limit - offset < 8) return error.InvalidFile;
+                var second_buf: [4]u8 = undefined;
+                try self.readAtNoEof(offset + 4, second_buf[0..]);
+                metadata_len_u32 = readU32Le(second_buf[0..]);
+                prefix_len = 8;
+                if (metadata_len_u32 == 0) return error.InvalidFile;
+            } else if (first == 0) {
+                return error.InvalidFile;
+            }
+
+            const metadata_len = std.math.cast(usize, metadata_len_u32) orelse return error.InvalidFile;
+            const metadata_start = std.math.add(usize, offset, prefix_len) catch return error.InvalidFile;
+            const metadata_end = std.math.add(usize, metadata_start, metadata_len) catch return error.InvalidFile;
+            if (metadata_end > limit) return error.InvalidFile;
+
+            const metadata = try self.allocator.alloc(u8, metadata_len);
+            defer self.allocator.free(metadata);
+            try self.readAtNoEof(metadata_start, metadata);
+            if (!isSaneFlatbufferTable(metadata)) return error.InvalidFile;
+
+            const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
+            const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
+            var msg_t = try fbs.MessageT.Unpack(msg, opts);
+            defer msg_t.deinit(self.allocator);
+
+            if (msg_t.bodyLength < 0) return error.InvalidFile;
+            const body_len = std.math.cast(usize, msg_t.bodyLength) orelse return error.InvalidFile;
+            const total_len = std.math.add(usize, prefix_len + metadata_len, body_len) catch return error.InvalidFile;
+            const end = std.math.add(usize, offset, total_len) catch return error.InvalidFile;
+            if (end > limit) return error.InvalidFile;
+
+            const header: MessageHeaderKind = switch (msg_t.header) {
+                .Schema => .schema,
+                .DictionaryBatch => .dictionary_batch,
+                .RecordBatch => .record_batch,
+                else => .other,
+            };
+            return .{
+                .meta_len = prefix_len + metadata_len,
+                .body_len = body_len,
+                .total_len = total_len,
+                .metadata_start = metadata_start,
+                .metadata_end = metadata_end,
+                .body_start = metadata_end,
+                .body_end = end,
+                .header = header,
+            };
         }
     };
 }
@@ -213,269 +455,6 @@ const IndexedBlock = struct {
     parsed: ParsedMessage,
     header: MessageHeaderKind,
 };
-
-const FoundSchema = struct {
-    offset: usize,
-    parsed: ParsedMessage,
-};
-
-fn buildIndexedFileFromFile(allocator: std.mem.Allocator, bytes: []const u8) FileError!IndexedFile {
-    // Arrow IPC file header: magic (6 bytes) + 2 padding bytes = 8 bytes total.
-    const header_len = FileMagic.len + 2;
-    const trailer_len = 4 + FileMagic.len;
-    if (bytes.len < header_len + trailer_len) return error.InvalidFile;
-    if (!std.mem.eql(u8, bytes[0..FileMagic.len], FileMagic)) return error.InvalidFile;
-    if (!std.mem.eql(u8, bytes[bytes.len - FileMagic.len .. bytes.len], FileMagic)) return error.InvalidFile;
-
-    const footer_len_pos = bytes.len - trailer_len;
-    const footer_len_u32 = readU32Le(bytes[footer_len_pos .. footer_len_pos + 4]);
-    const footer_len = std.math.cast(usize, footer_len_u32) orelse return error.FooterTooLarge;
-    const footer_end = footer_len_pos;
-    if (footer_len > footer_end - header_len) return error.InvalidFile;
-    const footer_start = footer_end - footer_len;
-    if (footer_start < header_len) return error.InvalidFile;
-
-    const footer_bytes = bytes[footer_start..footer_end];
-    if (!isSaneFlatbufferTable(footer_bytes)) return error.InvalidFile;
-
-    const footer = fbs.Footer.GetRootAs(@constCast(footer_bytes), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    var footer_t = try fbs.FooterT.Unpack(footer, opts);
-    defer footer_t.deinit(allocator);
-    if (footer_t.schema == null) return error.InvalidFile;
-
-    const schema_search_limit = try findSchemaSearchLimit(footer_t, header_len, footer_start);
-    const found_schema = try findSchemaMessage(allocator, bytes, header_len, schema_search_limit);
-    const schema_offset = found_schema.offset;
-    const schema_msg = found_schema.parsed;
-
-    // Validate every block's absolute file offsets against [header_len, footer_start).
-    // block.offset           = absolute file offset of the message preamble
-    // block.metaDataLength   = prefix(8) + paddedLen(metadata)
-    // block.bodyLength       = sum of paddedLen(each_buffer)  [includes per-buffer padding]
-    // Together they must fit entirely within the message region.
-    var indexed_blocks = try collectIndexedBlocks(allocator, bytes, footer_t, header_len, footer_start);
-    defer indexed_blocks.deinit(allocator);
-
-    const message_order = try indexed_blocks.toOwnedSlice(allocator);
-    errdefer allocator.free(message_order);
-
-    var dictionary_count: usize = 0;
-    var record_count: usize = 0;
-    for (message_order) |blk| {
-        switch (blk.header) {
-            .dictionary_batch => dictionary_count += 1,
-            .record_batch => record_count += 1,
-            else => return error.InvalidFile,
-        }
-    }
-
-    const dictionaries = try allocator.alloc(IndexedBlock, dictionary_count);
-    errdefer allocator.free(dictionaries);
-    const record_batches = try allocator.alloc(IndexedBlock, record_count);
-    errdefer allocator.free(record_batches);
-    const record_message_positions = try allocator.alloc(usize, record_count);
-    errdefer allocator.free(record_message_positions);
-
-    var d_i: usize = 0;
-    var r_i: usize = 0;
-    for (message_order, 0..) |blk, pos| {
-        switch (blk.header) {
-            .dictionary_batch => {
-                dictionaries[d_i] = blk;
-                d_i += 1;
-            },
-            .record_batch => {
-                record_batches[r_i] = blk;
-                record_message_positions[r_i] = pos;
-                r_i += 1;
-            },
-            else => return error.InvalidFile,
-        }
-    }
-
-    return .{
-        .schema_block = .{
-            .offset = schema_offset,
-            .parsed = schema_msg,
-            .header = .schema,
-        },
-        .dictionaries = dictionaries,
-        .record_batches = record_batches,
-        .message_order = message_order,
-        .record_message_positions = record_message_positions,
-    };
-}
-
-fn findSchemaSearchLimit(footer_t: fbs.FooterT, header_len: usize, footer_start: usize) FileError!usize {
-    var limit = footer_start;
-    for (footer_t.dictionaries.items) |block| {
-        if (block.offset < 0) return error.InvalidFile;
-        const off = std.math.cast(usize, block.offset) orelse return error.InvalidFile;
-        if (off < header_len or off >= footer_start) return error.InvalidFile;
-        if (off < limit) limit = off;
-    }
-    for (footer_t.recordBatches.items) |block| {
-        if (block.offset < 0) return error.InvalidFile;
-        const off = std.math.cast(usize, block.offset) orelse return error.InvalidFile;
-        if (off < header_len or off >= footer_start) return error.InvalidFile;
-        if (off < limit) limit = off;
-    }
-    if (limit <= header_len) return error.InvalidFile;
-    return limit;
-}
-
-fn findSchemaMessage(
-    allocator: std.mem.Allocator,
-    bytes: []const u8,
-    search_start: usize,
-    search_limit: usize,
-) FileError!FoundSchema {
-    if (search_start >= search_limit) return error.InvalidFile;
-    if (search_limit > bytes.len) return error.InvalidFile;
-
-    var off = search_start;
-    while (off + 4 <= search_limit) : (off += 1) {
-        const first = readU32Le(bytes[off .. off + 4]);
-        if (first == 0) continue;
-
-        const parsed = parseMessageAt(allocator, bytes, off, search_limit) catch |err| switch (err) {
-            error.InvalidFile => continue,
-            else => return err,
-        };
-        if (parsed.header != .schema) return error.InvalidFile;
-        return .{
-            .offset = off,
-            .parsed = parsed,
-        };
-    }
-    return error.InvalidFile;
-}
-
-fn collectIndexedBlocks(
-    allocator: std.mem.Allocator,
-    bytes: []const u8,
-    footer_t: fbs.FooterT,
-    header_len: usize,
-    footer_start: usize,
-) FileError!std.ArrayList(IndexedBlock) {
-    const total_blocks = std.math.add(usize, footer_t.dictionaries.items.len, footer_t.recordBatches.items.len) catch return error.InvalidFile;
-    var blocks = try std.ArrayList(IndexedBlock).initCapacity(allocator, total_blocks);
-    errdefer blocks.deinit(allocator);
-
-    for (footer_t.dictionaries.items) |block| {
-        try appendCheckedBlock(allocator, bytes, &blocks, block, .dictionary_batch, header_len, footer_start);
-    }
-    for (footer_t.recordBatches.items) |block| {
-        try appendCheckedBlock(allocator, bytes, &blocks, block, .record_batch, header_len, footer_start);
-    }
-
-    std.mem.sort(IndexedBlock, blocks.items, {}, struct {
-        fn lessThan(_: void, lhs: IndexedBlock, rhs: IndexedBlock) bool {
-            return lhs.offset < rhs.offset;
-        }
-    }.lessThan);
-
-    // Footer blocks must not overlap each other.
-    var prev_end: usize = 0;
-    var have_prev = false;
-    for (blocks.items) |blk| {
-        if (have_prev and blk.offset < prev_end) return error.InvalidFile;
-        prev_end = std.math.add(usize, blk.offset, blk.parsed.total_len) catch return error.InvalidFile;
-        have_prev = true;
-    }
-
-    return blocks;
-}
-
-fn appendCheckedBlock(
-    allocator: std.mem.Allocator,
-    bytes: []const u8,
-    blocks: *std.ArrayList(IndexedBlock),
-    block: fbs.BlockT,
-    expected_header: MessageHeaderKind,
-    header_len: usize,
-    footer_start: usize,
-) FileError!void {
-    if (block.offset < 0) return error.InvalidFile;
-    const offset = std.math.cast(usize, block.offset) orelse return error.InvalidFile;
-    if (offset < header_len or offset >= footer_start) return error.InvalidFile;
-
-    if (block.metaDataLength <= 0) return error.InvalidFile;
-    const expected_meta_len = std.math.cast(usize, block.metaDataLength) orelse return error.InvalidFile;
-    if (block.bodyLength < 0) return error.InvalidFile;
-    const expected_body_len = std.math.cast(usize, block.bodyLength) orelse return error.InvalidFile;
-
-    const parsed = try parseMessageAt(allocator, bytes, offset, footer_start);
-    if (parsed.meta_len != expected_meta_len) return error.InvalidFile;
-    if (parsed.body_len != expected_body_len) return error.InvalidFile;
-    if (parsed.header != expected_header) return error.InvalidFile;
-
-    try blocks.append(allocator, .{
-        .offset = offset,
-        .parsed = parsed,
-        .header = expected_header,
-    });
-}
-
-fn parseMessageAt(
-    allocator: std.mem.Allocator,
-    bytes: []const u8,
-    offset: usize,
-    limit: usize,
-) FileError!ParsedMessage {
-    if (offset >= limit) return error.InvalidFile;
-    if (limit > bytes.len) return error.InvalidFile;
-
-    if (limit - offset < 4) return error.InvalidFile;
-    const first = readU32Le(bytes[offset .. offset + 4]);
-
-    var prefix_len: usize = 4;
-    var metadata_len_u32 = first;
-    if (first == format.ContinuationMarker) {
-        if (limit - offset < 8) return error.InvalidFile;
-        metadata_len_u32 = readU32Le(bytes[offset + 4 .. offset + 8]);
-        prefix_len = 8;
-        if (metadata_len_u32 == 0) return error.InvalidFile;
-    } else if (first == 0) {
-        return error.InvalidFile;
-    }
-
-    const metadata_len = std.math.cast(usize, metadata_len_u32) orelse return error.InvalidFile;
-    const metadata_start = std.math.add(usize, offset, prefix_len) catch return error.InvalidFile;
-    const metadata_end = std.math.add(usize, metadata_start, metadata_len) catch return error.InvalidFile;
-    if (metadata_end > limit) return error.InvalidFile;
-    const metadata = bytes[metadata_start..metadata_end];
-    if (!isSaneFlatbufferTable(metadata)) return error.InvalidFile;
-
-    const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    var msg_t = try fbs.MessageT.Unpack(msg, opts);
-    defer msg_t.deinit(allocator);
-
-    if (msg_t.bodyLength < 0) return error.InvalidFile;
-    const body_len = std.math.cast(usize, msg_t.bodyLength) orelse return error.InvalidFile;
-    const total_len = std.math.add(usize, prefix_len + metadata_len, body_len) catch return error.InvalidFile;
-    const end = std.math.add(usize, offset, total_len) catch return error.InvalidFile;
-    if (end > limit) return error.InvalidFile;
-
-    const header: MessageHeaderKind = switch (msg_t.header) {
-        .Schema => .schema,
-        .DictionaryBatch => .dictionary_batch,
-        .RecordBatch => .record_batch,
-        else => .other,
-    };
-    return .{
-        .meta_len = prefix_len + metadata_len,
-        .body_len = body_len,
-        .total_len = total_len,
-        .metadata_start = metadata_start,
-        .metadata_end = metadata_end,
-        .body_start = metadata_end,
-        .body_end = end,
-        .header = header,
-    };
-}
 
 fn isSaneFlatbufferTable(buf: []const u8) bool {
     if (buf.len < 8) return false;
@@ -660,6 +639,115 @@ test "ipc file reader supports indexed record batch access" {
     try std.testing.expectEqual(@as(usize, 2), first.numRows());
     try std.testing.expectEqual(@as(i32, 1), first_ids.value(0));
     try std.testing.expectEqual(@as(i32, 2), first_ids.value(1));
+}
+
+test "ipc file reader rebuilds dictionary state for indexed reads" {
+    const allocator = std.testing.allocator;
+
+    const zarray = @import("../array/array_ref.zig");
+    const dict_arr = @import("../array/dictionary_array.zig");
+    const str = @import("../array/string_array.zig");
+    const DataType = @import("../datatype.zig").DataType;
+    const Field = @import("../datatype.zig").Field;
+
+    const value_type = DataType{ .string = {} };
+    const dict_type = DataType{
+        .dictionary = .{
+            .id = null,
+            .index_type = .{ .bit_width = 32, .signed = true },
+            .value_type = &value_type,
+            .ordered = false,
+        },
+    };
+    const fields = [_]Field{
+        .{ .name = "color", .data_type = &dict_type, .nullable = false },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var dict_values_builder_1 = try str.StringBuilder.init(allocator, 2, 8);
+    defer dict_values_builder_1.deinit();
+    try dict_values_builder_1.append("red");
+    try dict_values_builder_1.append("blue");
+    var dict_values_1 = try dict_values_builder_1.finish();
+    defer dict_values_1.release();
+
+    var dict_builder_1 = try dict_arr.DictionaryBuilder.init(
+        allocator,
+        .{ .bit_width = 32, .signed = true },
+        &value_type,
+        2,
+    );
+    defer dict_builder_1.deinit();
+    try dict_builder_1.appendIndex(1);
+    try dict_builder_1.appendIndex(0);
+    var dict_col_1 = try dict_builder_1.finish(dict_values_1);
+    defer dict_col_1.release();
+    var batch_1 = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{dict_col_1});
+    defer batch_1.deinit();
+
+    var dict_values_builder_2 = try str.StringBuilder.init(allocator, 2, 8);
+    defer dict_values_builder_2.deinit();
+    try dict_values_builder_2.append("red");
+    try dict_values_builder_2.append("blue");
+    var dict_values_2 = try dict_values_builder_2.finish();
+    defer dict_values_2.release();
+
+    var dict_builder_2 = try dict_arr.DictionaryBuilder.init(
+        allocator,
+        .{ .bit_width = 32, .signed = true },
+        &value_type,
+        1,
+    );
+    defer dict_builder_2.deinit();
+    try dict_builder_2.appendIndex(0);
+    var dict_col_2 = try dict_builder_2.finish(dict_values_2);
+    defer dict_col_2.release();
+    var batch_2 = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{dict_col_2});
+    defer batch_2.deinit();
+
+    var file_bytes = std.ArrayList(u8){};
+    defer file_bytes.deinit(allocator);
+    const Sink = struct {
+        allocator: std.mem.Allocator,
+        out: *std.ArrayList(u8),
+        pub const Error = error{OutOfMemory};
+        pub fn writeAll(self: @This(), bytes: []const u8) Error!void {
+            try self.out.appendSlice(self.allocator, bytes);
+        }
+    };
+
+    var fw = try file_writer.FileWriter(Sink).init(allocator, .{ .allocator = allocator, .out = &file_bytes });
+    defer fw.deinit();
+    try fw.writeSchema(schema);
+    try fw.writeRecordBatch(batch_1);
+    try fw.writeRecordBatch(batch_2);
+    try fw.writeEnd();
+
+    var fixed = std.io.fixedBufferStream(file_bytes.items);
+    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    defer fr.deinit();
+
+    _ = try fr.readSchema();
+    try std.testing.expectEqual(@as(usize, 2), try fr.recordBatchCount());
+
+    var second = try fr.readRecordBatchAt(1);
+    defer second.deinit();
+    const second_dict = dict_arr.DictionaryArray{ .data = second.columns[0].data() };
+    try std.testing.expectEqual(@as(usize, 1), second_dict.len());
+    try std.testing.expectEqual(@as(i64, 0), second_dict.index(0));
+    const second_values = str.StringArray{ .data = second_dict.dictionaryRef().data() };
+    try std.testing.expectEqualStrings("red", second_values.value(0));
+    try std.testing.expectEqualStrings("blue", second_values.value(1));
+
+    var first = try fr.readRecordBatchAt(0);
+    defer first.deinit();
+    const first_dict = dict_arr.DictionaryArray{ .data = first.columns[0].data() };
+    try std.testing.expectEqual(@as(usize, 2), first_dict.len());
+    try std.testing.expectEqual(@as(i64, 1), first_dict.index(0));
+    try std.testing.expectEqual(@as(i64, 0), first_dict.index(1));
+    const first_values = str.StringArray{ .data = first_dict.dictionaryRef().data() };
+    try std.testing.expectEqualStrings("red", first_values.value(0));
+    try std.testing.expectEqualStrings("blue", first_values.value(1));
 }
 
 test "ipc file reader rejects footer with out-of-bounds block offset" {

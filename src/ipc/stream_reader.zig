@@ -307,7 +307,7 @@ pub fn buildRecordBatchFromMessageMetadata(
     return try buildRecordBatchFromFlatbuf(allocator, schema_ref, msg_t.header.RecordBatch.?, body, dictionary_values);
 }
 
-fn buildSchemaFromFlatbuf(allocator: std.mem.Allocator, schema_t: *fbs.SchemaT) (StreamError || error{OutOfMemory})!Schema {
+pub fn buildSchemaFromFlatbuf(allocator: std.mem.Allocator, schema_t: *fbs.SchemaT) (StreamError || error{OutOfMemory})!Schema {
     if (schema_t.endianness != .Little) return StreamError.UnsupportedType;
     const fields = try allocator.alloc(Field, schema_t.fields.items.len);
     for (schema_t.fields.items, 0..) |field_t, i| {
@@ -829,10 +829,15 @@ fn readArrayFromMeta(
         if (meta.length == 0) {
             buffers[i] = array_data.SharedBuffer.empty;
         } else {
-            var owned = try buffer.OwnedBuffer.init(allocator, len);
-            errdefer owned.deinit();
-            @memcpy(owned.data[0..len], body.data[start..end]);
-            buffers[i] = try owned.toShared(len);
+            const required_alignment = requiredBufferAlignment(layout_dt, i);
+            if (canReuseBodySlice(body, start, required_alignment)) {
+                buffers[i] = body.slice(start, end);
+            } else {
+                var owned = try buffer.OwnedBuffer.init(allocator, len);
+                errdefer owned.deinit();
+                @memcpy(owned.data[0..len], body.data[start..end]);
+                buffers[i] = try owned.toShared(len);
+            }
         }
         buf_count += 1;
     }
@@ -923,6 +928,88 @@ fn childValueType(dt: DataType) DataType {
         .large_list_view => |lst| lst.value_field.data_type.*,
         else => dt,
     };
+}
+
+fn hasTopLevelValidityBitmap(dt: DataType) bool {
+    return switch (storageDataType(dt)) {
+        .null, .sparse_union, .dense_union, .run_end_encoded => false,
+        else => true,
+    };
+}
+
+fn alignmentForIntType(int_type: datatype.IntType) usize {
+    return switch (int_type.bit_width) {
+        8 => @alignOf(i8),
+        16 => @alignOf(i16),
+        32 => @alignOf(i32),
+        64 => @alignOf(i64),
+        else => 1,
+    };
+}
+
+fn primitiveValueAlignment(dt: DataType) usize {
+    return switch (storageDataType(dt)) {
+        .bool => @alignOf(u8),
+        .uint8 => @alignOf(u8),
+        .int8 => @alignOf(i8),
+        .uint16 => @alignOf(u16),
+        .int16 => @alignOf(i16),
+        .uint32 => @alignOf(u32),
+        .int32 => @alignOf(i32),
+        .uint64 => @alignOf(u64),
+        .int64 => @alignOf(i64),
+        .half_float => @alignOf(u16),
+        .float => @alignOf(f32),
+        .double => @alignOf(f64),
+        .date32 => @alignOf(i32),
+        .date64 => @alignOf(i64),
+        .time32 => @alignOf(i32),
+        .time64 => @alignOf(i64),
+        .timestamp => @alignOf(i64),
+        .duration => @alignOf(i64),
+        .interval_months => @alignOf(i32),
+        .interval_day_time => @alignOf(i64),
+        .interval_month_day_nano => @alignOf(i128),
+        .decimal32 => @alignOf(i32),
+        .decimal64 => @alignOf(i64),
+        .decimal128 => @alignOf(i128),
+        .decimal256 => @alignOf(i256),
+        else => 1,
+    };
+}
+
+fn requiredBufferAlignment(dt: DataType, buffer_idx: usize) usize {
+    const layout_dt = storageDataType(dt);
+    if (hasTopLevelValidityBitmap(layout_dt)) {
+        if (buffer_idx == 0) return @alignOf(u8);
+        const value_idx = buffer_idx - 1;
+        return switch (layout_dt) {
+            .bool => @alignOf(u8),
+            .uint8, .int8, .uint16, .int16, .uint32, .int32, .uint64, .int64, .half_float, .float, .double, .fixed_size_binary, .date32, .date64, .time32, .time64, .timestamp, .duration, .interval_months, .interval_day_time, .interval_month_day_nano, .decimal32, .decimal64, .decimal128, .decimal256 => primitiveValueAlignment(layout_dt),
+            .string, .binary, .string_view, .binary_view => if (value_idx == 0) @alignOf(i32) else @alignOf(u8),
+            .large_string, .large_binary => if (value_idx == 0) @alignOf(i64) else @alignOf(u8),
+            .list, .map => @alignOf(i32),
+            .large_list => @alignOf(i64),
+            .list_view => @alignOf(i32),
+            .large_list_view => @alignOf(i64),
+            .dictionary => alignmentForIntType(layout_dt.dictionary.index_type),
+            .struct_, .fixed_size_list => @alignOf(u8),
+            else => @alignOf(u8),
+        };
+    }
+
+    return switch (layout_dt) {
+        .sparse_union => @alignOf(i8),
+        .dense_union => if (buffer_idx == 0) @alignOf(i8) else @alignOf(i32),
+        else => @alignOf(u8),
+    };
+}
+
+fn canReuseBodySlice(body: array_data.SharedBuffer, start: usize, required_alignment: usize) bool {
+    if (body.storage == null) return false;
+    if (required_alignment <= 1) return true;
+    const addr = @intFromPtr(body.data.ptr) + start;
+    return (addr & (required_alignment - 1)) == 0;
 }
 
 fn bufferCountForType(dt: DataType, variadic_buffer_counts: []const i64, variadic_index: *usize) StreamError!usize {
@@ -3251,6 +3338,52 @@ test "ipc reader handles non-8-aligned body and still reads next real writer mes
     var second = second_opt.?;
     defer second.deinit(allocator);
     try std.testing.expect(second.msg.header == .Schema);
+}
+
+test "ipc reader reuses body storage for aligned buffers" {
+    const allocator = std.testing.allocator;
+
+    const int_type = DataType{ .int32 = {} };
+    const fields = [_]Field{
+        .{ .name = "v", .data_type = &int_type, .nullable = true },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var values_builder = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 3);
+    defer values_builder.deinit();
+    try values_builder.append(10);
+    try values_builder.appendNull();
+    try values_builder.append(30);
+    var values = try values_builder.finish();
+    defer values.release();
+
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{values});
+    defer batch.deinit();
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    defer out.deinit();
+    var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
+    try writer.writeSchema(schema);
+    try writer.writeRecordBatch(batch);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out.items);
+    var reader = StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    defer reader.deinit();
+
+    _ = try reader.readSchema();
+    const out_batch_opt = try reader.nextRecordBatch();
+    try std.testing.expect(out_batch_opt != null);
+    var out_batch = out_batch_opt.?;
+    defer out_batch.deinit();
+
+    const col = out_batch.columns[0].data();
+    try std.testing.expectEqual(@as(usize, 2), col.buffers.len);
+    try std.testing.expect(col.buffers[0].len() > 0);
+    try std.testing.expect(col.buffers[1].len() > 0);
+    try std.testing.expect(col.buffers[0].storage != null);
+    try std.testing.expect(col.buffers[0].storage == col.buffers[1].storage);
 }
 
 test "ipc reader returns EndOfStream for truncated metadata payload" {
