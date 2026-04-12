@@ -208,8 +208,6 @@ arrow::Status GenerateComplex(const std::string& path, ContainerMode container) 
   ARROW_RETURN_NOT_OK(struct_ids->Append(10));
   ARROW_RETURN_NOT_OK(struct_names->Append("aa"));
   ARROW_RETURN_NOT_OK(struct_builder.AppendNull());
-  ARROW_RETURN_NOT_OK(struct_ids->Append(0));
-  ARROW_RETURN_NOT_OK(struct_names->AppendNull());
   ARROW_RETURN_NOT_OK(struct_builder.Append());
   ARROW_RETURN_NOT_OK(struct_ids->Append(30));
   ARROW_RETURN_NOT_OK(struct_names->Append("cc"));
