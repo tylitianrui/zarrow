@@ -66,6 +66,7 @@ const fbs = struct {
     const ListViewT = arrow_fbs.org_apache_arrow_flatbuf_ListView.ListViewT;
     const Struct_T = arrow_fbs.org_apache_arrow_flatbuf_Struct_.Struct_T;
     const NullT = arrow_fbs.org_apache_arrow_flatbuf_Null.NullT;
+    const BodyCompressionT = arrow_fbs.org_apache_arrow_flatbuf_BodyCompression.BodyCompressionT;
     const CompressionType = arrow_fbs.org_apache_arrow_flatbuf_CompressionType.CompressionType;
     const BodyCompressionMethod = arrow_fbs.org_apache_arrow_flatbuf_BodyCompressionMethod.BodyCompressionMethod;
     const TensorT = arrow_fbs.org_apache_arrow_flatbuf_Tensor.TensorT;
@@ -1479,7 +1480,7 @@ fn decodeRecordBatchBody(
             const expected_len = std.math.cast(usize, uncompressed_len_i64) orelse return StreamError.InvalidBody;
             break :blk switch (compression.codec) {
                 .ZSTD => try decompressZstdPayload(allocator, payload, expected_len),
-                .LZ4_FRAME => return StreamError.UnsupportedType,
+                .LZ4_FRAME => try decompressLz4FramePayload(allocator, payload, expected_len),
             };
         };
 
@@ -1541,6 +1542,128 @@ fn decompressZstdPayload(
     var owned = try buffer.OwnedBuffer.init(allocator, decoded.len);
     @memcpy(owned.data[0..decoded.len], decoded);
     return try owned.toShared(decoded.len);
+}
+
+const Lz4Symbols = struct {
+    lib: std.DynLib,
+    create_decompression_context: *const fn (*?*anyopaque, c_uint) callconv(.c) usize,
+    free_decompression_context: *const fn (?*anyopaque) callconv(.c) usize,
+    decompress: *const fn (?*anyopaque, ?*anyopaque, *usize, ?*const anyopaque, *usize, ?*const anyopaque) callconv(.c) usize,
+    is_error: *const fn (usize) callconv(.c) c_uint,
+    compress_frame_bound: ?*const fn (usize, ?*const anyopaque) callconv(.c) usize = null,
+    compress_frame: ?*const fn (?*anyopaque, usize, ?*const anyopaque, usize, ?*const anyopaque) callconv(.c) usize = null,
+};
+
+fn loadLz4Symbols() !Lz4Symbols {
+    const candidates = switch (@import("builtin").os.tag) {
+        .macos => &[_][]const u8{
+            "liblz4.dylib",
+            "liblz4.1.dylib",
+            "/opt/homebrew/lib/liblz4.dylib",
+            "/usr/local/lib/liblz4.dylib",
+        },
+        .linux => &[_][]const u8{
+            "liblz4.so.1",
+            "liblz4.so",
+        },
+        .windows => &[_][]const u8{
+            "lz4.dll",
+            "liblz4.dll",
+        },
+        else => &[_][]const u8{},
+    };
+
+    var last_err: ?anyerror = null;
+    for (candidates) |path| {
+        var lib = std.DynLib.open(path) catch |err| {
+            last_err = err;
+            continue;
+        };
+        errdefer lib.close();
+
+        const create_ctx = lib.lookup(*const fn (*?*anyopaque, c_uint) callconv(.c) usize, "LZ4F_createDecompressionContext") orelse continue;
+        const free_ctx = lib.lookup(*const fn (?*anyopaque) callconv(.c) usize, "LZ4F_freeDecompressionContext") orelse continue;
+        const decompress_fn = lib.lookup(*const fn (?*anyopaque, ?*anyopaque, *usize, ?*const anyopaque, *usize, ?*const anyopaque) callconv(.c) usize, "LZ4F_decompress") orelse continue;
+        const is_error_fn = lib.lookup(*const fn (usize) callconv(.c) c_uint, "LZ4F_isError") orelse continue;
+
+        return .{
+            .lib = lib,
+            .create_decompression_context = create_ctx,
+            .free_decompression_context = free_ctx,
+            .decompress = decompress_fn,
+            .is_error = is_error_fn,
+            .compress_frame_bound = lib.lookup(*const fn (usize, ?*const anyopaque) callconv(.c) usize, "LZ4F_compressFrameBound"),
+            .compress_frame = lib.lookup(*const fn (?*anyopaque, usize, ?*const anyopaque, usize, ?*const anyopaque) callconv(.c) usize, "LZ4F_compressFrame"),
+        };
+    }
+
+    return last_err orelse error.FileNotFound;
+}
+
+fn decompressLz4FramePayload(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    expected_len: usize,
+) (StreamError || error{OutOfMemory})!array_data.SharedBuffer {
+    var syms = loadLz4Symbols() catch return StreamError.UnsupportedType;
+    defer syms.lib.close();
+
+    var dctx: ?*anyopaque = null;
+    const create_rc = syms.create_decompression_context(&dctx, 100); // LZ4F_VERSION
+    if (syms.is_error(create_rc) != 0 or dctx == null) return StreamError.InvalidBody;
+    defer _ = syms.free_decompression_context(dctx);
+
+    var out_owned = try buffer.OwnedBuffer.init(allocator, expected_len);
+    errdefer out_owned.deinit();
+    const out = out_owned.data[0..expected_len];
+
+    var src_pos: usize = 0;
+    var dst_pos: usize = 0;
+    while (true) {
+        var src_size = payload.len - src_pos;
+        var dst_size = expected_len - dst_pos;
+        const rc = syms.decompress(
+            dctx,
+            if (dst_size == 0) null else @ptrCast(out.ptr + dst_pos),
+            &dst_size,
+            if (src_size == 0) null else @ptrCast(payload.ptr + src_pos),
+            &src_size,
+            null,
+        );
+        if (syms.is_error(rc) != 0) return StreamError.InvalidBody;
+
+        src_pos += src_size;
+        dst_pos += dst_size;
+
+        if (rc == 0) break;
+        if (src_size == 0 and dst_size == 0) return StreamError.InvalidBody;
+        if (dst_pos > expected_len or src_pos > payload.len) return StreamError.InvalidBody;
+    }
+
+    if (dst_pos != expected_len) return StreamError.InvalidBody;
+    if (src_pos != payload.len) return StreamError.InvalidBody;
+    return try out_owned.toShared(expected_len);
+}
+
+fn compressLz4FrameForTest(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var syms = loadLz4Symbols() catch return error.SkipZigTest;
+    defer syms.lib.close();
+
+    const bound_fn = syms.compress_frame_bound orelse return error.SkipZigTest;
+    const compress_fn = syms.compress_frame orelse return error.SkipZigTest;
+    const bound = bound_fn(input.len, null);
+    const out = try allocator.alloc(u8, bound);
+    errdefer allocator.free(out);
+
+    const written = compress_fn(
+        @ptrCast(out.ptr),
+        out.len,
+        if (input.len == 0) null else @ptrCast(input.ptr),
+        input.len,
+        null,
+    );
+    if (syms.is_error(written) != 0) return error.SkipZigTest;
+    return try allocator.realloc(out, written);
 }
 
 fn ingestDictionaryBatchWithMap(
@@ -3622,6 +3745,53 @@ test "ipc reader handles body compression framing for zstd and lz4 codecs" {
         try std.testing.expect(arr.isNull(1));
         try std.testing.expectEqual(@as(i32, 30), arr.value(2));
     }
+}
+
+test "ipc reader decodes real lz4 frame payload for compressed record batch body" {
+    const allocator = std.testing.allocator;
+
+    const raw = [_]u8{ 1, 0, 0, 0, 2, 0, 0, 0 };
+    const frame = compressLz4FrameForTest(allocator, raw[0..]) catch |err| switch (err) {
+        error.SkipZigTest => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(frame);
+
+    const compressed_len = std.math.add(usize, 8, frame.len) catch return error.SkipZigTest;
+    var body_owned = try buffer.OwnedBuffer.init(allocator, compressed_len);
+    defer body_owned.deinit();
+    var header: [8]u8 = undefined;
+    std.mem.writeInt(i64, &header, @intCast(raw.len), .little);
+    @memcpy(body_owned.data[0..8], header[0..]);
+    @memcpy(body_owned.data[8..compressed_len], frame);
+    var body = try body_owned.toShared(compressed_len);
+    defer body.release();
+
+    const rb = try allocator.create(fbs.RecordBatchT);
+    defer {
+        rb.deinit(allocator);
+        allocator.destroy(rb);
+    }
+    var nodes = try std.ArrayList(fbs.FieldNodeT).initCapacity(allocator, 1);
+    try nodes.append(allocator, .{ .length = 2, .null_count = 0 });
+    var buffers = try std.ArrayList(fbs.BufferT).initCapacity(allocator, 2);
+    try buffers.append(allocator, .{ .offset = 0, .length = 0 });
+    try buffers.append(allocator, .{ .offset = 0, .length = @intCast(compressed_len) });
+    const compression = try allocator.create(fbs.BodyCompressionT);
+    compression.* = .{ .codec = .LZ4_FRAME, .method = .BUFFER };
+    rb.* = .{
+        .length = 2,
+        .nodes = nodes,
+        .buffers = buffers,
+        .compression = compression,
+        .variadicBufferCounts = try std.ArrayList(i64).initCapacity(allocator, 0),
+    };
+
+    var decoded = try decodeRecordBatchBody(allocator, rb, body);
+    defer decoded.deinit(allocator);
+    try std.testing.expect(decoded.body.len() >= raw.len);
+    try std.testing.expectEqual(@as(i64, @intCast(raw.len)), decoded.buffers_meta[1].length);
+    try std.testing.expectEqualSlices(u8, raw[0..], decoded.body.data[0..raw.len]);
 }
 
 test "ipc reader decodes tensor message via tensor-like API" {
