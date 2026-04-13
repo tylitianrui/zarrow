@@ -1,5 +1,11 @@
 const std = @import("std");
 
+fn configureIpcCompression(step: *std.Build.Step.Compile, deps_check: *std.Build.Step) void {
+    step.step.dependOn(deps_check);
+    step.linkSystemLibrary("zstd");
+    step.linkSystemLibrary("lz4");
+}
+
 // Configure the zarrow package as a reusable module plus a dedicated test step.
 pub fn build(b: *std.Build) !void {
     // Allow downstream consumers and tests to select their own target and optimization mode.
@@ -53,6 +59,21 @@ pub fn build(b: *std.Build) !void {
     run_fix_flatc_lib.step.dependOn(&gen_step.step);
     run_fix_flatc_lib.addFileArg(gen_step.module.root_source_file.?);
 
+    const compression_deps_check_exe = b.addExecutable(.{
+        .name = "check-ipc-compression-deps",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/check_ipc_compression_deps.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const run_compression_deps_check = b.addRunArtifact(compression_deps_check_exe);
+    const compression_deps_check_step = b.step(
+        "check-ipc-compression-deps",
+        "Verify zstd/lz4 dependencies required for IPC BodyCompression",
+    );
+    compression_deps_check_step.dependOn(&run_compression_deps_check.step);
+
     const arrow_fbs_module = b.createModule(.{
         .root_source_file = gen_step.module.root_source_file,
         .imports = &.{.{ .name = "flatbufferz", .module = fbz_dep.module("flatbufferz") }},
@@ -71,6 +92,7 @@ pub fn build(b: *std.Build) !void {
     test_module.addImport("arrow_fbs", arrow_fbs_module);
 
     const tests = b.addTest(.{ .root_module = test_module });
+    configureIpcCompression(tests, &run_compression_deps_check.step);
     tests.step.dependOn(&run_fix_flatc_lib.step);
 
     // Discover example files in the `examples` directory and wire them into the build.
@@ -96,6 +118,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }),
     });
+    configureIpcCompression(fuzz_layout_exe, &run_compression_deps_check.step);
     fuzz_layout_exe.step.dependOn(&run_fix_flatc_lib.step);
     fuzz_layout_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
@@ -112,6 +135,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }),
     });
+    configureIpcCompression(fuzz_ipc_exe, &run_compression_deps_check.step);
     fuzz_ipc_exe.step.dependOn(&run_fix_flatc_lib.step);
     fuzz_ipc_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
@@ -174,6 +198,7 @@ pub fn build(b: *std.Build) !void {
                 .optimize = optimize,
             }),
         });
+        configureIpcCompression(exe, &run_compression_deps_check.step);
         exe.step.dependOn(&run_fix_flatc_lib.step);
 
         exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
@@ -200,6 +225,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }),
     });
+    configureIpcCompression(interop_writer_exe, &run_compression_deps_check.step);
     interop_writer_exe.step.dependOn(&run_fix_flatc_lib.step);
     interop_writer_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
@@ -216,6 +242,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }),
     });
+    configureIpcCompression(interop_check_exe, &run_compression_deps_check.step);
     interop_check_exe.step.dependOn(&run_fix_flatc_lib.step);
     interop_check_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
@@ -257,6 +284,7 @@ pub fn build(b: *std.Build) !void {
                 .optimize = optimize,
             }),
         });
+        configureIpcCompression(bench_exe, &run_compression_deps_check.step);
         bench_exe.step.dependOn(&run_fix_flatc_lib.step);
         bench_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 

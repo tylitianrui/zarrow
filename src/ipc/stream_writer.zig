@@ -11,6 +11,26 @@ const arrow_fbs = @import("arrow_fbs");
 
 pub const StreamError = format.StreamError;
 
+extern fn ZSTD_compressBound(src_size: usize) usize;
+extern fn ZSTD_compress(
+    dst: ?*anyopaque,
+    dst_capacity: usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+    compression_level: c_int,
+) usize;
+extern fn ZSTD_isError(code: usize) c_uint;
+
+extern fn LZ4F_compressFrameBound(src_size: usize, prefs_ptr: ?*const anyopaque) usize;
+extern fn LZ4F_compressFrame(
+    dst: ?*anyopaque,
+    dst_capacity: usize,
+    src: ?*const anyopaque,
+    src_size: usize,
+    prefs_ptr: ?*const anyopaque,
+) usize;
+extern fn LZ4F_isError(code: usize) c_uint;
+
 pub const Schema = schema_mod.Schema;
 pub const Field = datatype.Field;
 pub const DataType = datatype.DataType;
@@ -904,14 +924,16 @@ fn applyBodyCompression(
             continue;
         }
 
-        const encoded_len = std.math.add(usize, 8, src.len()) catch return StreamError.InvalidMetadata;
+        const compressed_payload = try compressBodyBufferPayload(allocator, codec, src.data);
+        defer allocator.free(compressed_payload);
+        const encoded_len = std.math.add(usize, 8, compressed_payload.len) catch return StreamError.InvalidMetadata;
         var encoded = try buffer.OwnedBuffer.init(allocator, encoded_len);
         errdefer encoded.deinit();
 
         var header: [8]u8 = undefined;
-        std.mem.writeInt(i64, &header, -1, .little);
+        std.mem.writeInt(i64, &header, @intCast(src.len()), .little);
         @memcpy(encoded.data[0..8], header[0..]);
-        @memcpy(encoded.data[8..encoded_len], src.data);
+        @memcpy(encoded.data[8..encoded_len], compressed_payload);
 
         const shared = try encoded.toShared(encoded_len);
         try body_buffers.append(allocator, shared);
@@ -930,6 +952,55 @@ fn applyBodyCompression(
         .method = .BUFFER,
     };
     return compression_ptr;
+}
+
+fn compressBodyBufferPayload(
+    allocator: std.mem.Allocator,
+    codec: BodyCompressionCodec,
+    input: []const u8,
+) (WriterError || error{OutOfMemory})![]u8 {
+    return switch (codec) {
+        .zstd => try compressZstdPayload(allocator, input),
+        .lz4_frame => try compressLz4FramePayload(allocator, input),
+    };
+}
+
+fn compressZstdPayload(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+) (WriterError || error{OutOfMemory})![]u8 {
+    const bound = ZSTD_compressBound(input.len);
+    const out = try allocator.alloc(u8, bound);
+    errdefer allocator.free(out);
+
+    const written = ZSTD_compress(
+        @ptrCast(out.ptr),
+        out.len,
+        if (input.len == 0) null else @ptrCast(input.ptr),
+        input.len,
+        1,
+    );
+    if (ZSTD_isError(written) != 0) return StreamError.InvalidMetadata;
+    return try allocator.realloc(out, written);
+}
+
+fn compressLz4FramePayload(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+) (WriterError || error{OutOfMemory})![]u8 {
+    const bound = LZ4F_compressFrameBound(input.len, null);
+    const out = try allocator.alloc(u8, bound);
+    errdefer allocator.free(out);
+
+    const written = LZ4F_compressFrame(
+        @ptrCast(out.ptr),
+        out.len,
+        if (input.len == 0) null else @ptrCast(input.ptr),
+        input.len,
+        null,
+    );
+    if (LZ4F_isError(written) != 0) return StreamError.InvalidMetadata;
+    return try allocator.realloc(out, written);
 }
 
 fn computeNullCount(data: *const ArrayData) usize {
@@ -1245,11 +1316,9 @@ test "ipc writer emits body compression metadata and framing" {
     };
     const schema = Schema{ .fields = fields[0..] };
 
-    var builder = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 3);
+    var builder = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 1024);
     defer builder.deinit();
-    try builder.append(1);
-    try builder.append(2);
-    try builder.append(3);
+    for (0..1024) |_| try builder.append(7);
     var col = try builder.finish();
     defer col.release();
 
@@ -1283,9 +1352,72 @@ test "ipc writer emits body compression metadata and framing" {
     try std.testing.expectEqual(fbs.CompressionType.ZSTD, rb.compression.?.codec);
     try std.testing.expectEqual(fbs.BodyCompressionMethod.BUFFER, rb.compression.?.method);
 
-    // Non-empty fixed-width values buffer (3 * int32) gets an extra 8-byte prefix.
+    // Non-empty fixed-width values buffer gets 8-byte prefix plus compressed bytes.
+    // Real compressed chunk should differ from legacy passthrough size (8 + raw = 4104).
     try std.testing.expectEqual(@as(i64, 0), rb.buffers.items[0].length);
-    try std.testing.expectEqual(@as(i64, 20), rb.buffers.items[1].length);
+    try std.testing.expect(rb.buffers.items[1].length > 8);
+    try std.testing.expect(rb.buffers.items[1].length != 4104);
+}
+
+test "ipc writer can switch body compression codec between record batches" {
+    const allocator = std.testing.allocator;
+
+    const int_type = DataType{ .int32 = {} };
+    const fields = [_]Field{
+        .{ .name = "id", .data_type = &int_type, .nullable = false },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var b1 = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 64);
+    defer b1.deinit();
+    for (0..64) |_| try b1.append(42);
+    var c1 = try b1.finish();
+    defer c1.release();
+    var rb1 = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{c1});
+    defer rb1.deinit();
+
+    var b2 = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 64);
+    defer b2.deinit();
+    for (0..64) |_| try b2.append(77);
+    var c2 = try b2.finish();
+    defer c2.release();
+    var rb2 = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{c2});
+    defer rb2.deinit();
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    defer out.deinit();
+
+    var writer = StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
+
+    try writer.writeSchema(schema);
+    writer.setBodyCompression(.zstd);
+    try writer.writeRecordBatch(rb1);
+    writer.setBodyCompression(.lz4_frame);
+    try writer.writeRecordBatch(rb2);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out.items);
+    const reader = stream.reader();
+
+    var seen_rb: usize = 0;
+    while (true) {
+        const next_opt = try readNextMessageForTest(allocator, reader);
+        if (next_opt == null) break;
+        var msg = next_opt.?;
+        defer msg.deinit(allocator);
+        if (msg.header != .RecordBatch) continue;
+        const rb = msg.header.RecordBatch.?;
+        try std.testing.expect(rb.compression != null);
+        if (seen_rb == 0) {
+            try std.testing.expectEqual(fbs.CompressionType.ZSTD, rb.compression.?.codec);
+        } else if (seen_rb == 1) {
+            try std.testing.expectEqual(fbs.CompressionType.LZ4_FRAME, rb.compression.?.codec);
+        }
+        seen_rb += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), seen_rb);
 }
 
 test "ipc writer rejects dictionary with unsigned index type" {
