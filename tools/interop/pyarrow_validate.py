@@ -111,8 +111,8 @@ def validate_ree(in_path: pathlib.Path, container: str) -> None:
         ree_type = schema[0].type
         if not pa.types.is_run_end_encoded(ree_type):
             raise RuntimeError("ree field must be run_end_encoded type")
-        if ree_type.run_end_type != pa.int32():
-            raise RuntimeError("ree run_end_type must be int32")
+        if ree_type.run_end_type not in (pa.int16(), pa.int32(), pa.int64()):
+            raise RuntimeError("ree run_end_type must be int16/int32/int64")
         if ree_type.value_type != pa.int32():
             raise RuntimeError("ree value_type must be int32")
 
@@ -227,7 +227,7 @@ def validate_view(in_path: pathlib.Path, container: str) -> None:
 def main() -> int:
     if len(sys.argv) not in (2, 3, 4):
         print(
-            "usage: pyarrow_validate.py <in.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]",
+            "usage: pyarrow_validate.py <in.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]",
             file=sys.stderr,
         )
         return 2
@@ -251,6 +251,12 @@ def main() -> int:
         validate_dict_delta(in_path, container)
         return 0
     if mode == "ree":
+        validate_ree(in_path, container)
+        return 0
+    if mode == "ree-int16":
+        validate_ree(in_path, container)
+        return 0
+    if mode == "ree-int64":
         validate_ree(in_path, container)
         return 0
     if mode == "complex":

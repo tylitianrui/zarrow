@@ -5,6 +5,8 @@ const FixtureCase = enum {
     canonical,
     dict_delta,
     ree,
+    ree_int16,
+    ree_int64,
     complex,
     extension,
     view,
@@ -24,7 +26,7 @@ pub fn main() !void {
     defer args.deinit();
     _ = args.next(); // exe
     const in_path = args.next() orelse {
-        std.log.err("usage: interop-fixture-check <in.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]", .{});
+        std.log.err("usage: interop-fixture-check <in.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]", .{});
         return error.InvalidArgs;
     };
     const fixture_case: FixtureCase = blk: {
@@ -32,6 +34,8 @@ pub fn main() !void {
         if (std.mem.eql(u8, mode, "canonical")) break :blk .canonical;
         if (std.mem.eql(u8, mode, "dict-delta")) break :blk .dict_delta;
         if (std.mem.eql(u8, mode, "ree")) break :blk .ree;
+        if (std.mem.eql(u8, mode, "ree-int16")) break :blk .ree_int16;
+        if (std.mem.eql(u8, mode, "ree-int64")) break :blk .ree_int64;
         if (std.mem.eql(u8, mode, "complex")) break :blk .complex;
         if (std.mem.eql(u8, mode, "extension")) break :blk .extension;
         if (std.mem.eql(u8, mode, "view")) break :blk .view;
@@ -46,7 +50,7 @@ pub fn main() !void {
         return error.InvalidArgs;
     };
     if (args.next() != null) {
-        std.log.err("usage: interop-fixture-check <in.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]", .{});
+        std.log.err("usage: interop-fixture-check <in.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]", .{});
         return error.InvalidArgs;
     }
     if (container_mode == .file and fixture_case == .dict_delta) {
@@ -77,6 +81,8 @@ fn checkFixture(reader: anytype, fixture_case: FixtureCase) !void {
         .canonical => try checkCanonical(reader),
         .dict_delta => try checkDictionaryDelta(reader),
         .ree => try checkRee(reader),
+        .ree_int16 => try checkRee(reader),
+        .ree_int64 => try checkRee(reader),
         .complex => try checkComplex(reader),
         .extension => try checkExtension(reader),
         .view => try checkView(reader),
@@ -149,7 +155,10 @@ fn checkRee(reader: anytype) !void {
     if (!std.mem.eql(u8, schema.fields[0].name, "ree")) return error.InvalidSchema;
     if (schema.fields[0].data_type.* != .run_end_encoded) return error.InvalidSchema;
     const ree_dt = schema.fields[0].data_type.run_end_encoded;
-    if (ree_dt.run_end_type.bit_width != 32 or !ree_dt.run_end_type.signed) return error.InvalidSchema;
+    if (!ree_dt.run_end_type.signed) return error.InvalidSchema;
+    if (ree_dt.run_end_type.bit_width != 16 and ree_dt.run_end_type.bit_width != 32 and ree_dt.run_end_type.bit_width != 64) {
+        return error.InvalidSchema;
+    }
     if (ree_dt.value_type.* != .int32) return error.InvalidSchema;
 
     const batch_opt = try reader.nextRecordBatch();

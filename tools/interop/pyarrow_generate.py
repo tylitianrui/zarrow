@@ -68,13 +68,13 @@ def generate_dict_delta(out_path: pathlib.Path, container: str) -> None:
         writer.write_batch(batch_2)
 
 
-def generate_ree(out_path: pathlib.Path, container: str) -> None:
+def generate_ree(out_path: pathlib.Path, container: str, run_end_type: pa.DataType = pa.int32()) -> None:
     # Writes one stream with:
-    # - schema: ree: run_end_encoded<int32, int32>
+    # - schema: ree: run_end_encoded<int{16|32|64}, int32>
     # - one record batch (5 rows)
     #   run_ends=[2, 5], values=[100, 200]
     #   decoded logical values=[100, 100, 200, 200, 200]
-    run_ends = pa.array([2, 5], type=pa.int32())
+    run_ends = pa.array([2, 5], type=run_end_type)
     values = pa.array([100, 200], type=pa.int32())
     col = pa.RunEndEncodedArray.from_arrays(run_ends, values)
     schema = pa.schema([pa.field("ree", col.type, nullable=True)])
@@ -184,7 +184,7 @@ def generate_view(out_path: pathlib.Path, container: str) -> None:
 def main() -> int:
     if len(sys.argv) not in (2, 3, 4):
         print(
-            "usage: pyarrow_generate.py <out.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]",
+            "usage: pyarrow_generate.py <out.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]",
             file=sys.stderr,
         )
         return 2
@@ -211,6 +211,12 @@ def main() -> int:
         return 0
     if mode == "ree":
         generate_ree(out_path, container)
+        return 0
+    if mode == "ree-int16":
+        generate_ree(out_path, container, pa.int16())
+        return 0
+    if mode == "ree-int64":
+        generate_ree(out_path, container, pa.int64())
         return 0
     if mode == "complex":
         generate_complex(out_path, container)

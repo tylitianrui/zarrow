@@ -18,6 +18,8 @@ const FixtureCase = enum {
     canonical,
     dict_delta,
     ree,
+    ree_int16,
+    ree_int64,
     complex,
     extension,
     view,
@@ -37,7 +39,7 @@ pub fn main() !void {
     defer args.deinit();
     _ = args.next(); // exe
     const out_path = args.next() orelse {
-        std.log.err("usage: interop-fixture-writer <out.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]", .{});
+        std.log.err("usage: interop-fixture-writer <out.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]", .{});
         return error.InvalidArgs;
     };
     const fixture_case: FixtureCase = blk: {
@@ -45,6 +47,8 @@ pub fn main() !void {
         if (std.mem.eql(u8, mode, "canonical")) break :blk .canonical;
         if (std.mem.eql(u8, mode, "dict-delta")) break :blk .dict_delta;
         if (std.mem.eql(u8, mode, "ree")) break :blk .ree;
+        if (std.mem.eql(u8, mode, "ree-int16")) break :blk .ree_int16;
+        if (std.mem.eql(u8, mode, "ree-int64")) break :blk .ree_int64;
         if (std.mem.eql(u8, mode, "complex")) break :blk .complex;
         if (std.mem.eql(u8, mode, "extension")) break :blk .extension;
         if (std.mem.eql(u8, mode, "view")) break :blk .view;
@@ -59,7 +63,7 @@ pub fn main() !void {
         return error.InvalidArgs;
     };
     if (args.next() != null) {
-        std.log.err("usage: interop-fixture-writer <out.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]", .{});
+        std.log.err("usage: interop-fixture-writer <out.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]", .{});
         return error.InvalidArgs;
     }
     if (container_mode == .file and fixture_case == .dict_delta) {
@@ -91,7 +95,9 @@ fn writeFixture(allocator: std.mem.Allocator, writer: anytype, fixture_case: Fix
     switch (fixture_case) {
         .canonical => try writeCanonicalFixture(allocator, writer),
         .dict_delta => try writeDictionaryDeltaFixture(allocator, writer),
-        .ree => try writeReeFixture(allocator, writer),
+        .ree => try writeReeFixture(allocator, writer, .{ .bit_width = 32, .signed = true }),
+        .ree_int16 => try writeReeFixture(allocator, writer, .{ .bit_width = 16, .signed = true }),
+        .ree_int64 => try writeReeFixture(allocator, writer, .{ .bit_width = 64, .signed = true }),
         .complex => try writeComplexFixture(allocator, writer),
         .extension => try writeExtensionFixture(allocator, writer),
         .view => try writeViewFixture(allocator, writer),
@@ -171,16 +177,16 @@ fn writeExtensionFixture(allocator: std.mem.Allocator, writer: anytype) !void {
     try writer.writeEnd();
 }
 
-fn writeReeFixture(allocator: std.mem.Allocator, writer: anytype) !void {
+fn writeReeFixture(allocator: std.mem.Allocator, writer: anytype, run_end_type: zarrow.IntType) !void {
     // Writes one stream with:
-    // - schema: ree: run_end_encoded<int32, int32>
+    // - schema: ree: run_end_encoded<int{16|32|64}, int32>
     // - one record batch (5 rows)
     //   run_ends=[2, 5], values=[100, 200]
     //   decoded logical values=[100, 100, 200, 200, 200]
     const value_type = zarrow.DataType{ .int32 = {} };
     const ree_type = zarrow.DataType{
         .run_end_encoded = .{
-            .run_end_type = .{ .bit_width = 32, .signed = true },
+            .run_end_type = run_end_type,
             .value_type = &value_type,
         },
     };
@@ -198,7 +204,7 @@ fn writeReeFixture(allocator: std.mem.Allocator, writer: anytype) !void {
 
     var ree_builder = try zarrow.RunEndEncodedBuilder.init(
         allocator,
-        .{ .bit_width = 32, .signed = true },
+        run_end_type,
         &value_type,
         2,
     );

@@ -106,19 +106,42 @@ arrow::Status GenerateDictDelta(const std::string& path, ContainerMode container
   return out->Close();
 }
 
-arrow::Status GenerateRee(const std::string& path, ContainerMode container) {
+arrow::Status GenerateRee(const std::string& path, ContainerMode container, arrow::Type::type run_end_id) {
   // Writes one stream with:
-  // - schema: ree: run_end_encoded<int32, int32>
+  // - schema: ree: run_end_encoded<int{16|32|64}, int32>
   // - one record batch (5 rows)
   //   run_ends=[2, 5], values=[100, 200]
   //   decoded logical values=[100, 100, 200, 200, 200]
-  auto ree_type = arrow::run_end_encoded(arrow::int32(), arrow::int32());
-  auto schema = arrow::schema({arrow::field("ree", ree_type, true)});
-
-  arrow::Int32Builder run_ends_builder;
-  ARROW_RETURN_NOT_OK(run_ends_builder.AppendValues({2, 5}));
+  std::shared_ptr<arrow::DataType> run_end_type;
   std::shared_ptr<arrow::Array> run_ends;
-  ARROW_RETURN_NOT_OK(run_ends_builder.Finish(&run_ends));
+  switch (run_end_id) {
+    case arrow::Type::INT16: {
+      run_end_type = arrow::int16();
+      arrow::Int16Builder b;
+      ARROW_RETURN_NOT_OK(b.AppendValues({2, 5}));
+      ARROW_RETURN_NOT_OK(b.Finish(&run_ends));
+      break;
+    }
+    case arrow::Type::INT32: {
+      run_end_type = arrow::int32();
+      arrow::Int32Builder b;
+      ARROW_RETURN_NOT_OK(b.AppendValues({2, 5}));
+      ARROW_RETURN_NOT_OK(b.Finish(&run_ends));
+      break;
+    }
+    case arrow::Type::INT64: {
+      run_end_type = arrow::int64();
+      arrow::Int64Builder b;
+      ARROW_RETURN_NOT_OK(b.AppendValues({2, 5}));
+      ARROW_RETURN_NOT_OK(b.Finish(&run_ends));
+      break;
+    }
+    default:
+      return arrow::Status::Invalid("ree run_end_type must be int16/int32/int64");
+  }
+
+  auto ree_type = arrow::run_end_encoded(run_end_type, arrow::int32());
+  auto schema = arrow::schema({arrow::field("ree", ree_type, true)});
 
   arrow::Int32Builder values_builder;
   ARROW_RETURN_NOT_OK(values_builder.AppendValues({100, 200}));
@@ -829,7 +852,7 @@ arrow::Status ValidateView(const std::string& path, ContainerMode container) {
 int main(int argc, char** argv) {
   if (argc < 3 || argc > 5) {
     std::cerr
-        << "usage: interop_cpp <generate|validate> <path.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]\n";
+        << "usage: interop_cpp <generate|validate> <path.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]\n";
     return 2;
   }
   const std::string mode = argv[1];
@@ -850,7 +873,7 @@ int main(int argc, char** argv) {
           container = ContainerMode::kFile;
         else {
           std::cerr
-              << "usage: interop_cpp <generate|validate> <path.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]\n";
+              << "usage: interop_cpp <generate|validate> <path.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]\n";
           return 2;
         }
       }
@@ -867,8 +890,12 @@ int main(int argc, char** argv) {
   if (mode == "validate" && case_name == "canonical") st = Validate(path, container);
   if (mode == "generate" && case_name == "dict-delta") st = GenerateDictDelta(path, container);
   if (mode == "validate" && case_name == "dict-delta") st = ValidateDictDelta(path, container);
-  if (mode == "generate" && case_name == "ree") st = GenerateRee(path, container);
+  if (mode == "generate" && case_name == "ree") st = GenerateRee(path, container, arrow::Type::INT32);
+  if (mode == "generate" && case_name == "ree-int16") st = GenerateRee(path, container, arrow::Type::INT16);
+  if (mode == "generate" && case_name == "ree-int64") st = GenerateRee(path, container, arrow::Type::INT64);
   if (mode == "validate" && case_name == "ree") st = ValidateRee(path, container);
+  if (mode == "validate" && case_name == "ree-int16") st = ValidateRee(path, container);
+  if (mode == "validate" && case_name == "ree-int64") st = ValidateRee(path, container);
   if (mode == "generate" && case_name == "complex") st = GenerateComplex(path, container);
   if (mode == "validate" && case_name == "complex") st = ValidateComplex(path, container);
   if (mode == "generate" && case_name == "extension") st = GenerateExtension(path, container);

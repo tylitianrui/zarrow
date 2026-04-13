@@ -4,9 +4,10 @@ use std::sync::Arc;
 use std::collections::HashMap;
 
 use arrow_array::builder::{BinaryViewBuilder, StringDictionaryBuilder, StringViewBuilder};
-use arrow_array::types::Int32Type;
+use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, BooleanArray, Decimal128Array, DictionaryArray, Int32Array, ListArray,
+    Array, ArrayRef, BinaryViewArray, BooleanArray, Decimal128Array, DictionaryArray, Int16Array, Int32Array,
+    Int64Array, ListArray,
     MapArray, RecordBatch, RunArray, StringArray, StringViewArray, StructArray, TimestampMillisecondArray,
     UnionArray,
 };
@@ -101,11 +102,11 @@ fn generate_dict_delta(path: &Path, container: ContainerMode) -> Result<(), Box<
     Ok(())
 }
 
-fn ree_schema() -> Arc<Schema> {
+fn ree_schema(run_end_type: DataType) -> Arc<Schema> {
     Arc::new(Schema::new(vec![Field::new(
         "ree",
         DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("run_ends", run_end_type, false)),
             Arc::new(Field::new("values", DataType::Int32, true)),
         ),
         true,
@@ -308,16 +309,29 @@ fn generate_extension(path: &Path, container: ContainerMode) -> Result<(), Box<d
     Ok(())
 }
 
-fn generate_ree(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std::error::Error>> {
+fn generate_ree(path: &Path, container: ContainerMode, run_end_type: DataType) -> Result<(), Box<dyn std::error::Error>> {
     // Writes one stream with:
-    // - schema: ree: run_end_encoded<int32, int32>
+    // - schema: ree: run_end_encoded<int{16|32|64}, int32>
     // - one record batch (5 rows)
     //   run_ends=[2, 5], values=[100, 200]
     //   decoded logical values=[100, 100, 200, 200, 200]
-    let schema = ree_schema();
-    let run_ends = Int32Array::from(vec![2, 5]);
     let values = Int32Array::from(vec![100, 200]);
-    let ree: ArrayRef = Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &values)?);
+    let schema = ree_schema(run_end_type.clone());
+    let ree: ArrayRef = match run_end_type {
+        DataType::Int16 => {
+            let run_ends = Int16Array::from(vec![2_i16, 5_i16]);
+            Arc::new(RunArray::<Int16Type>::try_new(&run_ends, &values)?)
+        }
+        DataType::Int32 => {
+            let run_ends = Int32Array::from(vec![2_i32, 5_i32]);
+            Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &values)?)
+        }
+        DataType::Int64 => {
+            let run_ends = Int64Array::from(vec![2_i64, 5_i64]);
+            Arc::new(RunArray::<Int64Type>::try_new(&run_ends, &values)?)
+        }
+        _ => return Err("ree run_end_type must be int16/int32/int64".into()),
+    };
     let batch = RecordBatch::try_new(schema.clone(), vec![ree])?;
 
     let file = File::create(path)?;
@@ -469,10 +483,14 @@ fn validate_ree(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std
     if schema.field(0).name() != "ree" {
         return Err("invalid ree field".into());
     }
-    match schema.field(0).data_type() {
-        DataType::RunEndEncoded(run_ends, values)
-            if run_ends.data_type() == &DataType::Int32 && values.data_type() == &DataType::Int32 => {}
-        _ => return Err("ree field must be run_end_encoded<int32,int32>".into()),
+    let run_end_type = match schema.field(0).data_type() {
+        DataType::RunEndEncoded(run_ends, values) if values.data_type() == &DataType::Int32 => {
+            run_ends.data_type().clone()
+        }
+        _ => return Err("ree field must be run_end_encoded<run_end,int32>".into()),
+    };
+    if run_end_type != DataType::Int16 && run_end_type != DataType::Int32 && run_end_type != DataType::Int64 {
+        return Err("ree run_end_type must be int16/int32/int64".into());
     }
 
     let batch = reader.next_batch()?.ok_or("missing batch")?;
@@ -483,13 +501,36 @@ fn validate_ree(path: &Path, container: ContainerMode) -> Result<(), Box<dyn std
         return Err("invalid row count".into());
     }
 
-    let ree = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<RunArray<Int32Type>>()
-        .ok_or("ree downcast failed")?;
-    let typed = ree.downcast::<Int32Array>().ok_or("ree values downcast failed")?;
-    let actual: Vec<Option<i32>> = typed.into_iter().collect();
+    let actual: Vec<Option<i32>> = match run_end_type {
+        DataType::Int16 => {
+            let ree = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<RunArray<Int16Type>>()
+                .ok_or("ree(int16) downcast failed")?;
+            let typed = ree.downcast::<Int32Array>().ok_or("ree values downcast failed")?;
+            typed.into_iter().collect()
+        }
+        DataType::Int32 => {
+            let ree = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .ok_or("ree(int32) downcast failed")?;
+            let typed = ree.downcast::<Int32Array>().ok_or("ree values downcast failed")?;
+            typed.into_iter().collect()
+        }
+        DataType::Int64 => {
+            let ree = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<RunArray<Int64Type>>()
+                .ok_or("ree(int64) downcast failed")?;
+            let typed = ree.downcast::<Int32Array>().ok_or("ree values downcast failed")?;
+            typed.into_iter().collect()
+        }
+        _ => return Err("ree run_end_type must be int16/int32/int64".into()),
+    };
     let expected = vec![Some(100), Some(100), Some(200), Some(200), Some(200)];
     if actual != expected {
         return Err(format!("invalid ree values: {actual:?}").into());
@@ -781,7 +822,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     container = if arg4 == "file" { ContainerMode::File } else { ContainerMode::Stream };
                 } else {
                     return Err(
-                        "usage: <generate|validate> <path.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]"
+                        "usage: <generate|validate> <path.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]"
                             .into(),
                     );
                 }
@@ -800,14 +841,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("validate", "canonical") => validate(path, container),
         ("generate", "dict-delta") => generate_dict_delta(path, container),
         ("validate", "dict-delta") => validate_dict_delta(path, container),
-        ("generate", "ree") => generate_ree(path, container),
+        ("generate", "ree") => generate_ree(path, container, DataType::Int32),
+        ("generate", "ree-int16") => generate_ree(path, container, DataType::Int16),
+        ("generate", "ree-int64") => generate_ree(path, container, DataType::Int64),
         ("validate", "ree") => validate_ree(path, container),
+        ("validate", "ree-int16") => validate_ree(path, container),
+        ("validate", "ree-int64") => validate_ree(path, container),
         ("generate", "complex") => generate_complex(path, container),
         ("validate", "complex") => validate_complex(path, container),
         ("generate", "extension") => generate_extension(path, container),
         ("validate", "extension") => validate_extension(path, container),
         ("generate", "view") => generate_view(path, container),
         ("validate", "view") => validate_view(path, container),
-        _ => Err("usage: <generate|validate> <path.arrow> [canonical|dict-delta|ree|complex|extension|view] [stream|file]".into()),
+        _ => Err("usage: <generate|validate> <path.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]".into()),
     }
 }

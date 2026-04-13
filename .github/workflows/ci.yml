@@ -124,11 +124,15 @@ jobs:
           zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int16.arrow ree-int16 stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int64.arrow ree-int64 stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex.arrow complex stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_extension.arrow extension stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_view.arrow view stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_file.arrow canonical file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_file.arrow ree file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int64_file.arrow ree-int64 file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex_file.arrow complex file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_extension_file.arrow extension file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_view_file.arrow view file
@@ -144,6 +148,12 @@ jobs:
           python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree.arrow ree stream
           zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree.arrow ree stream
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree.arrow ree stream
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree_int16.arrow ree-int16 stream
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree_int16.arrow ree-int16 stream
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree_int16.arrow ree-int16 stream
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree_int64.arrow ree-int64 stream
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree_int64.arrow ree-int64 stream
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree_int64.arrow ree-int64 stream
           python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_complex.arrow complex stream
           zig build interop-fixture-check -- .interop-fixtures/pyarrow_complex.arrow complex stream
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_complex.arrow complex stream
@@ -159,6 +169,12 @@ jobs:
           python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree_file.arrow ree file
           zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree_file.arrow ree file
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree_file.arrow ree file
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree_int16_file.arrow ree-int16 file
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree_int16_file.arrow ree-int16 file
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
+          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_ree_int64_file.arrow ree-int64 file
+          zig build interop-fixture-check -- .interop-fixtures/pyarrow_ree_int64_file.arrow ree-int64 file
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_ree_int64_file.arrow ree-int64 file
           python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_complex_file.arrow complex file
           zig build interop-fixture-check -- .interop-fixtures/pyarrow_complex_file.arrow complex file
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_complex_file.arrow complex file
@@ -190,11 +206,15 @@ jobs:
           zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int16.arrow ree-int16 stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int64.arrow ree-int64 stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex.arrow complex stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_extension.arrow extension stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_view.arrow view stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_file.arrow canonical file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_file.arrow ree file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int64_file.arrow ree-int64 file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex_file.arrow complex file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_extension_file.arrow extension file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_view_file.arrow view file
@@ -210,6 +230,12 @@ jobs:
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree.arrow ree stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree.arrow ree stream
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree.arrow ree stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_int16.arrow ree-int16 stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_int16.arrow ree-int16 stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_int16.arrow ree-int16 stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_int64.arrow ree-int64 stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_int64.arrow ree-int64 stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_int64.arrow ree-int64 stream
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_complex.arrow complex stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_complex.arrow complex stream
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_complex.arrow complex stream
@@ -225,6 +251,12 @@ jobs:
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_file.arrow ree file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_file.arrow ree file
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_file.arrow ree file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_int16_file.arrow ree-int16 file
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_int16_file.arrow ree-int16 file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_int64_file.arrow ree-int64 file
+          zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_int64_file.arrow ree-int64 file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_int64_file.arrow ree-int64 file
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_complex_file.arrow complex file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_complex_file.arrow complex file
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_complex_file.arrow complex file
@@ -274,11 +306,15 @@ jobs:
           zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree.arrow ree stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int16.arrow ree-int16 stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int64.arrow ree-int64 stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex.arrow complex stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_extension.arrow extension stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_view.arrow view stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_file.arrow canonical file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_file.arrow ree file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int64_file.arrow ree-int64 file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex_file.arrow complex file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_extension_file.arrow extension file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_view_file.arrow view file
@@ -290,11 +326,15 @@ jobs:
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp.arrow canonical stream
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_dict_delta.arrow dict-delta stream
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree.arrow ree stream
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree_int16.arrow ree-int16 stream
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree_int64.arrow ree-int64 stream
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_complex.arrow complex stream
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_extension.arrow extension stream
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_view.arrow view stream
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_file.arrow canonical file
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree_file.arrow ree file
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree_int16_file.arrow ree-int16 file
+          ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_ree_int64_file.arrow ree-int64 file
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_complex_file.arrow complex file
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_extension_file.arrow extension file
           ./.interop-bin/interop_cpp generate .interop-fixtures/arrow_cpp_view_file.arrow view file
@@ -304,11 +344,15 @@ jobs:
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp.arrow canonical stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_dict_delta.arrow dict-delta stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree.arrow ree stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree_int16.arrow ree-int16 stream
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree_int64.arrow ree-int64 stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_complex.arrow complex stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_extension.arrow extension stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_view.arrow view stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_file.arrow canonical file
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree_file.arrow ree file
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree_int16_file.arrow ree-int16 file
+          zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_ree_int64_file.arrow ree-int64 file
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_complex_file.arrow complex file
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_extension_file.arrow extension file
           zig build interop-fixture-check -- .interop-fixtures/arrow_cpp_view_file.arrow view file
@@ -320,11 +364,15 @@ jobs:
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow.arrow canonical stream
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree.arrow ree stream
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree_int16.arrow ree-int16 stream
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree_int64.arrow ree-int64 stream
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_complex.arrow complex stream
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_extension.arrow extension stream
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_view.arrow view stream
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_file.arrow canonical file
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree_file.arrow ree file
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
+          ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_ree_int64_file.arrow ree-int64 file
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_complex_file.arrow complex file
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_extension_file.arrow extension file
           ./.interop-bin/interop_cpp validate .interop-fixtures/zarrow_view_file.arrow view file
