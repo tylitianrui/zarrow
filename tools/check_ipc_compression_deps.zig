@@ -10,13 +10,13 @@ fn hasAnyLibrary(candidates: []const []const u8) bool {
     return false;
 }
 
-fn printCandidates(stderr: anytype, name: []const u8, candidates: []const []const u8) !void {
-    try stderr.print("  - {s}: ", .{name});
+fn printCandidates(name: []const u8, candidates: []const []const u8) void {
+    std.debug.print("  - {s}: ", .{name});
     for (candidates, 0..) |candidate, i| {
-        if (i != 0) try stderr.writeAll(", ");
-        try stderr.print("\"{s}\"", .{candidate});
+        if (i != 0) std.debug.print(", ", .{});
+        std.debug.print("\"{s}\"", .{candidate});
     }
-    try stderr.writeByte('\n');
+    std.debug.print("\n", .{});
 }
 
 pub fn main() !void {
@@ -60,22 +60,17 @@ pub fn main() !void {
     const has_lz4 = hasAnyLibrary(lz4_candidates);
     if (has_zstd and has_lz4) return;
 
-    var stderr_file = std.fs.File.stderr();
-    var stderr_buf: [4096]u8 = undefined;
-    var stderr = stderr_file.writer(&stderr_buf);
-    const w = &stderr.interface;
-
-    try w.writeAll("error: missing required IPC compression libraries for Arrow BodyCompression (ZSTD/LZ4_FRAME)\n");
-    try w.writeAll("zarrow now requires these dependencies and does not fall back to unsupported mode.\n");
-    try w.writeAll("searched dynamic library names:\n");
-    if (!has_zstd) try printCandidates(w, "zstd", zstd_candidates);
-    if (!has_lz4) try printCandidates(w, "lz4", lz4_candidates);
+    std.debug.print("error: missing required IPC compression libraries for Arrow BodyCompression (ZSTD/LZ4_FRAME)\n", .{});
+    std.debug.print("zarrow now requires these dependencies and does not fall back to unsupported mode.\n", .{});
+    std.debug.print("searched dynamic library names:\n", .{});
+    if (!has_zstd) printCandidates("zstd", zstd_candidates);
+    if (!has_lz4) printCandidates("lz4", lz4_candidates);
 
     switch (builtin.os.tag) {
-        .macos => try w.writeAll("hint: install with `brew install zstd lz4`\n"),
-        .linux => try w.writeAll("hint: install dev/runtime packages for zstd and lz4 (example: `apt install libzstd-dev liblz4-dev`)\n"),
-        .windows => try w.writeAll("hint: install zstd/lz4 and ensure DLLs are available on PATH\n"),
-        else => try w.writeAll("hint: install zstd/lz4 system libraries for your platform\n"),
+        .macos => std.debug.print("hint: install with `brew install zstd lz4`\n", .{}),
+        .linux => std.debug.print("hint: install dev/runtime packages for zstd and lz4 (example: `apt install libzstd-dev liblz4-dev`)\n", .{}),
+        .windows => std.debug.print("hint: install zstd/lz4 and ensure DLLs are available on PATH (CI: `vcpkg install zstd:x64-windows lz4:x64-windows`)\n", .{}),
+        else => std.debug.print("hint: install zstd/lz4 system libraries for your platform\n", .{}),
     }
     return error.MissingCompressionDependency;
 }
