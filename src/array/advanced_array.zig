@@ -18,8 +18,6 @@ pub const IntType = datatype.IntType;
 const ArrayRef = array_ref.ArrayRef;
 const BuilderState = builder_state.BuilderState;
 
-const initValidityAllValid = array_utils.initValidityAllValid;
-const ensureBitmapCapacity = array_utils.ensureBitmapCapacity;
 
 pub const MapArray = struct {
     data: *const ArrayData,
@@ -261,29 +259,6 @@ pub const MapBuilder = struct {
         if (was_empty) std.mem.bytesAsSlice(i32, self.offsets.data)[0] = 0;
     }
 
-    /// Execute ensureValidityForNull logic for this type.
-    fn ensureValidityForNull(self: *MapBuilder, new_len: usize) !void {
-        if (self.validity == null) {
-            var buf = try initValidityAllValid(self.allocator, new_len);
-            bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-            self.validity = buf;
-            self.null_count += 1;
-            return;
-        }
-        var buf = &self.validity.?;
-        try ensureBitmapCapacity(buf, new_len);
-        bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-        self.null_count += 1;
-    }
-
-    /// Execute setValidBit logic for this type.
-    fn setValidBit(self: *MapBuilder, index: usize) !void {
-        if (self.validity == null) return;
-        var buf = &self.validity.?;
-        try ensureBitmapCapacity(buf, index + 1);
-        bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
-    }
-
     /// Execute appendLen logic for this type.
     pub fn appendLen(self: *MapBuilder, value_len: usize) !void {
         if (self.state == .finished) return BuilderError.AlreadyFinished;
@@ -292,7 +267,7 @@ pub const MapBuilder = struct {
         const next_offset = self.values_len + value_len;
         const cast_offset = std.math.cast(i32, next_offset) orelse return BuilderError.OffsetOverflow;
         std.mem.bytesAsSlice(i32, self.offsets.data)[next_len] = cast_offset;
-        try self.setValidBit(self.len);
+        try array_utils.setValidBit(&self.validity, self.len);
         self.len = next_len;
         self.values_len = next_offset;
     }
@@ -303,7 +278,7 @@ pub const MapBuilder = struct {
         const next_len = self.len + 1;
         try self.ensureOffsetsCapacity(next_len + 1);
         std.mem.bytesAsSlice(i32, self.offsets.data)[next_len] = std.math.cast(i32, self.values_len) orelse return BuilderError.OffsetOverflow;
-        try self.ensureValidityForNull(next_len);
+        try array_utils.ensureValidityForNull(self.allocator, &self.validity, &self.null_count, next_len);
         self.len = next_len;
     }
 

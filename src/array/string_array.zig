@@ -70,9 +70,6 @@ pub const LargeStringArray = struct {
     }
 };
 
-const initValidityAllValid = array_utils.initValidityAllValid;
-const ensureBitmapCapacity = array_utils.ensureBitmapCapacity;
-
 /// Builder for variable-length UTF-8 arrays.
 pub const StringBuilder = struct {
     allocator: std.mem.Allocator,
@@ -148,29 +145,6 @@ pub const StringBuilder = struct {
         try self.data.resize(needed_len);
     }
 
-    /// Execute ensureValidityForNull logic for this type.
-    fn ensureValidityForNull(self: *StringBuilder, new_len: usize) !void {
-        if (self.validity == null) {
-            var buf = try initValidityAllValid(self.allocator, new_len);
-            bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-            self.validity = buf;
-            self.null_count += 1;
-            return;
-        }
-        var buf = &self.validity.?;
-        try ensureBitmapCapacity(buf, new_len);
-        bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-        self.null_count += 1;
-    }
-
-    /// Execute setValidBit logic for this type.
-    fn setValidBit(self: *StringBuilder, index: usize) !void {
-        if (self.validity == null) return;
-        var buf = &self.validity.?;
-        try ensureBitmapCapacity(buf, index + 1);
-        bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
-    }
-
     const BuilderError = error{ AlreadyFinished, NotFinished };
 
     /// Append one logical value into the builder.
@@ -184,7 +158,7 @@ pub const StringBuilder = struct {
 
         const offsets_slice = std.mem.bytesAsSlice(i32, self.offsets.data);
         offsets_slice[next_len] = @intCast(self.data_len);
-        try self.setValidBit(self.len);
+        try array_utils.setValidBit(&self.validity, self.len);
         self.len = next_len;
     }
 
@@ -195,7 +169,7 @@ pub const StringBuilder = struct {
         try self.ensureOffsetsCapacity(next_len + 1);
         const offsets_slice = std.mem.bytesAsSlice(i32, self.offsets.data);
         offsets_slice[next_len] = @intCast(self.data_len);
-        try self.ensureValidityForNull(next_len);
+        try array_utils.ensureValidityForNull(self.allocator, &self.validity, &self.null_count, next_len);
         self.len = next_len;
     }
 
@@ -312,29 +286,6 @@ pub const LargeStringBuilder = struct {
         try self.data.resize(needed_len);
     }
 
-    /// Execute ensureValidityForNull logic for this type.
-    fn ensureValidityForNull(self: *LargeStringBuilder, new_len: usize) !void {
-        if (self.validity == null) {
-            var buf = try initValidityAllValid(self.allocator, new_len);
-            bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-            self.validity = buf;
-            self.null_count += 1;
-            return;
-        }
-        var buf = &self.validity.?;
-        try ensureBitmapCapacity(buf, new_len);
-        bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-        self.null_count += 1;
-    }
-
-    /// Execute setValidBit logic for this type.
-    fn setValidBit(self: *LargeStringBuilder, index: usize) !void {
-        if (self.validity == null) return;
-        var buf = &self.validity.?;
-        try ensureBitmapCapacity(buf, index + 1);
-        bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
-    }
-
     const BuilderError = error{ AlreadyFinished, NotFinished, OffsetOverflow };
 
     /// Append one logical value into the builder.
@@ -349,7 +300,7 @@ pub const LargeStringBuilder = struct {
         const cast_offset = std.math.cast(i64, self.data_len) orelse return BuilderError.OffsetOverflow;
         const offsets_slice = std.mem.bytesAsSlice(i64, self.offsets.data);
         offsets_slice[next_len] = cast_offset;
-        try self.setValidBit(self.len);
+        try array_utils.setValidBit(&self.validity, self.len);
         self.len = next_len;
     }
 
@@ -361,7 +312,7 @@ pub const LargeStringBuilder = struct {
         const cast_offset = std.math.cast(i64, self.data_len) orelse return BuilderError.OffsetOverflow;
         const offsets_slice = std.mem.bytesAsSlice(i64, self.offsets.data);
         offsets_slice[next_len] = cast_offset;
-        try self.ensureValidityForNull(next_len);
+        try array_utils.ensureValidityForNull(self.allocator, &self.validity, &self.null_count, next_len);
         self.len = next_len;
     }
 

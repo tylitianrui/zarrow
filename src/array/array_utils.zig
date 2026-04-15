@@ -28,6 +28,35 @@ pub fn ensureBitmapCapacity(buf: *OwnedBuffer, bit_len: usize) !void {
     try buf.resize(needed);
 }
 
+/// Ensure validity storage exists, mark the new appended slot as null, and bump null count.
+pub fn ensureValidityForNull(
+    allocator: std.mem.Allocator,
+    validity: *?OwnedBuffer,
+    null_count: *usize,
+    new_len: usize,
+) !void {
+    std.debug.assert(new_len > 0);
+    if (validity.* == null) {
+        var buf = try initValidityAllValid(allocator, new_len);
+        bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
+        validity.* = buf;
+        null_count.* += 1;
+        return;
+    }
+    var buf = &validity.*.?;
+    try ensureBitmapCapacity(buf, new_len);
+    bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
+    null_count.* += 1;
+}
+
+/// Mark an existing appended slot as valid if a validity bitmap has been allocated.
+pub fn setValidBit(validity: *?OwnedBuffer, index: usize) !void {
+    if (validity.* == null) return;
+    var buf = &validity.*.?;
+    try ensureBitmapCapacity(buf, index + 1);
+    bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
+}
+
 test "initValidityAllValid marks bits and clears padding" {
     const allocator = std.testing.allocator;
 

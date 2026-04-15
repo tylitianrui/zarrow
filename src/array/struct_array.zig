@@ -53,7 +53,6 @@ const RecycleAction = enum {
     clear,
 };
 
-const initValidityAllValid = array_utils.initValidityAllValid;
 const ensureBitmapCapacity = array_utils.ensureBitmapCapacity;
 
 pub const StructArray = struct {
@@ -244,34 +243,11 @@ pub const StructBuilder = struct {
         try ensureBitmapCapacity(&self.validity.?, self.len + additional);
     }
 
-    /// Execute ensureValidityForNull logic for this type.
-    fn ensureValidityForNull(self: *StructBuilder, new_len: usize) !void {
-        if (self.validity == null) {
-            var buf = try initValidityAllValid(self.allocator, new_len);
-            bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-            self.validity = buf;
-            self.null_count += 1;
-            return;
-        }
-        var buf = &self.validity.?;
-        try ensureBitmapCapacity(buf, new_len);
-        bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-        self.null_count += 1;
-    }
-
-    /// Execute setValidBit logic for this type.
-    fn setValidBit(self: *StructBuilder, index: usize) !void {
-        if (self.validity == null) return;
-        var buf = &self.validity.?;
-        try ensureBitmapCapacity(buf, index + 1);
-        bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
-    }
-
     /// Append a non-null entry into the builder.
     pub fn appendValid(self: *StructBuilder) !void {
         if (self.state == .finished) return BuilderError.AlreadyFinished;
         const next_len = self.len + 1;
-        try self.setValidBit(self.len);
+        try array_utils.setValidBit(&self.validity, self.len);
         self.len = next_len;
     }
 
@@ -284,7 +260,7 @@ pub const StructBuilder = struct {
     pub fn appendNull(self: *StructBuilder) !void {
         if (self.state == .finished) return BuilderError.AlreadyFinished;
         const next_len = self.len + 1;
-        try self.ensureValidityForNull(next_len);
+        try array_utils.ensureValidityForNull(self.allocator, &self.validity, &self.null_count, next_len);
         self.len = next_len;
     }
 

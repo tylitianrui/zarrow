@@ -176,29 +176,6 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             }
         }
 
-        /// Execute ensureValidityForNull logic for this type.
-        fn ensureValidityForNull(self: *Self, new_len: usize) !void {
-            if (self.validity == null) {
-                var buf = try initValidityAllValid(self.allocator, new_len);
-                bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-                self.validity = buf;
-                self.null_count += 1;
-                return;
-            }
-            var buf = &self.validity.?;
-            try ensureBitmapCapacity(buf, new_len);
-            bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-            self.null_count += 1;
-        }
-
-        /// Execute setValidBit logic for this type.
-        fn setValidBit(self: *Self, index: usize) !void {
-            if (self.validity == null) return;
-            var buf = &self.validity.?;
-            try ensureBitmapCapacity(buf, index + 1);
-            bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
-        }
-
         /// Execute appendLen logic for this type.
         pub fn appendLen(self: *Self, value_len: usize) !void {
             if (self.state == .finished) return BuilderError.AlreadyFinished;
@@ -210,7 +187,7 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             const offsets_slice = std.mem.bytesAsSlice(OffsetsT, self.offsets.data);
             offsets_slice[next_len] = cast_offset;
 
-            try self.setValidBit(self.len);
+            try array_utils.setValidBit(&self.validity, self.len);
             self.len = next_len;
             self.values_len = next_offset;
         }
@@ -252,7 +229,7 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             try self.ensureOffsetsCapacity(next_len + 1);
             const offsets_slice = std.mem.bytesAsSlice(OffsetsT, self.offsets.data);
             offsets_slice[next_len] = std.math.cast(OffsetsT, self.values_len) orelse return BuilderError.OffsetOverflow;
-            try self.ensureValidityForNull(next_len);
+            try array_utils.ensureValidityForNull(self.allocator, &self.validity, &self.null_count, next_len);
             self.len = next_len;
         }
 

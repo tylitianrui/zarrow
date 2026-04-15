@@ -49,9 +49,6 @@ pub fn PrimitiveArray(comptime T: type) type {
     };
 }
 
-const initValidityAllValid = array_utils.initValidityAllValid;
-const ensureBitmapCapacity = array_utils.ensureBitmapCapacity;
-
 /// Generic builder for fixed-width primitive arrays.
 /// The caller must specify the data type and handle validity bits as needed.
 pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
@@ -110,29 +107,6 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
             try self.values.resize(new_len * @sizeOf(T));
         }
 
-        /// Execute ensureValidityForNull logic for this type.
-        fn ensureValidityForNull(self: *Self, new_len: usize) !void {
-            if (self.validity == null) {
-                var buf = try initValidityAllValid(self.allocator, new_len);
-                bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-                self.validity = buf;
-                self.null_count += 1;
-                return;
-            }
-            var buf = &self.validity.?;
-            try ensureBitmapCapacity(buf, new_len);
-            bitmap.clearBit(buf.data[0..bitmap.byteLength(new_len)], new_len - 1);
-            self.null_count += 1;
-        }
-
-        /// Execute setValidBit logic for this type.
-        fn setValidBit(self: *Self, index: usize) !void {
-            if (self.validity == null) return;
-            var buf = &self.validity.?;
-            try ensureBitmapCapacity(buf, index + 1);
-            bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
-        }
-
         /// Append one logical value into the builder.
         pub fn append(self: *Self, value: T) !void {
             if (self.state == .finished) return BuilderError.AlreadyFinished;
@@ -140,7 +114,7 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
             try self.ensureValuesCapacity(next_len);
             const slice = std.mem.bytesAsSlice(T, self.values.data);
             slice[self.len] = value;
-            try self.setValidBit(self.len);
+            try array_utils.setValidBit(&self.validity, self.len);
             self.len = next_len;
         }
 
@@ -149,7 +123,7 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
             if (self.state == .finished) return BuilderError.AlreadyFinished;
             const next_len = self.len + 1;
             try self.ensureValuesCapacity(next_len);
-            try self.ensureValidityForNull(next_len);
+            try array_utils.ensureValidityForNull(self.allocator, &self.validity, &self.null_count, next_len);
             self.len = next_len;
         }
 
