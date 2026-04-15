@@ -810,7 +810,7 @@ fn importArrayRecursive(
 fn importBuffer(ptr_any: ?*const anyopaque, needed_len: usize) Error!SharedBuffer {
     if (needed_len == 0 or ptr_any == null) return SharedBuffer.empty;
     const ptr: [*]const u8 = @ptrCast(ptr_any.?);
-    return SharedBuffer.init(ptr[0..needed_len]);
+    return SharedBuffer.fromSlice(ptr[0..needed_len]);
 }
 
 fn neededBufferLen(

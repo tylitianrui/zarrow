@@ -39,12 +39,7 @@ pub const SharedBuffer = struct {
 
     pub const empty: SharedBuffer = .{ .storage = null, .data = &.{} };
 
-    /// Initialize and return a new instance.
-    pub fn init(data: []const u8) SharedBuffer {
-        return .{ .storage = null, .data = data };
-    }
-
-    /// Execute fromSlice logic for this type.
+    /// Build a borrowed non-owning shared buffer view from an existing slice.
     pub fn fromSlice(data: []const u8) SharedBuffer {
         return .{ .storage = null, .data = data };
     }
@@ -164,7 +159,7 @@ pub const OwnedBuffer = struct {
 
 test "buffer exposes immutable view" {
     const data = "arrow";
-    const buffer = SharedBuffer.init(data);
+    const buffer = SharedBuffer.fromSlice(data);
 
     try std.testing.expectEqual(@as(usize, 5), buffer.len());
     try std.testing.expect(!buffer.isEmpty());

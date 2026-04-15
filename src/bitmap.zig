@@ -181,7 +181,7 @@ pub const MutableValidityBitmap = struct {
 
     // Expose the logical bitmap bytes as a borrowed shared buffer view.
     pub fn toBuffer(self: MutableValidityBitmap) SharedBuffer {
-        return SharedBuffer.init(self.buf.data[0..byteLength(self.bit_len)]);
+        return SharedBuffer.fromSlice(self.buf.data[0..byteLength(self.bit_len)]);
     }
 };
 
