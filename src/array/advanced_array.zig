@@ -240,6 +240,30 @@ pub const MapBuilder = struct {
         if (self.validity) |*valid| valid.deinit();
     }
 
+    /// Reset state while retaining reusable capacity when possible.
+    pub fn reset(self: *MapBuilder) BuilderError!void {
+        if (self.state != .finished) return BuilderError.NotFinished;
+        if (!self.offsets.isEmpty()) {
+            std.mem.bytesAsSlice(i32, self.offsets.data)[0] = 0;
+        }
+        self.len = 0;
+        self.null_count = 0;
+        self.values_len = 0;
+        self.state = .ready;
+    }
+
+    /// Clear state and release reusable buffers when required.
+    pub fn clear(self: *MapBuilder) BuilderError!void {
+        if (self.state != .finished) return BuilderError.NotFinished;
+        self.offsets.deinit();
+        if (self.validity) |*valid| valid.deinit();
+        self.validity = null;
+        self.len = 0;
+        self.null_count = 0;
+        self.values_len = 0;
+        self.state = .ready;
+    }
+
     fn ensureOffsetsCapacity(self: *MapBuilder, needed_len: usize) !void {
         const capacity = self.offsets.len() / @sizeOf(i32);
         if (needed_len <= capacity) return;
@@ -325,6 +349,21 @@ pub const SparseUnionBuilder = struct {
         self.type_ids.deinit();
     }
 
+    /// Reset state while retaining reusable capacity when possible.
+    pub fn reset(self: *SparseUnionBuilder) BuilderError!void {
+        if (self.state != .finished) return BuilderError.NotFinished;
+        self.len = 0;
+        self.state = .ready;
+    }
+
+    /// Clear state and release reusable buffers when required.
+    pub fn clear(self: *SparseUnionBuilder) BuilderError!void {
+        if (self.state != .finished) return BuilderError.NotFinished;
+        self.type_ids.deinit();
+        self.len = 0;
+        self.state = .ready;
+    }
+
     fn ensureCapacity(self: *SparseUnionBuilder, needed_len: usize) !void {
         if (needed_len <= self.type_ids.len()) return;
         try self.type_ids.resize(needed_len);
@@ -397,6 +436,22 @@ pub const DenseUnionBuilder = struct {
     pub fn deinit(self: *DenseUnionBuilder) void {
         self.type_ids.deinit();
         self.offsets.deinit();
+    }
+
+    /// Reset state while retaining reusable capacity when possible.
+    pub fn reset(self: *DenseUnionBuilder) BuilderError!void {
+        if (self.state != .finished) return BuilderError.NotFinished;
+        self.len = 0;
+        self.state = .ready;
+    }
+
+    /// Clear state and release reusable buffers when required.
+    pub fn clear(self: *DenseUnionBuilder) BuilderError!void {
+        if (self.state != .finished) return BuilderError.NotFinished;
+        self.type_ids.deinit();
+        self.offsets.deinit();
+        self.len = 0;
+        self.state = .ready;
     }
 
     fn ensureCapacity(self: *DenseUnionBuilder, needed_len: usize) !void {
@@ -487,6 +542,21 @@ pub const RunEndEncodedBuilder = struct {
     /// Release resources owned by this instance.
     pub fn deinit(self: *RunEndEncodedBuilder) void {
         self.run_ends.deinit();
+    }
+
+    /// Reset state while retaining reusable capacity when possible.
+    pub fn reset(self: *RunEndEncodedBuilder) BuilderError!void {
+        if (self.state != .finished) return BuilderError.NotFinished;
+        self.run_count = 0;
+        self.state = .ready;
+    }
+
+    /// Clear state and release reusable buffers when required.
+    pub fn clear(self: *RunEndEncodedBuilder) BuilderError!void {
+        if (self.state != .finished) return BuilderError.NotFinished;
+        self.run_ends.deinit();
+        self.run_count = 0;
+        self.state = .ready;
     }
 
     fn ensureCapacity(self: *RunEndEncodedBuilder, needed_runs: usize) !void {
@@ -850,4 +920,164 @@ test "map builder preserves nullability invariants" {
     var second = try map.value(1);
     defer second.release();
     try std.testing.expectEqual(@as(usize, 0), second.data().length);
+}
+
+test "map builder reset and clear support reuse" {
+    const allocator = std.testing.allocator;
+
+    const int_type = DataType{ .int32 = {} };
+    const key_field = Field{ .name = "key", .data_type = &int_type, .nullable = false };
+    const item_field = Field{ .name = "item", .data_type = &int_type, .nullable = true };
+
+    var key_builder_1 = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 1);
+    defer key_builder_1.deinit();
+    try key_builder_1.append(1);
+    var key_ref_1 = try key_builder_1.finish();
+    defer key_ref_1.release();
+
+    var item_builder_1 = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 1);
+    defer item_builder_1.deinit();
+    try item_builder_1.append(10);
+    var item_ref_1 = try item_builder_1.finish();
+    defer item_ref_1.release();
+
+    var entries_builder_1 = @import("struct_array.zig").StructBuilder.init(allocator, &[_]Field{ key_field, item_field });
+    defer entries_builder_1.deinit();
+    try entries_builder_1.appendValid();
+    var entries_ref_1 = try entries_builder_1.finish(&[_]ArrayRef{ key_ref_1, item_ref_1 });
+    defer entries_ref_1.release();
+
+    var key_builder_0 = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 0);
+    defer key_builder_0.deinit();
+    var key_ref_0 = try key_builder_0.finish();
+    defer key_ref_0.release();
+
+    var item_builder_0 = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 0);
+    defer item_builder_0.deinit();
+    var item_ref_0 = try item_builder_0.finish();
+    defer item_ref_0.release();
+
+    var entries_builder_0 = @import("struct_array.zig").StructBuilder.init(allocator, &[_]Field{ key_field, item_field });
+    defer entries_builder_0.deinit();
+    var entries_ref_0 = try entries_builder_0.finish(&[_]ArrayRef{ key_ref_0, item_ref_0 });
+    defer entries_ref_0.release();
+
+    var map_builder = try MapBuilder.init(allocator, 1, key_field, item_field, false);
+    defer map_builder.deinit();
+
+    try std.testing.expectError(error.NotFinished, map_builder.reset());
+    try std.testing.expectError(error.NotFinished, map_builder.clear());
+
+    try map_builder.appendLen(1);
+    var out_1 = try map_builder.finish(entries_ref_1);
+    defer out_1.release();
+
+    try map_builder.reset();
+    try map_builder.appendNull();
+    var out_2 = try map_builder.finish(entries_ref_0);
+    defer out_2.release();
+
+    try map_builder.clear();
+    try map_builder.appendLen(1);
+    var out_3 = try map_builder.finish(entries_ref_1);
+    defer out_3.release();
+}
+
+test "sparse union builder reset and clear support reuse" {
+    const allocator = std.testing.allocator;
+
+    const int_type = DataType{ .int32 = {} };
+    const fields = [_]Field{.{ .name = "a", .data_type = &int_type, .nullable = true }};
+    const union_type = datatype.UnionType{ .type_ids = &[_]i8{0}, .fields = fields[0..], .mode = .sparse };
+
+    var child_builder = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 1);
+    defer child_builder.deinit();
+    try child_builder.append(7);
+    var child_ref = try child_builder.finish();
+    defer child_ref.release();
+
+    var builder = try SparseUnionBuilder.init(allocator, union_type, 1);
+    defer builder.deinit();
+
+    try std.testing.expectError(error.NotFinished, builder.reset());
+    try std.testing.expectError(error.NotFinished, builder.clear());
+
+    try builder.appendTypeId(0);
+    var out_1 = try builder.finish(&[_]ArrayRef{child_ref});
+    defer out_1.release();
+
+    try builder.reset();
+    try builder.appendTypeId(0);
+    var out_2 = try builder.finish(&[_]ArrayRef{child_ref});
+    defer out_2.release();
+
+    try builder.clear();
+    try builder.appendTypeId(0);
+    var out_3 = try builder.finish(&[_]ArrayRef{child_ref});
+    defer out_3.release();
+}
+
+test "dense union builder reset and clear support reuse" {
+    const allocator = std.testing.allocator;
+
+    const int_type = DataType{ .int32 = {} };
+    const fields = [_]Field{.{ .name = "a", .data_type = &int_type, .nullable = true }};
+    const union_type = datatype.UnionType{ .type_ids = &[_]i8{0}, .fields = fields[0..], .mode = .dense };
+
+    var child_builder = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 1);
+    defer child_builder.deinit();
+    try child_builder.append(7);
+    var child_ref = try child_builder.finish();
+    defer child_ref.release();
+
+    var builder = try DenseUnionBuilder.init(allocator, union_type, 1);
+    defer builder.deinit();
+
+    try std.testing.expectError(error.NotFinished, builder.reset());
+    try std.testing.expectError(error.NotFinished, builder.clear());
+
+    try builder.append(0, 0);
+    var out_1 = try builder.finish(&[_]ArrayRef{child_ref});
+    defer out_1.release();
+
+    try builder.reset();
+    try builder.append(0, 0);
+    var out_2 = try builder.finish(&[_]ArrayRef{child_ref});
+    defer out_2.release();
+
+    try builder.clear();
+    try builder.append(0, 0);
+    var out_3 = try builder.finish(&[_]ArrayRef{child_ref});
+    defer out_3.release();
+}
+
+test "run end encoded builder reset and clear support reuse" {
+    const allocator = std.testing.allocator;
+
+    const value_type = DataType{ .int32 = {} };
+    var values_builder = try @import("primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 1);
+    defer values_builder.deinit();
+    try values_builder.append(11);
+    var values_ref = try values_builder.finish();
+    defer values_ref.release();
+
+    var builder = try RunEndEncodedBuilder.init(allocator, .{ .bit_width = 32, .signed = true }, &value_type, 1);
+    defer builder.deinit();
+
+    try std.testing.expectError(error.NotFinished, builder.reset());
+    try std.testing.expectError(error.NotFinished, builder.clear());
+
+    try builder.appendRunEnd(1);
+    var out_1 = try builder.finish(values_ref);
+    defer out_1.release();
+
+    try builder.reset();
+    try builder.appendRunEnd(1);
+    var out_2 = try builder.finish(values_ref);
+    defer out_2.release();
+
+    try builder.clear();
+    try builder.appendRunEnd(1);
+    var out_3 = try builder.finish(values_ref);
+    defer out_3.release();
 }
