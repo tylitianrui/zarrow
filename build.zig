@@ -1,5 +1,10 @@
 const std = @import("std");
 
+fn flatcPathArg(b: *std.Build, comptime rel: []const u8) []const u8 {
+    if (b.graph.host.result.os.tag == .windows) return rel;
+    return b.path(rel).getPath(b);
+}
+
 fn configureIpcCompression(b: *std.Build, step: *std.Build.Step.Compile, deps_check: *std.Build.Step) void {
     step.step.dependOn(deps_check);
 
@@ -36,13 +41,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const is_windows = b.graph.host.result.os.tag == .windows;
-    const format_dir = if (is_windows) "src/format" else b.path("src/format").getPath(b);
-    const message_fbs = if (is_windows) "src/format/Message.fbs" else b.path("src/format/Message.fbs").getPath(b);
-    const file_fbs = if (is_windows) "src/format/File.fbs" else b.path("src/format/File.fbs").getPath(b);
-    const schema_fbs = if (is_windows) "src/format/Schema.fbs" else b.path("src/format/Schema.fbs").getPath(b);
-    const tensor_fbs = if (is_windows) "src/format/Tensor.fbs" else b.path("src/format/Tensor.fbs").getPath(b);
-    const sparse_tensor_fbs = if (is_windows) "src/format/SparseTensor.fbs" else b.path("src/format/SparseTensor.fbs").getPath(b);
+    const format_dir = flatcPathArg(b, "src/format");
+    const message_fbs = flatcPathArg(b, "src/format/Message.fbs");
+    const file_fbs = flatcPathArg(b, "src/format/File.fbs");
+    const schema_fbs = flatcPathArg(b, "src/format/Schema.fbs");
+    const tensor_fbs = flatcPathArg(b, "src/format/Tensor.fbs");
+    const sparse_tensor_fbs = flatcPathArg(b, "src/format/SparseTensor.fbs");
     const gen_step = try @import("flatbufferz").GenStep.create(
         b,
         fbz_dep.artifact("flatc-zig"),
