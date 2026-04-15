@@ -101,14 +101,6 @@ pub const ArrayRef = struct {
         errdefer if (dict_ref) |*owned| owned.release();
 
         switch (sliced.data_type) {
-            .list, .large_list, .map => {
-                // Keep child shared: offsets buffer defines logical subranges.
-                // Child is not physically re-sliced for list/map shallow slices.
-
-                const child = self.node.data.children[0];
-                children[0] = child.retain();
-                child_count = 1;
-            },
             .struct_ => {
                 // Struct requires child-wise slicing to keep row alignment.
                 const total_offset = self.node.data.offset + offset;
@@ -118,8 +110,11 @@ pub const ArrayRef = struct {
                     child_count += 1;
                 }
             },
-            .dictionary => {
-                // Dictionary arrays keep the same dictionary and shared children.
+            .list, .large_list, .map, .list_view, .large_list_view, .fixed_size_list, .sparse_union, .dense_union, .run_end_encoded, .dictionary => {
+                // Explicit shallow-slice families:
+                // - list/list_view/map/fixed_size_list keep child coordinate space shared
+                // - union/REE keep shared child/run-end coordinate spaces
+                // - dictionary keeps child/dictionary shared
                 var i: usize = 0;
                 while (i < sliced.children.len) : (i += 1) {
                     children[i] = sliced.children[i].retain();
@@ -419,6 +414,49 @@ test "array ref slice is shallow for list_view" {
 
     const child_data = sliced.data().children[0].data();
     try std.testing.expectEqual(@as(usize, 5), child_data.length);
+    try std.testing.expectEqual(@as(usize, 0), child_data.offset);
+}
+
+test "array ref slice is shallow for fixed_size_list child" {
+    const allocator = std.testing.allocator;
+    const value_type = array_data.DataType{ .int32 = {} };
+    const field = datatype.Field{ .name = "item", .data_type = &value_type, .nullable = true };
+    const list_type = array_data.DataType{ .fixed_size_list = .{ .value_field = field, .list_size = 2 } };
+
+    var child_values: [6 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child_values[0..], std.mem.sliceAsBytes(&[_]i32{ 1, 2, 3, 4, 5, 6 }));
+    const child_layout = ArrayData{
+        .data_type = value_type,
+        .length = 6,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child_values[0..]) },
+    };
+    var child_ref = try ArrayRef.fromBorrowed(allocator, child_layout);
+    defer child_ref.release();
+
+    const buffers = try allocator.alloc(SharedBuffer, 1);
+    buffers[0] = SharedBuffer.empty;
+
+    const children = try allocator.alloc(ArrayRef, 1);
+    children[0] = child_ref.retain();
+
+    const layout = ArrayData{
+        .data_type = list_type,
+        .length = 3,
+        .buffers = buffers,
+        .children = children,
+    };
+    var array_ref = try ArrayRef.fromOwnedUnsafe(allocator, layout);
+    defer array_ref.release();
+
+    var sliced = try array_ref.slice(1, 1);
+    defer sliced.release();
+
+    const sliced_data = sliced.data();
+    try std.testing.expectEqual(@as(usize, 1), sliced_data.offset);
+    try std.testing.expectEqual(@as(usize, 1), sliced_data.length);
+
+    const child_data = sliced_data.children[0].data();
+    try std.testing.expectEqual(@as(usize, 6), child_data.length);
     try std.testing.expectEqual(@as(usize, 0), child_data.offset);
 }
 
