@@ -55,9 +55,9 @@ var linked_lz4_symbols: Lz4Symbols = .{
 };
 
 pub fn loadZstdSymbols() !*const ZstdSymbols {
-    return &zstd_symbols;
+    return &linked_zstd_symbols;
 }
 
 pub fn loadLz4Symbols() !*const Lz4Symbols {
-    return &lz4_symbols;
+    return &linked_lz4_symbols;
 }
