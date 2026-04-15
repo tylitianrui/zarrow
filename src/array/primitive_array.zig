@@ -33,7 +33,6 @@ pub fn PrimitiveArray(comptime T: type) type {
             return self.data.isNull(i);
         }
 
-        /// Execute values logic for this type.
         pub fn values(self: Self) []const T {
             // Primitive arrays require [validity] and [values] buffers.
             std.debug.assert(self.data.buffers.len >= 2);
@@ -100,7 +99,6 @@ pub fn PrimitiveBuilder(comptime T: type, comptime dtype: DataType) type {
             self.state = .ready;
         }
 
-        /// Execute ensureValuesCapacity logic for this type.
         fn ensureValuesCapacity(self: *Self, new_len: usize) !void {
             const capacity = self.values.len() / @sizeOf(T);
             if (new_len <= capacity) return;

@@ -118,7 +118,6 @@ pub const ListViewArray = struct {
         return self.data.isNull(i);
     }
 
-    /// Execute valuesRef logic for this type.
     pub fn valuesRef(self: ListViewArray) *const ArrayRef {
         std.debug.assert(self.data.children.len == 1);
         return &self.data.children[0];
@@ -152,7 +151,6 @@ pub const LargeListViewArray = struct {
         return self.data.isNull(i);
     }
 
-    /// Execute valuesRef logic for this type.
     pub fn valuesRef(self: LargeListViewArray) *const ArrayRef {
         std.debug.assert(self.data.children.len == 1);
         return &self.data.children[0];

@@ -68,7 +68,6 @@ pub const SharedBuffer = struct {
         return self.data.len;
     }
 
-    /// Execute isEmpty logic for this type.
     pub fn isEmpty(self: Self) bool {
         return self.data.len == 0;
     }
@@ -84,7 +83,6 @@ pub const SharedBuffer = struct {
         return out;
     }
 
-    /// Execute typedSlice logic for this type.
     pub fn typedSlice(self: Self, comptime T: type) []const T {
         const aligned: []align(@alignOf(T)) const u8 = @alignCast(self.data);
         return std.mem.bytesAsSlice(T, aligned);
@@ -118,12 +116,10 @@ pub const OwnedBuffer = struct {
         return self.data.len;
     }
 
-    /// Execute isEmpty logic for this type.
     pub fn isEmpty(self: Self) bool {
         return self.data.len == 0;
     }
 
-    /// Execute toShared logic for this type.
     pub fn toShared(self: *Self, used: usize) !SharedBuffer {
         const storage = try self.allocator.create(BufferStorage);
         storage.* = .{
@@ -137,12 +133,10 @@ pub const OwnedBuffer = struct {
         return shared;
     }
 
-    /// Execute typedSlice logic for this type.
     pub fn typedSlice(self: Self, comptime T: type) []T {
         return std.mem.bytesAsSlice(T, self.data);
     }
 
-    /// Execute resize logic for this type.
     pub fn resize(self: *Self, newSize: usize) !void {
         const actualSize = alignedSize(newSize);
         const newData = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(ALIGNMENT), actualSize);

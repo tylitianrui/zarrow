@@ -33,13 +33,11 @@ pub const DictionaryArray = struct {
         return self.data.isNull(i);
     }
 
-    /// Execute dictionaryRef logic for this type.
     pub fn dictionaryRef(self: DictionaryArray) *const ArrayRef {
         std.debug.assert(self.data.dictionary != null);
         return &self.data.dictionary.?;
     }
 
-    /// Execute index logic for this type.
     pub fn index(self: DictionaryArray, i: usize) i64 {
         std.debug.assert(i < self.data.length);
         std.debug.assert(self.data.buffers.len >= 2);
@@ -127,7 +125,6 @@ pub const DictionaryBuilder = struct {
         self.state = .ready;
     }
 
-    /// Execute ensureIndicesCapacity logic for this type.
     fn ensureIndicesCapacity(self: *DictionaryBuilder, needed_len: usize) !void {
         const byte_width = @as(usize, self.index_type.bit_width) / 8;
         const needed_bytes = needed_len * byte_width;
@@ -135,7 +132,6 @@ pub const DictionaryBuilder = struct {
         try self.indices.resize(needed_bytes);
     }
 
-    /// Execute ensureValidityForNull logic for this type.
     fn ensureValidityForNull(self: *DictionaryBuilder, new_len: usize) !void {
         if (self.validity == null) {
             var buf = try initValidityAllValid(self.allocator, new_len);
@@ -150,7 +146,6 @@ pub const DictionaryBuilder = struct {
         self.null_count += 1;
     }
 
-    /// Execute setValidBit logic for this type.
     fn setValidBit(self: *DictionaryBuilder, index: usize) !void {
         if (self.validity == null) return;
         var buf = &self.validity.?;
@@ -158,7 +153,6 @@ pub const DictionaryBuilder = struct {
         bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
     }
 
-    /// Execute setIndex logic for this type.
     fn setIndex(self: *DictionaryBuilder, pos: usize, index: i64) BuilderError!void {
         switch (self.index_type.bit_width) {
             8 => if (self.index_type.signed) {
@@ -195,7 +189,6 @@ pub const DictionaryBuilder = struct {
         }
     }
 
-    /// Execute appendIndex logic for this type.
     pub fn appendIndex(self: *DictionaryBuilder, index: i64) !void {
         if (self.state == .finished) return BuilderError.AlreadyFinished;
         const next_len = self.len + 1;

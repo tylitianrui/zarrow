@@ -90,14 +90,12 @@ pub const BooleanBuilder = struct {
         self.state = .ready;
     }
 
-    /// Execute ensureValuesCapacity logic for this type.
     fn ensureValuesCapacity(self: *Self, new_len: usize) !void {
         const needed = bitmap.byteLength(new_len);
         if (needed <= self.values.len()) return;
         try self.values.resize(needed);
     }
 
-    /// Execute ensureValidityForNull logic for this type.
     fn ensureValidityForNull(self: *Self, new_len: usize) !void {
         if (self.validity == null) {
             var buf = try initValidityAllValid(self.allocator, new_len);
@@ -112,7 +110,6 @@ pub const BooleanBuilder = struct {
         self.null_count += 1;
     }
 
-    /// Execute setValidBit logic for this type.
     fn setValidBit(self: *Self, index: usize) !void {
         if (self.validity == null) return;
         var buf = &self.validity.?;

@@ -68,18 +68,15 @@ pub const StructArray = struct {
         return self.data.isNull(i);
     }
 
-    /// Execute fieldCount logic for this type.
     pub fn fieldCount(self: StructArray) usize {
         return self.data.children.len;
     }
 
-    /// Execute fieldRef logic for this type.
     pub fn fieldRef(self: StructArray, index: usize) *const ArrayRef {
         std.debug.assert(index < self.data.children.len);
         return &self.data.children[index];
     }
 
-    /// Execute field logic for this type.
     pub fn field(self: StructArray, index: usize) !ArrayRef {
         std.debug.assert(index < self.data.children.len);
         const child = self.data.children[index];
@@ -103,7 +100,6 @@ pub const StructBuilder = struct {
     null_count: usize = 0,
     state: BuilderState = .ready,
 
-    /// Execute resetChildren logic for this type.
     fn resetChildren(self: *StructBuilder) FromChildrenError!void {
         if (self.child_builders == null) return;
         const builders = self.child_builders.?;
@@ -116,7 +112,6 @@ pub const StructBuilder = struct {
         }
     }
 
-    /// Execute clearChildren logic for this type.
     fn clearChildren(self: *StructBuilder) FromChildrenError!void {
         if (self.child_builders == null) return;
         const builders = self.child_builders.?;
@@ -129,7 +124,6 @@ pub const StructBuilder = struct {
         }
     }
 
-    /// Execute rollbackChildren logic for this type.
     fn rollbackChildren(self: *StructBuilder, builders: []const ChildBuilder, action: RecycleAction) ChildBuilderError!void {
         _ = self;
         for (builders) |builder| {
@@ -140,7 +134,6 @@ pub const StructBuilder = struct {
         }
     }
 
-    /// Execute materializeChildren logic for this type.
     fn materializeChildren(self: *StructBuilder, builders: []const ChildBuilder, rollback_action: ?RecycleAction) FromChildrenError![]ArrayRef {
         if (builders.len != self.fields.len) return BuilderError.InvalidChildCount;
 
@@ -177,7 +170,6 @@ pub const StructBuilder = struct {
         return children;
     }
 
-    /// Execute releaseMaterializedChildren logic for this type.
     fn releaseMaterializedChildren(self: *StructBuilder, children: []ArrayRef) void {
         var i: usize = 0;
         while (i < children.len) : (i += 1) {
@@ -186,7 +178,6 @@ pub const StructBuilder = struct {
         self.allocator.free(children);
     }
 
-    /// Execute recycle logic for this type.
     fn recycle(self: *StructBuilder, action: RecycleAction) FromChildrenError!void {
         // Any-state recycle: caller can always reset/clear the parent builder.
         // Child coordination is only attempted for finished batches so we don't
@@ -217,7 +208,6 @@ pub const StructBuilder = struct {
         return .{ .allocator = allocator, .fields = fields };
     }
 
-    /// Execute initWithChildren logic for this type.
     pub fn initWithChildren(allocator: std.mem.Allocator, fields: []const Field, child_builders: []const ChildBuilder) StructBuilder {
         return .{ .allocator = allocator, .fields = fields, .child_builders = child_builders };
     }
@@ -251,7 +241,6 @@ pub const StructBuilder = struct {
         self.len = next_len;
     }
 
-    /// Execute appendPresent logic for this type.
     pub fn appendPresent(self: *StructBuilder) !void {
         try self.appendValid();
     }
@@ -264,7 +253,6 @@ pub const StructBuilder = struct {
         self.len = next_len;
     }
 
-    /// Execute appendMany logic for this type.
     pub fn appendMany(self: *StructBuilder, present: []const bool) !void {
         if (self.state == .finished) return BuilderError.AlreadyFinished;
         for (present) |is_present| {
@@ -330,7 +318,6 @@ pub const StructBuilder = struct {
         return array_ref_out;
     }
 
-    /// Execute finishFromChildren logic for this type.
     pub fn finishFromChildren(self: *StructBuilder) FromChildrenError!ArrayRef {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;
@@ -340,7 +327,6 @@ pub const StructBuilder = struct {
         return self.finish(children);
     }
 
-    /// Execute finishFromChildrenReset logic for this type.
     pub fn finishFromChildrenReset(self: *StructBuilder) FromChildrenError!ArrayRef {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;
@@ -355,7 +341,6 @@ pub const StructBuilder = struct {
         return array_ref_out;
     }
 
-    /// Execute finishFromChildrenClear logic for this type.
     pub fn finishFromChildrenClear(self: *StructBuilder) FromChildrenError!ArrayRef {
         if (self.child_builders == null) return BuilderError.MissingChildBuilders;
         const builders = self.child_builders.?;

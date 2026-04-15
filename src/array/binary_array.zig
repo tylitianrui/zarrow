@@ -126,7 +126,6 @@ pub const BinaryBuilder = struct {
         self.state = .ready;
     }
 
-    /// Execute ensureOffsetsCapacity logic for this type.
     fn ensureOffsetsCapacity(self: *BinaryBuilder, needed_len: usize) !void {
         const capacity = self.offsets.len() / @sizeOf(i32);
         if (needed_len <= capacity) return;
@@ -138,7 +137,6 @@ pub const BinaryBuilder = struct {
         }
     }
 
-    /// Execute ensureDataCapacity logic for this type.
     fn ensureDataCapacity(self: *BinaryBuilder, needed_len: usize) !void {
         if (needed_len <= self.data.len()) return;
         try self.data.resize(needed_len);
@@ -267,7 +265,6 @@ pub const LargeBinaryBuilder = struct {
         self.state = .ready;
     }
 
-    /// Execute ensureOffsetsCapacity logic for this type.
     fn ensureOffsetsCapacity(self: *LargeBinaryBuilder, needed_len: usize) !void {
         const capacity = self.offsets.len() / @sizeOf(i64);
         if (needed_len <= capacity) return;
@@ -279,7 +276,6 @@ pub const LargeBinaryBuilder = struct {
         }
     }
 
-    /// Execute ensureDataCapacity logic for this type.
     fn ensureDataCapacity(self: *LargeBinaryBuilder, needed_len: usize) !void {
         if (needed_len <= self.data.len()) return;
         try self.data.resize(needed_len);

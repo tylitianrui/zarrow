@@ -92,7 +92,6 @@ pub const IntType = struct {
     bit_width: u8,
     signed: bool,
 
-    /// Execute fromTypeId logic for this type.
     pub fn fromTypeId(id: TypeId) ?IntType {
         return switch (id) {
             .int8 => .{ .bit_width = 8, .signed = true },
@@ -107,7 +106,6 @@ pub const IntType = struct {
         };
     }
 
-    /// Execute toTypeId logic for this type.
     pub fn toTypeId(self: IntType) ?TypeId {
         return switch (self.bit_width) {
             8 => if (self.signed) .int8 else .uint8,
@@ -156,7 +154,6 @@ pub const Field = struct {
         return .{ .name = name, .data_type = data_type };
     }
 
-    /// Execute eql logic for this type.
     pub fn eql(self: Field, other: Field) bool {
         return fieldEql(self, other);
     }
@@ -257,12 +254,10 @@ pub const DataType = union(TypeId) {
     decimal32: DecimalParams,
     decimal64: DecimalParams,
 
-    /// Execute id logic for this type.
     pub fn id(self: DataType) TypeId {
         return std.meta.activeTag(self);
     }
 
-    /// Execute name logic for this type.
     pub fn name(self: DataType) []const u8 {
         return switch (self) {
             .null => "null",
@@ -313,7 +308,6 @@ pub const DataType = union(TypeId) {
         };
     }
 
-    /// Execute eql logic for this type.
     pub fn eql(self: DataType, other: DataType) bool {
         return dataTypeEql(self, other);
     }

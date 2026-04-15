@@ -33,7 +33,6 @@ pub const FixedSizeBinaryArray = struct {
         return self.data.isNull(i);
     }
 
-    /// Execute byteWidth logic for this type.
     pub fn byteWidth(self: FixedSizeBinaryArray) usize {
         return @intCast(self.data.data_type.fixed_size_binary.byte_width);
     }
@@ -99,13 +98,11 @@ pub const FixedSizeBinaryBuilder = struct {
         self.state = .ready;
     }
 
-    /// Execute ensureDataCapacity logic for this type.
     fn ensureDataCapacity(self: *FixedSizeBinaryBuilder, needed_len: usize) !void {
         if (needed_len <= self.data.len()) return;
         try self.data.resize(needed_len);
     }
 
-    /// Execute ensureValidityForNull logic for this type.
     fn ensureValidityForNull(self: *FixedSizeBinaryBuilder, new_len: usize) !void {
         if (self.validity == null) {
             var buf = try initValidityAllValid(self.allocator, new_len);
@@ -120,7 +117,6 @@ pub const FixedSizeBinaryBuilder = struct {
         self.null_count += 1;
     }
 
-    /// Execute setValidBit logic for this type.
     fn setValidBit(self: *FixedSizeBinaryBuilder, index: usize) !void {
         if (self.validity == null) return;
         var buf = &self.validity.?;
@@ -207,13 +203,11 @@ pub const FixedSizeListArray = struct {
         return self.data.isNull(i);
     }
 
-    /// Execute valuesRef logic for this type.
     pub fn valuesRef(self: FixedSizeListArray) *const ArrayRef {
         std.debug.assert(self.data.children.len == 1);
         return &self.data.children[0];
     }
 
-    /// Execute listSize logic for this type.
     pub fn listSize(self: FixedSizeListArray) usize {
         return @intCast(self.data.data_type.fixed_size_list.list_size);
     }
@@ -277,7 +271,6 @@ pub const FixedSizeListBuilder = struct {
         self.state = .ready;
     }
 
-    /// Execute ensureValidityForNull logic for this type.
     fn ensureValidityForNull(self: *FixedSizeListBuilder, new_len: usize) !void {
         if (self.validity == null) {
             var buf = try initValidityAllValid(self.allocator, new_len);
@@ -292,7 +285,6 @@ pub const FixedSizeListBuilder = struct {
         self.null_count += 1;
     }
 
-    /// Execute setValidBit logic for this type.
     fn setValidBit(self: *FixedSizeListBuilder, index: usize) !void {
         if (self.validity == null) return;
         var buf = &self.validity.?;
@@ -300,7 +292,6 @@ pub const FixedSizeListBuilder = struct {
         bitmap.setBit(buf.data[0..bitmap.byteLength(index + 1)], index);
     }
 
-    /// Execute bumpValuesLen logic for this type.
     fn bumpValuesLen(self: *FixedSizeListBuilder) BuilderError!void {
         const added = std.math.mul(usize, 1, self.list_size) catch return BuilderError.Overflow;
         self.values_len = std.math.add(usize, self.values_len, added) catch return BuilderError.Overflow;

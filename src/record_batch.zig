@@ -81,28 +81,23 @@ pub const RecordBatch = struct {
         self.schema_ref.release();
     }
 
-    /// Execute numRows logic for this type.
     pub fn numRows(self: Self) usize {
         return self.num_rows;
     }
 
-    /// Execute numColumns logic for this type.
     pub fn numColumns(self: Self) usize {
         return self.columns.len;
     }
 
-    /// Execute column logic for this type.
     pub fn column(self: *const Self, index: usize) *const ArrayRef {
         std.debug.assert(index < self.columns.len);
         return &self.columns[index];
     }
 
-    /// Execute schema logic for this type.
     pub fn schema(self: *const Self) *const Schema {
         return self.schema_ref.schema();
     }
 
-    /// Execute columnByName logic for this type.
     pub fn columnByName(self: *const Self, name: []const u8) ?*const ArrayRef {
         for (self.schema_ref.schema().fields, 0..) |field, i| {
             if (std.mem.eql(u8, field.name, name)) return &self.columns[i];
@@ -171,7 +166,6 @@ pub const RecordBatchBuilder = struct {
         self.schema_ref.release();
     }
 
-    /// Execute releaseColumns logic for this type.
     fn releaseColumns(self: *Self) void {
         for (self.columns, 0..) |slot, i| {
             if (slot) |col_ref| {
@@ -182,7 +176,6 @@ pub const RecordBatchBuilder = struct {
         }
     }
 
-    /// Execute setColumn logic for this type.
     pub fn setColumn(self: *Self, index: usize, column_ref: ArrayRef) RecordBatchBuilderError!void {
         if (self.finished) return RecordBatchBuilderError.AlreadyFinished;
         if (index >= self.columns.len) return RecordBatchBuilderError.InvalidColumnIndex;
@@ -190,7 +183,6 @@ pub const RecordBatchBuilder = struct {
         self.columns[index] = column_ref.retain();
     }
 
-    /// Execute setColumnByName logic for this type.
     pub fn setColumnByName(self: *Self, name: []const u8, column_ref: ArrayRef) RecordBatchBuilderError!void {
         if (self.finished) return RecordBatchBuilderError.AlreadyFinished;
         for (self.schema_ref.schema().fields, 0..) |field, i| {

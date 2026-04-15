@@ -70,7 +70,6 @@ pub const ArrayData = struct {
         };
     }
 
-    /// Execute validity logic for this type.
     pub fn validity(self: Self) ?ValidityBitmap {
         if (!hasTopLevelValidityBitmap(self.data_type)) return null;
         if (self.buffers.len == 0) return null;
@@ -95,19 +94,16 @@ pub const ArrayData = struct {
         return !self.isNull(i);
     }
 
-    /// Execute hasNulls logic for this type.
     pub fn hasNulls(self: Self) bool {
         if (self.null_count) |count| return count != 0;
         const validity_bitmap = self.validity() orelse return false;
         return validity_bitmap.countNulls() > 0;
     }
 
-    /// Execute setNullCountUnknown logic for this type.
     pub fn setNullCountUnknown(self: *Self) void {
         self.null_count = null;
     }
 
-    /// Execute setNullCountKnown logic for this type.
     pub fn setNullCountKnown(self: *Self, count: usize) void {
         self.null_count = count;
     }
@@ -128,7 +124,6 @@ pub const ArrayData = struct {
         };
     }
 
-    /// Execute nullCount logic for this type.
     pub fn nullCount(self: *Self) usize {
         if (self.null_count) |count| return count;
         if (layoutDataType(self.data_type) == .null) {
@@ -148,7 +143,6 @@ pub const ArrayData = struct {
         return count;
     }
 
-    /// Execute fixedWidthByteSize logic for this type.
     fn fixedWidthByteSize(dt: DataType) ?usize {
         return switch (dt) {
             .bool => 1,
@@ -177,7 +171,6 @@ pub const ArrayData = struct {
         };
     }
 
-    /// Execute offsetByteWidth logic for this type.
     fn offsetByteWidth(dt: DataType) ?usize {
         return switch (dt) {
             .string, .binary, .list, .list_view, .map => 4,
@@ -186,7 +179,6 @@ pub const ArrayData = struct {
         };
     }
 
-    /// Execute validateOffsetsI32 logic for this type.
     fn validateOffsetsI32(offsets: []const i32, total_len: usize, data_len: usize) ValidationError!void {
         const needed_len = std.math.add(usize, total_len, 1) catch return error.InvalidOffsets;
         if (offsets.len < needed_len) return error.BufferTooSmall;
@@ -218,7 +210,6 @@ pub const ArrayData = struct {
         }
     }
 
-    /// Execute validateOffsetsI64 logic for this type.
     fn validateOffsetsI64(offsets: []const i64, total_len: usize, data_len: usize) ValidationError!void {
         const needed_len = std.math.add(usize, total_len, 1) catch return error.InvalidOffsets;
         if (offsets.len < needed_len) return error.BufferTooSmall;
@@ -291,7 +282,6 @@ pub const ArrayData = struct {
         if (prev < total_len_i64) return error.InvalidOffsets;
     }
 
-    /// Execute validateRunEndsUnsigned logic for this type.
     fn validateRunEndsUnsigned(comptime T: type, run_ends: []const T, total_len: usize) ValidationError!void {
         if (total_len == 0) {
             if (run_ends.len != 0) return error.InvalidOffsets;
@@ -324,7 +314,6 @@ pub const ArrayData = struct {
         }
     }
 
-    /// Execute validateLayout logic for this type.
     pub fn validateLayout(self: Self) ValidationError!void {
         const dt = layoutDataType(self.data_type);
 
@@ -497,7 +486,6 @@ pub const ArrayData = struct {
         }
     }
 
-    /// Execute validateFull logic for this type.
     pub fn validateFull(self: Self) ValidationError!void {
         try self.validateLayout();
 

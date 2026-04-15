@@ -33,7 +33,6 @@ pub const ListArray = struct {
         return self.data.isNull(i);
     }
 
-    /// Execute valuesRef logic for this type.
     pub fn valuesRef(self: ListArray) *const ArrayRef {
         std.debug.assert(self.data.children.len == 1);
         return &self.data.children[0];
@@ -66,7 +65,6 @@ pub const LargeListArray = struct {
         return self.data.isNull(i);
     }
 
-    /// Execute valuesRef logic for this type.
     pub fn valuesRef(self: LargeListArray) *const ArrayRef {
         std.debug.assert(self.data.children.len == 1);
         return &self.data.children[0];
@@ -86,7 +84,6 @@ pub const LargeListArray = struct {
     }
 };
 
-/// Execute GenericListBuilder logic for this type.
 pub fn GenericListBuilder(comptime OffsetsT: type) type {
     return struct {
         allocator: std.mem.Allocator,
@@ -102,7 +99,6 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
         const Self = @This();
         const BuilderError = error{ AlreadyFinished, NotFinished, OffsetOverflow, InvalidChildLength };
 
-        /// Execute listDataType logic for this type.
         fn listDataType(value_field: Field) DataType {
             if (OffsetsT == i32) {
                 return DataType{ .list = .{ .value_field = value_field } };
@@ -164,7 +160,6 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             }
         }
 
-        /// Execute ensureOffsetsCapacity logic for this type.
         fn ensureOffsetsCapacity(self: *Self, needed_len: usize) !void {
             const capacity = self.offsets.len() / @sizeOf(OffsetsT);
             if (needed_len <= capacity) return;
@@ -176,7 +171,6 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             }
         }
 
-        /// Execute appendLen logic for this type.
         pub fn appendLen(self: *Self, value_len: usize) !void {
             if (self.state == .finished) return BuilderError.AlreadyFinished;
             const next_len = self.len + 1;
@@ -192,7 +186,6 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             self.values_len = next_offset;
         }
 
-        /// Execute appendLens logic for this type.
         pub fn appendLens(self: *Self, lengths: []const usize) !void {
             if (self.state == .finished) return BuilderError.AlreadyFinished;
             if (lengths.len == 0) return;
@@ -233,7 +226,6 @@ pub fn GenericListBuilder(comptime OffsetsT: type) type {
             self.len = next_len;
         }
 
-        /// Execute appendNulls logic for this type.
         pub fn appendNulls(self: *Self, count: usize) !void {
             if (self.state == .finished) return BuilderError.AlreadyFinished;
             if (count == 0) return;
