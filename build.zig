@@ -1,28 +1,8 @@
 const std = @import("std");
 
-fn addWindowsVcpkgLibraryPaths(b: *std.Build, step: *std.Build.Step.Compile) void {
-    if (b.graph.host.result.os.tag != .windows) return;
-
-    const vcpkg_root = std.process.getEnvVarOwned(b.allocator, "VCPKG_INSTALLATION_ROOT") catch return;
-    defer b.allocator.free(vcpkg_root);
-
-    const installed_root = std.fs.path.join(b.allocator, &.{ vcpkg_root, "installed", "x64-windows" }) catch return;
-    defer b.allocator.free(installed_root);
-
-    const lib_dir = std.fs.path.join(b.allocator, &.{ installed_root, "lib" }) catch return;
-    defer b.allocator.free(lib_dir);
-    const debug_lib_dir = std.fs.path.join(b.allocator, &.{ installed_root, "debug", "lib" }) catch return;
-    defer b.allocator.free(debug_lib_dir);
-
-    step.addLibraryPath(.{ .cwd_relative = lib_dir });
-    step.addLibraryPath(.{ .cwd_relative = debug_lib_dir });
-}
-
 fn configureIpcCompression(b: *std.Build, step: *std.Build.Step.Compile, deps_check: *std.Build.Step) void {
+    _ = b;
     step.step.dependOn(deps_check);
-    addWindowsVcpkgLibraryPaths(b, step);
-    step.linkSystemLibrary("zstd");
-    step.linkSystemLibrary("lz4");
 }
 
 // Configure the zarrow package as a reusable module plus a dedicated test step.

@@ -6,31 +6,12 @@ const buffer = @import("../buffer.zig");
 const array_ref = @import("../array/array_ref.zig");
 const array_data = @import("../array/array_data.zig");
 const format = @import("format.zig");
+const compression_dynlib = @import("compression_dynlib.zig");
 const bitmap = @import("../bitmap.zig");
 const fb = @import("flatbufferz");
 const arrow_fbs = @import("arrow_fbs");
 
 pub const StreamError = format.StreamError;
-
-extern fn LZ4F_createDecompressionContext(ctx_ptr: *?*anyopaque, version: c_uint) callconv(.c) usize;
-extern fn LZ4F_freeDecompressionContext(ctx: ?*anyopaque) callconv(.c) usize;
-extern fn LZ4F_decompress(
-    ctx: ?*anyopaque,
-    dst: ?*anyopaque,
-    dst_size_ptr: *usize,
-    src: ?*const anyopaque,
-    src_size_ptr: *usize,
-    options_ptr: ?*const anyopaque,
-) callconv(.c) usize;
-extern fn LZ4F_isError(code: usize) callconv(.c) c_uint;
-extern fn LZ4F_compressFrameBound(src_size: usize, prefs_ptr: ?*const anyopaque) callconv(.c) usize;
-extern fn LZ4F_compressFrame(
-    dst: ?*anyopaque,
-    dst_capacity: usize,
-    src: ?*const anyopaque,
-    src_size: usize,
-    prefs_ptr: ?*const anyopaque,
-) callconv(.c) usize;
 
 pub const Schema = schema_mod.Schema;
 pub const Field = datatype.Field;
@@ -1575,10 +1556,12 @@ fn decompressLz4FramePayload(
     payload: []const u8,
     expected_len: usize,
 ) (StreamError || error{OutOfMemory})!array_data.SharedBuffer {
+    const syms = compression_dynlib.loadLz4Symbols() catch return StreamError.UnsupportedType;
+
     var dctx: ?*anyopaque = null;
-    const create_rc = LZ4F_createDecompressionContext(&dctx, 100); // LZ4F_VERSION
-    if (LZ4F_isError(create_rc) != 0 or dctx == null) return StreamError.InvalidBody;
-    defer _ = LZ4F_freeDecompressionContext(dctx);
+    const create_rc = syms.*.create_decompression_context(&dctx, 100); // LZ4F_VERSION
+    if (syms.*.is_error(create_rc) != 0 or dctx == null) return StreamError.InvalidBody;
+    defer _ = syms.*.free_decompression_context(dctx);
 
     var out_owned = try buffer.OwnedBuffer.init(allocator, expected_len);
     errdefer out_owned.deinit();
@@ -1589,7 +1572,7 @@ fn decompressLz4FramePayload(
     while (true) {
         var src_size = payload.len - src_pos;
         var dst_size = expected_len - dst_pos;
-        const rc = LZ4F_decompress(
+        const rc = syms.*.decompress(
             dctx,
             if (dst_size == 0) null else @ptrCast(out.ptr + dst_pos),
             &dst_size,
@@ -1597,7 +1580,7 @@ fn decompressLz4FramePayload(
             &src_size,
             null,
         );
-        if (LZ4F_isError(rc) != 0) return StreamError.InvalidBody;
+        if (syms.*.is_error(rc) != 0) return StreamError.InvalidBody;
 
         src_pos += src_size;
         dst_pos += dst_size;
@@ -1613,19 +1596,21 @@ fn decompressLz4FramePayload(
 }
 
 fn compressLz4FrameForTest(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    const bound = LZ4F_compressFrameBound(input.len, null);
-    if (bound == 0 or LZ4F_isError(bound) != 0) return StreamError.InvalidBody;
+    const syms = compression_dynlib.loadLz4Symbols() catch return StreamError.UnsupportedType;
+
+    const bound = syms.*.compress_frame_bound(input.len, null);
+    if (bound == 0 or syms.*.is_error(bound) != 0) return StreamError.InvalidBody;
     const out = try allocator.alloc(u8, bound);
     errdefer allocator.free(out);
 
-    const written = LZ4F_compressFrame(
+    const written = syms.*.compress_frame(
         @ptrCast(out.ptr),
         out.len,
         if (input.len == 0) null else @ptrCast(input.ptr),
         input.len,
         null,
     );
-    if (LZ4F_isError(written) != 0) return StreamError.InvalidBody;
+    if (syms.*.is_error(written) != 0) return StreamError.InvalidBody;
     if (written == 0 or written > out.len) return StreamError.InvalidBody;
     return try allocator.realloc(out, written);
 }
