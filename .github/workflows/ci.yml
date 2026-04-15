@@ -75,6 +75,85 @@ jobs:
       - name: Run tests
         run: zig build test
 
+      - name: CI diagnostics (Linux, on failure)
+        if: ${{ failure() && runner.os == 'Linux' }}
+        run: |
+          mkdir -p diagnostics
+          logfile="diagnostics/ci-diagnostics-linux.txt"
+          {
+            echo "=== Zig diagnostics ==="
+            zig version || true
+            zig env || true
+            echo "=== Compression tool versions ==="
+            zstd --version || true
+            lz4 --version || true
+            echo "=== Installed packages ==="
+            dpkg -l | grep -E 'libzstd|liblz4' || true
+            echo "=== Dynamic linker cache ==="
+            ldconfig -p | grep -E 'zstd|lz4' || true
+            echo "=== Relevant environment variables ==="
+            env | grep -E 'ZARROW_|VCPKG_|LD_LIBRARY_PATH|LIBRARY_PATH|PATH' || true
+            echo "=== Re-run compression dependency probe ==="
+            zig build check-ipc-compression-deps || true
+          } 2>&1 | tee "$logfile"
+
+      - name: CI diagnostics (macOS, on failure)
+        if: ${{ failure() && runner.os == 'macOS' }}
+        run: |
+          mkdir -p diagnostics
+          logfile="diagnostics/ci-diagnostics-macos.txt"
+          {
+            echo "=== Zig diagnostics ==="
+            zig version || true
+            zig env || true
+            echo "=== Compression tool versions ==="
+            zstd --version || true
+            lz4 --version || true
+            echo "=== Homebrew packages ==="
+            brew list --versions zstd lz4 || true
+            echo "=== Dynamic linker hints ==="
+            ls -l /opt/homebrew/lib/libzstd* /opt/homebrew/lib/liblz4* 2>/dev/null || true
+            ls -l /usr/local/lib/libzstd* /usr/local/lib/liblz4* 2>/dev/null || true
+            echo "=== Relevant environment variables ==="
+            env | grep -E 'ZARROW_|VCPKG_|DYLD_LIBRARY_PATH|LIBRARY_PATH|PATH' || true
+            echo "=== Re-run compression dependency probe ==="
+            zig build check-ipc-compression-deps || true
+          } 2>&1 | tee "$logfile"
+
+      - name: CI diagnostics (Windows, on failure)
+        if: ${{ failure() && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path diagnostics -Force | Out-Null
+          $logFile = Join-Path "diagnostics" "ci-diagnostics-windows.txt"
+          & {
+            Write-Host "=== Zig diagnostics ==="
+            zig version
+            zig env
+            Write-Host "=== Compression tool versions ==="
+            zstd --version
+            lz4 --version
+            Write-Host "=== Relevant environment variables ==="
+            Get-ChildItem Env: | Where-Object { $_.Name -match '^(ZARROW_|VCPKG_|LIB$|INCLUDE$|PATH$)' } | Sort-Object Name
+            Write-Host "=== vcpkg libraries ==="
+            if ($env:VCPKG_INSTALLATION_ROOT) {
+              $installed = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows"
+              Get-ChildItem "$installed\bin\zstd*.dll" -ErrorAction SilentlyContinue
+              Get-ChildItem "$installed\bin\lz4*.dll" -ErrorAction SilentlyContinue
+            }
+            Write-Host "=== Re-run compression dependency probe ==="
+            zig build check-ipc-compression-deps
+          } 2>&1 | Tee-Object -FilePath $logFile
+
+      - name: Upload failure diagnostics artifact
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-diagnostics-${{ matrix.os }}-zig-${{ matrix.zig }}
+          path: diagnostics/**
+          if-no-files-found: warn
+          retention-days: 14
+
   benchmark-ci-check:
     name: Benchmark CI CSV Check
     runs-on: ubuntu-latest

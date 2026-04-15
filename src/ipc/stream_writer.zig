@@ -11,26 +11,6 @@ const arrow_fbs = @import("arrow_fbs");
 
 pub const StreamError = format.StreamError;
 
-extern fn ZSTD_compressBound(src_size: usize) callconv(.c) usize;
-extern fn ZSTD_compress(
-    dst: ?*anyopaque,
-    dst_capacity: usize,
-    src: ?*const anyopaque,
-    src_size: usize,
-    compression_level: c_int,
-) callconv(.c) usize;
-extern fn ZSTD_isError(code: usize) callconv(.c) c_uint;
-
-extern fn LZ4F_compressFrameBound(src_size: usize, prefs_ptr: ?*const anyopaque) callconv(.c) usize;
-extern fn LZ4F_compressFrame(
-    dst: ?*anyopaque,
-    dst_capacity: usize,
-    src: ?*const anyopaque,
-    src_size: usize,
-    prefs_ptr: ?*const anyopaque,
-) callconv(.c) usize;
-extern fn LZ4F_isError(code: usize) callconv(.c) c_uint;
-
 pub const Schema = schema_mod.Schema;
 pub const Field = datatype.Field;
 pub const DataType = datatype.DataType;
