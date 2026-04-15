@@ -9,12 +9,12 @@ const array_data = @import("array_data.zig");
 
 // String and LargeString array views/builders backed by UTF-8 byte buffers.
 
-pub const SharedBuffer = buffer.SharedBuffer;
-pub const OwnedBuffer = buffer.OwnedBuffer;
-pub const ArrayData = array_data.ArrayData;
-pub const DataType = datatype.DataType;
-pub const ArrayRef = array_ref.ArrayRef;
-pub const BuilderState = builder_state.BuilderState;
+const SharedBuffer = buffer.SharedBuffer;
+const OwnedBuffer = buffer.OwnedBuffer;
+const ArrayData = array_data.ArrayData;
+const DataType = datatype.DataType;
+const ArrayRef = array_ref.ArrayRef;
+const BuilderState = builder_state.BuilderState;
 
 const STRING_TYPE = DataType{ .string = {} };
 const LARGE_STRING_TYPE = DataType{ .large_string = {} };

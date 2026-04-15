@@ -26,13 +26,13 @@ const builder_state = @import("builder_state.zig");
 const datatype = @import("../datatype.zig");
 const array_data = @import("array_data.zig");
 
-pub const SharedBuffer = buffer.SharedBuffer;
-pub const OwnedBuffer = buffer.OwnedBuffer;
-pub const ArrayData = array_data.ArrayData;
-pub const ArrayRef = array_ref.ArrayRef;
-pub const DataType = datatype.DataType;
+const SharedBuffer = buffer.SharedBuffer;
+const OwnedBuffer = buffer.OwnedBuffer;
+const ArrayData = array_data.ArrayData;
+const ArrayRef = array_ref.ArrayRef;
+const DataType = datatype.DataType;
 pub const Field = datatype.Field;
-pub const BuilderState = builder_state.BuilderState;
+const BuilderState = builder_state.BuilderState;
 
 pub const ChildBuilder = struct {
     // Opaque pointer to concrete child builder instance.

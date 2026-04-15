@@ -9,13 +9,13 @@ const array_data = @import("array_data.zig");
 
 // Dictionary-encoded array view and builder for integer index types.
 
-pub const SharedBuffer = buffer.SharedBuffer;
-pub const OwnedBuffer = buffer.OwnedBuffer;
-pub const ArrayData = array_data.ArrayData;
-pub const DataType = datatype.DataType;
+const SharedBuffer = buffer.SharedBuffer;
+const OwnedBuffer = buffer.OwnedBuffer;
+const ArrayData = array_data.ArrayData;
+const DataType = datatype.DataType;
 pub const IntType = datatype.IntType;
-pub const ArrayRef = array_ref.ArrayRef;
-pub const BuilderState = builder_state.BuilderState;
+const ArrayRef = array_ref.ArrayRef;
+const BuilderState = builder_state.BuilderState;
 
 const initValidityAllValid = array_utils.initValidityAllValid;
 const ensureBitmapCapacity = array_utils.ensureBitmapCapacity;

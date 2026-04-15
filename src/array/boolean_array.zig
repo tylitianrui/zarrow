@@ -9,12 +9,12 @@ const array_data = @import("array_data.zig");
 
 // Bit-packed boolean array view and builder.
 
-pub const SharedBuffer = buffer.SharedBuffer;
-pub const OwnedBuffer = buffer.OwnedBuffer;
-pub const ArrayData = array_data.ArrayData;
-pub const DataType = datatype.DataType;
-pub const ArrayRef = array_ref.ArrayRef;
-pub const BuilderState = builder_state.BuilderState;
+const SharedBuffer = buffer.SharedBuffer;
+const OwnedBuffer = buffer.OwnedBuffer;
+const ArrayData = array_data.ArrayData;
+const DataType = datatype.DataType;
+const ArrayRef = array_ref.ArrayRef;
+const BuilderState = builder_state.BuilderState;
 
 const BOOL_TYPE = DataType{ .bool = {} };
 const initValidityAllValid = array_utils.initValidityAllValid;

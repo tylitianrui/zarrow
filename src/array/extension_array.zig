@@ -6,11 +6,11 @@ const builder_state = @import("builder_state.zig");
 
 // Extension array view/builder wrappers.
 
-pub const DataType = datatype.DataType;
+const DataType = datatype.DataType;
 pub const ExtensionType = datatype.ExtensionType;
-pub const ArrayData = array_data.ArrayData;
-pub const ArrayRef = array_ref.ArrayRef;
-pub const BuilderState = builder_state.BuilderState;
+const ArrayData = array_data.ArrayData;
+const ArrayRef = array_ref.ArrayRef;
+const BuilderState = builder_state.BuilderState;
 
 pub const ExtensionArray = struct {
     data: *const ArrayData,

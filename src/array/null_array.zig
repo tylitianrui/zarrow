@@ -7,11 +7,11 @@ const buffer = @import("../buffer.zig");
 
 // Array view and builder for Arrow null type.
 
-pub const ArrayData = array_data.ArrayData;
-pub const ArrayRef = array_ref.ArrayRef;
-pub const BuilderState = builder_state.BuilderState;
-pub const SharedBuffer = buffer.SharedBuffer;
-pub const DataType = datatype.DataType;
+const ArrayData = array_data.ArrayData;
+const ArrayRef = array_ref.ArrayRef;
+const BuilderState = builder_state.BuilderState;
+const SharedBuffer = buffer.SharedBuffer;
+const DataType = datatype.DataType;
 
 pub const NullArray = struct {
     data: *const ArrayData,

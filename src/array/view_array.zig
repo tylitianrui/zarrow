@@ -11,14 +11,14 @@ const list_array = @import("list_array.zig");
 
 // View-type arrays/builders (string_view/binary_view/list_view/large_list_view).
 
-pub const SharedBuffer = buffer.SharedBuffer;
-pub const OwnedBuffer = buffer.OwnedBuffer;
-pub const DataType = datatype.DataType;
+const SharedBuffer = buffer.SharedBuffer;
+const OwnedBuffer = buffer.OwnedBuffer;
+const DataType = datatype.DataType;
 pub const Field = datatype.Field;
-pub const ArrayData = array_data.ArrayData;
-pub const ArrayRef = array_ref.ArrayRef;
+const ArrayData = array_data.ArrayData;
+const ArrayRef = array_ref.ArrayRef;
 pub const PrimitiveArray = primitive_array.PrimitiveArray;
-pub const BuilderState = builder_state.BuilderState;
+const BuilderState = builder_state.BuilderState;
 
 const STRING_VIEW_TYPE = DataType{ .string_view = {} };
 const BINARY_VIEW_TYPE = DataType{ .binary_view = {} };

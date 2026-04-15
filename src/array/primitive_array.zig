@@ -9,12 +9,12 @@ const array_data = @import("array_data.zig");
 
 // Generic fixed-width primitive array views/builders.
 
-pub const SharedBuffer = buffer.SharedBuffer;
-pub const OwnedBuffer = buffer.OwnedBuffer;
-pub const DataType = datatype.DataType;
-pub const ArrayData = array_data.ArrayData;
-pub const ArrayRef = array_ref.ArrayRef;
-pub const BuilderState = builder_state.BuilderState;
+const SharedBuffer = buffer.SharedBuffer;
+const OwnedBuffer = buffer.OwnedBuffer;
+const DataType = datatype.DataType;
+const ArrayData = array_data.ArrayData;
+const ArrayRef = array_ref.ArrayRef;
+const BuilderState = builder_state.BuilderState;
 
 /// Generic array view for fixed-width primitive types.
 pub fn PrimitiveArray(comptime T: type) type {
