@@ -2,10 +2,20 @@ const std = @import("std");
 
 fn configureIpcCompression(b: *std.Build, step: *std.Build.Step.Compile, deps_check: *std.Build.Step) void {
     step.step.dependOn(deps_check);
-    if (b.graph.host.result.os.tag != .windows) {
-        step.linkSystemLibrary("zstd");
-        step.linkSystemLibrary("lz4");
-    }
+
+    step.addIncludePath(b.path("vendor/zstd"));
+    step.addIncludePath(b.path("vendor/lz4"));
+
+    step.addCSourceFile(.{
+        .file = b.path("vendor/zstd/zstd.c"),
+        .flags = &.{"-DZSTD_LEGACY_SUPPORT=0"},
+    });
+    step.addCSourceFile(.{
+        .file = b.path("vendor/lz4/lz4_all.c"),
+        .flags = &.{},
+    });
+
+    step.linkLibC();
 }
 
 // Configure the zarrow package as a reusable module plus a dedicated test step.
@@ -72,7 +82,7 @@ pub fn build(b: *std.Build) !void {
     const run_compression_deps_check = b.addRunArtifact(compression_deps_check_exe);
     const compression_deps_check_step = b.step(
         "check-ipc-compression-deps",
-        "Verify zstd/lz4 dependencies required for IPC BodyCompression",
+        "Verify vendored zstd/lz4 sources required for IPC BodyCompression",
     );
     compression_deps_check_step.dependOn(&run_compression_deps_check.step);
 
