@@ -14,6 +14,10 @@ pub const FileMagic = file_writer.FileMagic;
 pub const Schema = schema_mod.Schema;
 pub const SchemaRef = schema_mod.SchemaRef;
 pub const RecordBatch = record_batch.RecordBatch;
+pub const EndiannessMode = stream_reader.EndiannessMode;
+pub const ReaderOptions = struct {
+    endianness_mode: EndiannessMode = .strict,
+};
 
 pub const FileError = stream_reader.StreamError || array_data.ValidationError || record_batch.RecordBatchError || fb.common.PackError || error{
     OutOfMemory,
@@ -60,6 +64,7 @@ pub fn FileReader(comptime ReaderType: type) type {
     return struct {
         allocator: std.mem.Allocator,
         reader: ReaderType,
+        options: ReaderOptions,
         loaded: bool = false,
         indexed: ?IndexedFile = null,
         schema_ref: ?SchemaRef = null,
@@ -70,9 +75,14 @@ pub fn FileReader(comptime ReaderType: type) type {
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator, reader: ReaderType) Self {
+            return initWithOptions(allocator, reader, .{});
+        }
+
+        pub fn initWithOptions(allocator: std.mem.Allocator, reader: ReaderType, options: ReaderOptions) Self {
             return .{
                 .allocator = allocator,
                 .reader = reader,
+                .options = options,
                 .dictionary_values = std.AutoHashMap(i64, array_data.ArrayRef).init(allocator),
             };
         }
@@ -168,7 +178,11 @@ pub fn FileReader(comptime ReaderType: type) type {
 
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             errdefer arena.deinit();
-            const schema = try stream_reader.buildSchemaFromFlatbuf(arena.allocator(), footer_t.schema.?);
+            const schema = try stream_reader.buildSchemaFromFlatbufWithEndiannessMode(
+                arena.allocator(),
+                footer_t.schema.?,
+                self.options.endianness_mode,
+            );
             self.schema_ref = try SchemaRef.fromArena(self.allocator, arena, schema);
 
             self.resetDecodeState();

@@ -8,6 +8,8 @@ const array_data = @import("../array/array_data.zig");
 const format = @import("format.zig");
 const compression_dynlib = @import("compression_dynlib.zig");
 const bitmap = @import("../bitmap.zig");
+const stream_writer = @import("stream_writer.zig");
+const tensor_types = @import("tensor_types.zig");
 const fb = @import("flatbufferz");
 const arrow_fbs = @import("arrow_fbs");
 
@@ -96,66 +98,18 @@ pub const OwnedSchema = struct {
     }
 };
 
-pub const BufferRegion = struct {
-    offset: usize,
-    length: usize,
+pub const BufferRegion = tensor_types.BufferRegion;
+pub const TensorDim = tensor_types.TensorDim;
+pub const TensorMetadata = tensor_types.TensorMetadata;
+pub const SparseMatrixAxis = tensor_types.SparseMatrixAxis;
+pub const SparseTensorIndexMetadata = tensor_types.SparseTensorIndexMetadata;
+pub const SparseTensorMetadata = tensor_types.SparseTensorMetadata;
+pub const TensorLikeMetadata = tensor_types.TensorLikeMetadata;
 
-    pub fn bytes(self: BufferRegion, body: []const u8) []const u8 {
-        return body[self.offset .. self.offset + self.length];
-    }
-};
+pub const EndiannessMode = stream_writer.EndiannessMode;
 
-pub const TensorDim = struct {
-    size: i64,
-    name: ?[]const u8,
-};
-
-pub const TensorMetadata = struct {
-    value_type: DataType,
-    shape: []const TensorDim,
-    strides: ?[]const i64,
-    data: BufferRegion,
-};
-
-pub const SparseMatrixAxis = enum {
-    row,
-    column,
-};
-
-pub const SparseTensorIndexMetadata = union(enum) {
-    coo: struct {
-        indices_type: datatype.IntType,
-        indices_strides: ?[]const i64,
-        indices: BufferRegion,
-        is_canonical: bool,
-    },
-    csx: struct {
-        compressed_axis: SparseMatrixAxis,
-        indptr_type: datatype.IntType,
-        indptr: BufferRegion,
-        indices_type: datatype.IntType,
-        indices: BufferRegion,
-    },
-    csf: struct {
-        indptr_type: datatype.IntType,
-        indptr_buffers: []const BufferRegion,
-        indices_type: datatype.IntType,
-        indices_buffers: []const BufferRegion,
-        axis_order: []const i32,
-    },
-};
-
-pub const SparseTensorMetadata = struct {
-    value_type: DataType,
-    shape: []const TensorDim,
-    non_zero_length: usize,
-    sparse_index: SparseTensorIndexMetadata,
-    data: BufferRegion,
-};
-
-pub const TensorLikeMetadata = union(enum) {
-    tensor: TensorMetadata,
-    sparse_tensor: SparseTensorMetadata,
+pub const ReaderOptions = struct {
+    endianness_mode: EndiannessMode = .strict,
 };
 
 pub const OwnedTensorLikeMessage = struct {
@@ -173,6 +127,7 @@ pub fn StreamReader(comptime ReaderType: type) type {
     return struct {
         allocator: std.mem.Allocator,
         reader: ReaderType,
+        options: ReaderOptions,
         schema_ref: ?SchemaRef = null,
         dictionary_values: std.AutoHashMap(i64, ArrayRef),
 
@@ -182,6 +137,16 @@ pub fn StreamReader(comptime ReaderType: type) type {
             return .{
                 .allocator = allocator,
                 .reader = reader,
+                .options = .{},
+                .dictionary_values = std.AutoHashMap(i64, ArrayRef).init(allocator),
+            };
+        }
+
+        pub fn initWithOptions(allocator: std.mem.Allocator, reader: ReaderType, options: ReaderOptions) Self {
+            return .{
+                .allocator = allocator,
+                .reader = reader,
+                .options = options,
                 .dictionary_values = std.AutoHashMap(i64, ArrayRef).init(allocator),
             };
         }
@@ -214,7 +179,11 @@ pub fn StreamReader(comptime ReaderType: type) type {
 
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             errdefer arena.deinit();
-            const s = try buildSchemaFromFlatbuf(arena.allocator(), msg.msg.header.Schema.?);
+            const s = try buildSchemaFromFlatbufWithEndiannessMode(
+                arena.allocator(),
+                msg.msg.header.Schema.?,
+                self.options.endianness_mode,
+            );
 
             if (self.schema_ref) |*ref| ref.release();
             self.schema_ref = try SchemaRef.fromArena(self.allocator, arena, s);
@@ -401,10 +370,18 @@ pub fn decodeSchemaFromMessageMetadata(
     allocator: std.mem.Allocator,
     metadata: []const u8,
 ) (StreamError || fb.common.PackError || error{OutOfMemory})!Schema {
+    return try decodeSchemaFromMessageMetadataWithEndiannessMode(allocator, metadata, .strict);
+}
+
+pub fn decodeSchemaFromMessageMetadataWithEndiannessMode(
+    allocator: std.mem.Allocator,
+    metadata: []const u8,
+    mode: EndiannessMode,
+) (StreamError || fb.common.PackError || error{OutOfMemory})!Schema {
     var msg_t = try unpackMessageFromMetadata(allocator, metadata);
     defer msg_t.deinit(allocator);
     if (msg_t.header != .Schema) return StreamError.InvalidMessage;
-    return try buildSchemaFromFlatbuf(allocator, msg_t.header.Schema.?);
+    return try buildSchemaFromFlatbufWithEndiannessMode(allocator, msg_t.header.Schema.?, mode);
 }
 
 pub fn decodeTensorFromMessageMetadata(
@@ -682,7 +659,17 @@ pub fn buildRecordBatchFromMessageMetadata(
 }
 
 pub fn buildSchemaFromFlatbuf(allocator: std.mem.Allocator, schema_t: *fbs.SchemaT) (StreamError || error{OutOfMemory})!Schema {
-    if (schema_t.endianness != .Little) return StreamError.UnsupportedType;
+    return try buildSchemaFromFlatbufWithEndiannessMode(allocator, schema_t, .strict);
+}
+
+pub fn buildSchemaFromFlatbufWithEndiannessMode(
+    allocator: std.mem.Allocator,
+    schema_t: *fbs.SchemaT,
+    mode: EndiannessMode,
+) (StreamError || error{OutOfMemory})!Schema {
+    if (schema_t.endianness != .Little and !(schema_t.endianness == .Big and mode == .normalize_to_little)) {
+        return StreamError.UnsupportedType;
+    }
     const fields = try allocator.alloc(Field, schema_t.fields.items.len);
     for (schema_t.fields.items, 0..) |field_t, i| {
         fields[i] = try buildFieldFromFlatbuf(allocator, field_t);
@@ -4489,6 +4476,38 @@ test "ipc reader maps parse failures to deterministic errors" {
     }
 }
 
+test "ipc reader supports optional big-endian schema normalization" {
+    const allocator = std.testing.allocator;
+
+    var bytes = std.array_list.Managed(u8).init(allocator);
+    defer bytes.deinit();
+    try appendSchemaMessageWithBodyAndEndianness(
+        allocator,
+        bytes.writer(),
+        .V5,
+        0,
+        null,
+        .Big,
+    );
+
+    {
+        var stream = std.io.fixedBufferStream(bytes.items);
+        var reader = StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+        defer reader.deinit();
+        try std.testing.expectError(StreamError.UnsupportedType, reader.readSchema());
+    }
+
+    {
+        var stream = std.io.fixedBufferStream(bytes.items);
+        var reader = StreamReader(@TypeOf(stream.reader())).initWithOptions(allocator, stream.reader(), .{
+            .endianness_mode = .normalize_to_little,
+        });
+        defer reader.deinit();
+        const schema = try reader.readSchema();
+        try std.testing.expectEqual(datatype.Endianness.little, schema.endianness);
+    }
+}
+
 test "ipc reader rejects unexpected variadic buffer counts" {
     const allocator = std.testing.allocator;
 
@@ -4684,13 +4703,31 @@ fn appendSchemaMessageWithBody(
     body_length: i64,
     body_opt: ?[]const u8,
 ) !void {
+    return try appendSchemaMessageWithBodyAndEndianness(
+        allocator,
+        writer,
+        version,
+        body_length,
+        body_opt,
+        .Little,
+    );
+}
+
+fn appendSchemaMessageWithBodyAndEndianness(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    version: fbs.MetadataVersion,
+    body_length: i64,
+    body_opt: ?[]const u8,
+    endianness: fbs.Endianness,
+) !void {
     var builder = fb.Builder.init(allocator);
     defer builder.deinitAll();
 
     const schema_ptr = try allocator.create(fbs.SchemaT);
     errdefer allocator.destroy(schema_ptr);
     schema_ptr.* = .{
-        .endianness = .Little,
+        .endianness = endianness,
         .fields = try std.ArrayList(fbs.FieldT).initCapacity(allocator, 0),
         .custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 0),
         .features = try std.ArrayList(i64).initCapacity(allocator, 0),

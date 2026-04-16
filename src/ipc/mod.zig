@@ -1,7 +1,10 @@
 pub const format = @import("format.zig");
 pub const StreamWriter = @import("stream_writer.zig").StreamWriter;
 pub const BodyCompressionCodec = @import("stream_writer.zig").BodyCompressionCodec;
+pub const EndiannessMode = @import("stream_writer.zig").EndiannessMode;
+pub const StreamWriterOptions = @import("stream_writer.zig").WriterOptions;
 pub const StreamReader = @import("stream_reader.zig").StreamReader;
+pub const StreamReaderOptions = @import("stream_reader.zig").ReaderOptions;
 pub const OwnedSchema = @import("stream_reader.zig").OwnedSchema;
 pub const TensorDim = @import("stream_reader.zig").TensorDim;
 pub const BufferRegion = @import("stream_reader.zig").BufferRegion;
@@ -15,4 +18,6 @@ pub const decodeTensorFromMessageMetadata = @import("stream_reader.zig").decodeT
 pub const decodeSparseTensorFromMessageMetadata = @import("stream_reader.zig").decodeSparseTensorFromMessageMetadata;
 pub const SchemaRef = @import("../schema.zig").SchemaRef;
 pub const FileWriter = @import("file_writer.zig").FileWriter;
+pub const FileWriterOptions = @import("file_writer.zig").WriterOptions;
 pub const FileReader = @import("file_reader.zig").FileReader;
+pub const FileReaderOptions = @import("file_reader.zig").ReaderOptions;

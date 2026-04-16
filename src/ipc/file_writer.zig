@@ -13,6 +13,8 @@ pub const Schema = schema_mod.Schema;
 pub const DataType = datatype.DataType;
 pub const Field = datatype.Field;
 pub const RecordBatch = record_batch.RecordBatch;
+pub const TensorLikeMetadata = stream_writer.TensorLikeMetadata;
+pub const WriterOptions = stream_writer.WriterOptions;
 
 pub const FileError = stream_writer.StreamError || fb.common.PackError || error{
     OutOfMemory,
@@ -46,31 +48,28 @@ const CollectWriter = struct {
     }
 };
 
-const ParsedStream = struct {
-    schema_msg: *fbs.MessageT,
-    dictionary_blocks: std.ArrayList(fbs.BlockT),
-    record_batch_blocks: std.ArrayList(fbs.BlockT),
-    stream_end: usize,
-
-    fn deinit(self: *ParsedStream, allocator: std.mem.Allocator) void {
-        self.schema_msg.deinit(allocator);
-        allocator.destroy(self.schema_msg);
-        self.dictionary_blocks.deinit(allocator);
-        self.record_batch_blocks.deinit(allocator);
-    }
-};
-
 pub fn FileWriter(comptime WriterType: type) type {
     return struct {
         allocator: std.mem.Allocator,
         writer: WriterType,
         stream_bytes: *std.ArrayList(u8),
         stream: stream_writer.StreamWriter(CollectWriter),
+        schema_msg: ?*fbs.MessageT = null,
+        schema_metadata_bytes: ?[]u8 = null,
+        dictionary_blocks: std.ArrayList(fbs.BlockT),
+        record_batch_blocks: std.ArrayList(fbs.BlockT),
+        stream_offset: usize = 0,
+        header_written: bool = false,
+        saw_stream_end: bool = false,
         finished: bool = false,
 
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator, writer: WriterType) FileError!Self {
+            return initWithOptions(allocator, writer, .{});
+        }
+
+        pub fn initWithOptions(allocator: std.mem.Allocator, writer: WriterType, options: WriterOptions) FileError!Self {
             const stream_bytes = try allocator.create(std.ArrayList(u8));
             stream_bytes.* = std.ArrayList(u8){};
 
@@ -82,12 +81,21 @@ pub fn FileWriter(comptime WriterType: type) type {
                 .allocator = allocator,
                 .writer = writer,
                 .stream_bytes = stream_bytes,
-                .stream = stream_writer.StreamWriter(CollectWriter).init(allocator, collect_writer),
+                .stream = stream_writer.StreamWriter(CollectWriter).initWithOptions(allocator, collect_writer, options),
+                .dictionary_blocks = try std.ArrayList(fbs.BlockT).initCapacity(allocator, 0),
+                .record_batch_blocks = try std.ArrayList(fbs.BlockT).initCapacity(allocator, 0),
             };
         }
 
         pub fn deinit(self: *Self) void {
             self.stream.deinit();
+            if (self.schema_msg) |msg| {
+                msg.deinit(self.allocator);
+                self.allocator.destroy(msg);
+            }
+            if (self.schema_metadata_bytes) |bytes| self.allocator.free(bytes);
+            self.dictionary_blocks.deinit(self.allocator);
+            self.record_batch_blocks.deinit(self.allocator);
             self.stream_bytes.deinit(self.allocator);
             self.allocator.destroy(self.stream_bytes);
         }
@@ -95,34 +103,38 @@ pub fn FileWriter(comptime WriterType: type) type {
         pub fn writeSchema(self: *Self, schema: Schema) (FileError || @TypeOf(self.writer).Error)!void {
             if (self.finished) return FileError.AlreadyFinished;
             try self.stream.writeSchema(schema);
+            try self.flushPendingMessages(false);
         }
 
         pub fn writeRecordBatch(self: *Self, batch: RecordBatch) (FileError || @TypeOf(self.writer).Error)!void {
             if (self.finished) return FileError.AlreadyFinished;
             try self.stream.writeRecordBatch(batch);
+            try self.flushPendingMessages(false);
+        }
+
+        pub fn writeTensorLikeMessage(self: *Self, metadata: TensorLikeMetadata, body: []const u8) (FileError || @TypeOf(self.writer).Error)!void {
+            if (self.finished) return FileError.AlreadyFinished;
+            try self.stream.writeTensorLikeMessage(metadata, body);
+            try self.flushPendingMessages(false);
         }
 
         pub fn writeEnd(self: *Self) (FileError || @TypeOf(self.writer).Error)!void {
             if (self.finished) return FileError.AlreadyFinished;
             try self.stream.writeEnd();
-
-            var parsed = try parseStreamForFooter(self.allocator, self.stream_bytes.items);
-            defer parsed.deinit(self.allocator);
+            try self.flushPendingMessages(true);
+            if (!self.saw_stream_end) return error.InvalidMessage;
+            if (self.schema_msg == null) return error.MissingSchema;
 
             const footer_bytes = try buildFooterBytes(
                 self.allocator,
-                parsed.schema_msg.header.Schema.?,
-                parsed.dictionary_blocks,
-                parsed.record_batch_blocks,
+                self.schema_msg.?.header.Schema.?,
+                self.dictionary_blocks,
+                self.record_batch_blocks,
             );
             defer self.allocator.free(footer_bytes);
 
-            // Arrow IPC file format: magic (6) + 2 padding bytes = 8-byte aligned header
-            try self.writer.writeAll(FileMagic);
-            try self.writer.writeAll("\x00\x00");
-            try self.writer.writeAll(self.stream_bytes.items[0..parsed.stream_end]);
             // Align footer to 8-byte boundary relative to file start (header is 8 bytes)
-            const footer_pad = format.padLen(parsed.stream_end);
+            const footer_pad = format.padLen(self.stream_offset);
             try format.writePadding(self.writer, footer_pad);
             try self.writer.writeAll(footer_bytes);
             const footer_len = std.math.cast(u32, footer_bytes.len) orelse return FileError.InvalidMessage;
@@ -131,6 +143,124 @@ pub fn FileWriter(comptime WriterType: type) type {
 
             self.finished = true;
         }
+
+        fn ensureHeaderWritten(self: *Self) (@TypeOf(self.writer).Error || FileError)!void {
+            if (self.header_written) return;
+            try self.writer.writeAll(FileMagic);
+            try self.writer.writeAll("\x00\x00");
+            self.header_written = true;
+        }
+
+        fn consumeStreamPrefix(self: *Self, n: usize) void {
+            if (n >= self.stream_bytes.items.len) {
+                self.stream_bytes.clearRetainingCapacity();
+                return;
+            }
+            const remain = self.stream_bytes.items.len - n;
+            std.mem.copyForwards(u8, self.stream_bytes.items[0..remain], self.stream_bytes.items[n..]);
+            self.stream_bytes.items.len = remain;
+        }
+
+        fn flushPendingMessages(self: *Self, final: bool) (FileError || @TypeOf(self.writer).Error)!void {
+            while (self.stream_bytes.items.len > 0) {
+                if (self.stream_bytes.items.len < 4) {
+                    if (final) return error.InvalidMessage;
+                    return error.InvalidMessage;
+                }
+
+                const first = readU32Le(self.stream_bytes.items[0..4]);
+                var prefix_len: usize = 4;
+                var metadata_len_u32 = first;
+                if (first == format.ContinuationMarker) {
+                    if (self.stream_bytes.items.len < 8) {
+                        if (final) return error.InvalidMessage;
+                        return error.InvalidMessage;
+                    }
+                    metadata_len_u32 = readU32Le(self.stream_bytes.items[4..8]);
+                    prefix_len = 8;
+                    if (metadata_len_u32 == 0) {
+                        if (!final) return error.InvalidMessage;
+                        self.saw_stream_end = true;
+                        self.consumeStreamPrefix(8);
+                        continue;
+                    }
+                } else if (first == 0) {
+                    if (!final) return error.InvalidMessage;
+                    self.saw_stream_end = true;
+                    self.consumeStreamPrefix(4);
+                    continue;
+                }
+
+                const metadata_len = std.math.cast(usize, metadata_len_u32) orelse return error.InvalidMessage;
+                const needed_metadata = std.math.add(usize, prefix_len, metadata_len) catch return error.InvalidMessage;
+                if (self.stream_bytes.items.len < needed_metadata) {
+                    if (final) return error.InvalidMessage;
+                    return error.InvalidMessage;
+                }
+
+                const metadata = self.stream_bytes.items[prefix_len..needed_metadata];
+                if (!isSaneFlatbufferTable(metadata)) return error.InvalidMessage;
+                const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
+                const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
+                var msg_t = try fbs.MessageT.Unpack(msg, opts);
+                errdefer msg_t.deinit(self.allocator);
+
+                if (msg_t.bodyLength < 0) return error.InvalidMessage;
+                const body_len = std.math.cast(usize, msg_t.bodyLength) orelse return error.InvalidMessage;
+                const body_pad = format.padLen(body_len);
+                const body_total = std.math.add(usize, body_len, body_pad) catch return error.InvalidMessage;
+                const message_total = std.math.add(usize, needed_metadata, body_total) catch return error.InvalidMessage;
+                if (self.stream_bytes.items.len < message_total) {
+                    if (final) return error.InvalidMessage;
+                    return error.InvalidMessage;
+                }
+
+                switch (msg_t.header) {
+                    .Schema => {
+                        if (self.schema_msg != null) return error.InvalidMessage;
+                        const metadata_copy = try self.allocator.dupe(u8, metadata);
+                        errdefer self.allocator.free(metadata_copy);
+                        const schema_msg_root = fbs.Message.GetRootAs(@constCast(metadata_copy), 0);
+                        const schema_opts: fb.common.PackOptions = .{ .allocator = self.allocator };
+                        var schema_msg_t = try fbs.MessageT.Unpack(schema_msg_root, schema_opts);
+                        errdefer schema_msg_t.deinit(self.allocator);
+                        if (schema_msg_t.header != .Schema) return error.InvalidMessage;
+                        const owned_msg = try self.allocator.create(fbs.MessageT);
+                        owned_msg.* = schema_msg_t;
+                        self.schema_msg = owned_msg;
+                        self.schema_metadata_bytes = metadata_copy;
+                        msg_t.deinit(self.allocator);
+                    },
+                    .DictionaryBatch, .RecordBatch => {
+                        const file_offset = std.math.cast(i64, FileMagic.len + 2 + self.stream_offset) orelse return error.InvalidMessage;
+                        const meta_data_length = std.math.cast(i32, prefix_len + format.paddedLen(metadata_len)) orelse return error.InvalidMessage;
+                        const block = fbs.BlockT{
+                            .offset = file_offset,
+                            .metaDataLength = meta_data_length,
+                            .bodyLength = msg_t.bodyLength,
+                        };
+                        if (msg_t.header == .DictionaryBatch) {
+                            try self.dictionary_blocks.append(self.allocator, block);
+                        } else {
+                            try self.record_batch_blocks.append(self.allocator, block);
+                        }
+                        msg_t.deinit(self.allocator);
+                    },
+                    .Tensor, .SparseTensor => {
+                        msg_t.deinit(self.allocator);
+                    },
+                    else => {
+                        msg_t.deinit(self.allocator);
+                        return error.UnsupportedMessage;
+                    },
+                }
+
+                try self.ensureHeaderWritten();
+                try self.writer.writeAll(self.stream_bytes.items[0..message_total]);
+                self.stream_offset = std.math.add(usize, self.stream_offset, message_total) catch return error.InvalidMessage;
+                self.consumeStreamPrefix(message_total);
+            }
+        }
     };
 }
 
@@ -138,136 +268,6 @@ fn writeU32Le(writer: anytype, value: u32) !void {
     var bytes: [4]u8 = undefined;
     std.mem.writeInt(u32, bytes[0..4], value, .little);
     try writer.writeAll(bytes[0..4]);
-}
-
-fn parseStreamForFooter(allocator: std.mem.Allocator, stream_bytes: []const u8) FileError!ParsedStream {
-    var dict_blocks = try std.ArrayList(fbs.BlockT).initCapacity(allocator, 0);
-    errdefer dict_blocks.deinit(allocator);
-    var rb_blocks = try std.ArrayList(fbs.BlockT).initCapacity(allocator, 0);
-    errdefer rb_blocks.deinit(allocator);
-
-    var schema_msg: ?*fbs.MessageT = null;
-    errdefer if (schema_msg) |msg_ptr| {
-        msg_ptr.deinit(allocator);
-        allocator.destroy(msg_ptr);
-    };
-
-    var cursor: usize = 0;
-    var stream_end: ?usize = null;
-    while (cursor < stream_bytes.len) {
-        const message_offset = cursor;
-        if (stream_bytes.len - cursor < 4) return error.InvalidMessage;
-        const first = readU32Le(stream_bytes[cursor .. cursor + 4]);
-
-        var prefix_len: usize = 4;
-        var metadata_len_u32 = first;
-        if (first == format.ContinuationMarker) {
-            if (stream_bytes.len - cursor < 8) return error.InvalidMessage;
-            metadata_len_u32 = readU32Le(stream_bytes[cursor + 4 .. cursor + 8]);
-            prefix_len = 8;
-            if (metadata_len_u32 == 0) {
-                stream_end = message_offset;
-                cursor += 8;
-                break;
-            }
-        } else if (first == 0) {
-            stream_end = message_offset;
-            cursor += 4;
-            break;
-        }
-
-        const metadata_len = std.math.cast(usize, metadata_len_u32) orelse return error.InvalidMessage;
-        cursor += prefix_len;
-        const metadata_end = std.math.add(usize, cursor, metadata_len) catch return error.InvalidMessage;
-        if (metadata_end > stream_bytes.len) return error.InvalidMessage;
-        const metadata = stream_bytes[cursor..metadata_end];
-        cursor = metadata_end;
-
-        if (!isSaneFlatbufferTable(metadata)) return error.InvalidMessage;
-        const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
-        const opts: fb.common.PackOptions = .{ .allocator = allocator };
-        var msg_t = try fbs.MessageT.Unpack(msg, opts);
-
-        if (msg_t.bodyLength < 0) {
-            msg_t.deinit(allocator);
-            return error.InvalidMessage;
-        }
-        const body_len = std.math.cast(usize, msg_t.bodyLength) orelse {
-            msg_t.deinit(allocator);
-            return error.InvalidMessage;
-        };
-        const body_pad = format.padLen(body_len);
-        const body_total = std.math.add(usize, body_len, body_pad) catch {
-            msg_t.deinit(allocator);
-            return error.InvalidMessage;
-        };
-        const body_end = std.math.add(usize, cursor, body_total) catch {
-            msg_t.deinit(allocator);
-            return error.InvalidMessage;
-        };
-        if (body_end > stream_bytes.len) {
-            msg_t.deinit(allocator);
-            return error.InvalidMessage;
-        }
-
-        switch (msg_t.header) {
-            .Schema => {
-                if (schema_msg != null) {
-                    msg_t.deinit(allocator);
-                    return error.InvalidMessage;
-                }
-                const owned_msg = try allocator.create(fbs.MessageT);
-                owned_msg.* = msg_t;
-                schema_msg = owned_msg;
-            },
-            .DictionaryBatch, .RecordBatch => {
-                // Arrow file header = magic (6) + padding (2) = 8 bytes before stream data.
-                // Block.offset = absolute file offset of the message preamble.
-                // Block.metaDataLength = prefix (8) + metadata + metadata padding per spec.
-                const file_offset = std.math.cast(i64, FileMagic.len + 2 + message_offset) orelse {
-                    msg_t.deinit(allocator);
-                    return error.InvalidMessage;
-                };
-                const meta_data_length = std.math.cast(i32, prefix_len + format.paddedLen(metadata_len)) orelse {
-                    msg_t.deinit(allocator);
-                    return error.InvalidMessage;
-                };
-                const block = fbs.BlockT{
-                    .offset = file_offset,
-                    .metaDataLength = meta_data_length,
-                    .bodyLength = msg_t.bodyLength,
-                };
-                if (msg_t.header == .DictionaryBatch) {
-                    try dict_blocks.append(allocator, block);
-                } else {
-                    try rb_blocks.append(allocator, block);
-                }
-                msg_t.deinit(allocator);
-            },
-            // Tensor/SparseTensor are valid IPC message headers. Arrow file
-            // footer only indexes dictionary/record blocks, so keep bytes but
-            // don't index these messages.
-            .Tensor, .SparseTensor => {
-                msg_t.deinit(allocator);
-            },
-            else => {
-                msg_t.deinit(allocator);
-                return error.UnsupportedMessage;
-            },
-        }
-
-        cursor = body_end;
-    }
-
-    if (stream_end == null or cursor != stream_bytes.len) return error.InvalidMessage;
-    if (schema_msg == null) return error.MissingSchema;
-
-    return .{
-        .schema_msg = schema_msg.?,
-        .dictionary_blocks = dict_blocks,
-        .record_batch_blocks = rb_blocks,
-        .stream_end = stream_end.?,
-    };
 }
 
 fn buildFooterBytes(
@@ -374,4 +374,82 @@ test "ipc file writer emits arrow file magic and footer" {
         FileMagic,
         out.items[out.items.len - FileMagic.len .. out.items.len],
     );
+}
+
+test "ipc file writer streams incrementally and accepts tensor-like messages" {
+    const allocator = std.testing.allocator;
+
+    const id_type = DataType{ .int32 = {} };
+    const fields = [_]Field{
+        .{ .name = "id", .data_type = &id_type, .nullable = false },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var id_builder = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 3);
+    defer id_builder.deinit();
+    try id_builder.append(1);
+    try id_builder.append(2);
+    try id_builder.append(3);
+    var id_ref = try id_builder.finish();
+    defer id_ref.release();
+
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]@import("../array/array_ref.zig").ArrayRef{id_ref});
+    defer batch.deinit();
+
+    var tensor_body: [24]u8 = undefined;
+    for (0..6) |i| {
+        const value: i32 = @intCast(i + 10);
+        var encoded: [4]u8 = undefined;
+        std.mem.writeInt(i32, &encoded, value, .little);
+        @memcpy(tensor_body[i * 4 .. i * 4 + 4], encoded[0..]);
+    }
+    const tensor_shape = [_]stream_writer.TensorDim{
+        .{ .size = 2, .name = "rows" },
+        .{ .size = 3, .name = "cols" },
+    };
+    const tensor_strides = [_]i64{ 12, 4 };
+    const tensor_meta = stream_writer.TensorLikeMetadata{
+        .tensor = .{
+            .value_type = DataType{ .int32 = {} },
+            .shape = tensor_shape[0..],
+            .strides = tensor_strides[0..],
+            .data = .{ .offset = 0, .length = tensor_body.len },
+        },
+    };
+
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+    const Sink = struct {
+        allocator: std.mem.Allocator,
+        out: *std.ArrayList(u8),
+        pub const Error = error{OutOfMemory};
+        pub fn writeAll(self: @This(), bytes: []const u8) Error!void {
+            try self.out.appendSlice(self.allocator, bytes);
+        }
+    };
+    var writer = try FileWriter(Sink).init(allocator, .{ .allocator = allocator, .out = &out });
+    defer writer.deinit();
+
+    try writer.writeSchema(schema);
+    try std.testing.expectEqual(@as(usize, 0), writer.stream_bytes.items.len);
+    try writer.writeTensorLikeMessage(tensor_meta, tensor_body[0..]);
+    try std.testing.expectEqual(@as(usize, 0), writer.stream_bytes.items.len);
+    try writer.writeRecordBatch(batch);
+    try std.testing.expectEqual(@as(usize, 0), writer.stream_bytes.items.len);
+    try writer.writeEnd();
+    try std.testing.expectEqual(@as(usize, 0), writer.stream_bytes.items.len);
+
+    var file_stream = std.io.fixedBufferStream(out.items);
+    var reader = @import("file_reader.zig").FileReader(@TypeOf(file_stream.reader())).init(allocator, file_stream.reader());
+    defer reader.deinit();
+
+    const out_schema = try reader.readSchema();
+    try std.testing.expectEqual(@as(usize, 1), out_schema.fields.len);
+    try std.testing.expectEqualStrings("id", out_schema.fields[0].name);
+
+    const maybe_batch = try reader.nextRecordBatch();
+    try std.testing.expect(maybe_batch != null);
+    var out_batch = maybe_batch.?;
+    defer out_batch.deinit();
+    try std.testing.expectEqual(@as(usize, 3), out_batch.numRows());
 }

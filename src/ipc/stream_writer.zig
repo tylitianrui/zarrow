@@ -7,6 +7,7 @@ const array_data = @import("../array/array_data.zig");
 const buffer = @import("../buffer.zig");
 const format = @import("format.zig");
 const compression_dynlib = @import("compression_dynlib.zig");
+const tensor_types = @import("tensor_types.zig");
 const fb = @import("flatbufferz");
 const arrow_fbs = @import("arrow_fbs");
 
@@ -72,6 +73,14 @@ const fbs = struct {
     const BodyCompressionT = arrow_fbs.org_apache_arrow_flatbuf_BodyCompression.BodyCompressionT;
     const CompressionType = arrow_fbs.org_apache_arrow_flatbuf_CompressionType.CompressionType;
     const BodyCompressionMethod = arrow_fbs.org_apache_arrow_flatbuf_BodyCompressionMethod.BodyCompressionMethod;
+    const TensorT = arrow_fbs.org_apache_arrow_flatbuf_Tensor.TensorT;
+    const TensorDimT = arrow_fbs.org_apache_arrow_flatbuf_TensorDim.TensorDimT;
+    const SparseTensorT = arrow_fbs.org_apache_arrow_flatbuf_SparseTensor.SparseTensorT;
+    const SparseTensorIndexT = arrow_fbs.org_apache_arrow_flatbuf_SparseTensorIndex.SparseTensorIndexT;
+    const SparseMatrixCompressedAxis = arrow_fbs.org_apache_arrow_flatbuf_SparseMatrixCompressedAxis.SparseMatrixCompressedAxis;
+    const SparseTensorIndexCOOT = arrow_fbs.org_apache_arrow_flatbuf_SparseTensorIndexCOO.SparseTensorIndexCOOT;
+    const SparseMatrixIndexCSXT = arrow_fbs.org_apache_arrow_flatbuf_SparseMatrixIndexCSX.SparseMatrixIndexCSXT;
+    const SparseTensorIndexCSFT = arrow_fbs.org_apache_arrow_flatbuf_SparseTensorIndexCSF.SparseTensorIndexCSFT;
 };
 
 fn castI64Metadata(value: anytype) WriterError!i64 {
@@ -87,30 +96,49 @@ pub const BodyCompressionCodec = enum {
     zstd,
 };
 
+pub const BufferRegion = tensor_types.BufferRegion;
+pub const TensorDim = tensor_types.TensorDim;
+pub const TensorMetadata = tensor_types.TensorMetadata;
+pub const SparseMatrixAxis = tensor_types.SparseMatrixAxis;
+pub const SparseTensorIndexMetadata = tensor_types.SparseTensorIndexMetadata;
+pub const SparseTensorMetadata = tensor_types.SparseTensorMetadata;
+pub const TensorLikeMetadata = tensor_types.TensorLikeMetadata;
+
+pub const EndiannessMode = enum {
+    strict,
+    normalize_to_little,
+};
+
+pub const WriterOptions = struct {
+    body_compression: ?BodyCompressionCodec = null,
+    endianness_mode: EndiannessMode = .strict,
+};
+
 pub fn StreamWriter(comptime WriterType: type) type {
     return struct {
         allocator: std.mem.Allocator,
         writer: WriterType,
         dictionary_values: std.AutoHashMap(i64, ArrayRef),
         body_compression: ?BodyCompressionCodec = null,
+        endianness_mode: EndiannessMode = .strict,
 
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator, writer: WriterType) Self {
-            return .{
-                .allocator = allocator,
-                .writer = writer,
-                .dictionary_values = std.AutoHashMap(i64, ArrayRef).init(allocator),
-                .body_compression = null,
-            };
+            return initWithOptions(allocator, writer, .{});
         }
 
         pub fn initWithBodyCompression(allocator: std.mem.Allocator, writer: WriterType, codec: BodyCompressionCodec) Self {
+            return initWithOptions(allocator, writer, .{ .body_compression = codec });
+        }
+
+        pub fn initWithOptions(allocator: std.mem.Allocator, writer: WriterType, options: WriterOptions) Self {
             return .{
                 .allocator = allocator,
                 .writer = writer,
                 .dictionary_values = std.AutoHashMap(i64, ArrayRef).init(allocator),
-                .body_compression = codec,
+                .body_compression = options.body_compression,
+                .endianness_mode = options.endianness_mode,
             };
         }
 
@@ -137,7 +165,7 @@ pub fn StreamWriter(comptime WriterType: type) type {
             const schema_ptr = try self.allocator.create(fbs.SchemaT);
             errdefer self.allocator.destroy(schema_ptr);
             var next_dictionary_id: i64 = 0;
-            schema_ptr.* = try buildSchemaT(self.allocator, schema, &next_dictionary_id);
+            schema_ptr.* = try buildSchemaT(self.allocator, schema, &next_dictionary_id, self.endianness_mode);
 
             var msg = fbs.MessageT{
                 .version = .V5,
@@ -148,6 +176,12 @@ pub fn StreamWriter(comptime WriterType: type) type {
             defer msg.deinit(self.allocator);
 
             try writeMessage(self.allocator, self.writer, msg, &.{});
+        }
+
+        pub fn writeTensorLikeMessage(self: *Self, metadata: TensorLikeMetadata, body: []const u8) (WriterError || @TypeOf(self.writer).Error)!void {
+            var msg = try buildTensorLikeMessage(self.allocator, metadata, body);
+            defer msg.deinit(self.allocator);
+            try writeMessage(self.allocator, self.writer, msg, &.{array_data.SharedBuffer.fromSlice(body)});
         }
 
         pub fn writeRecordBatch(self: *Self, batch: RecordBatch) (WriterError || @TypeOf(self.writer).Error)!void {
@@ -268,8 +302,216 @@ fn writeMessage(allocator: std.mem.Allocator, writer: anytype, msg: fbs.MessageT
     }
 }
 
-fn buildSchemaT(allocator: std.mem.Allocator, schema: Schema, next_dictionary_id: *i64) WriterError!fbs.SchemaT {
-    if (schema.endianness != .little) return StreamError.UnsupportedType;
+fn validateTensorValueType(dt: DataType) WriterError!void {
+    switch (storageDataType(dt)) {
+        .bool,
+        .uint8,
+        .int8,
+        .uint16,
+        .int16,
+        .uint32,
+        .int32,
+        .uint64,
+        .int64,
+        .half_float,
+        .float,
+        .double,
+        .date32,
+        .date64,
+        .time32,
+        .time64,
+        .timestamp,
+        .duration,
+        .interval_months,
+        .interval_day_time,
+        .interval_month_day_nano,
+        .fixed_size_binary,
+        .decimal32,
+        .decimal64,
+        .decimal128,
+        .decimal256,
+        => {},
+        else => return StreamError.UnsupportedType,
+    }
+}
+
+fn validateBufferRegionWithinBody(region: BufferRegion, body_len: usize) WriterError!void {
+    const end = std.math.add(usize, region.offset, region.length) catch return StreamError.InvalidBody;
+    if (end > body_len) return StreamError.InvalidBody;
+}
+
+fn bufferRegionToFbs(allocator: std.mem.Allocator, region: BufferRegion, body_len: usize) WriterError!*fbs.BufferT {
+    try validateBufferRegionWithinBody(region, body_len);
+    return try allocT(allocator, fbs.BufferT, .{
+        .offset = try castI64Metadata(region.offset),
+        .length = try castI64Metadata(region.length),
+    });
+}
+
+fn buildFbsIntTypeFromIntType(allocator: std.mem.Allocator, int_type: datatype.IntType) WriterError!*fbs.IntT {
+    return switch (int_type.bit_width) {
+        8, 16, 32, 64 => try allocT(allocator, fbs.IntT, .{
+            .bitWidth = int_type.bit_width,
+            .is_signed = int_type.signed,
+        }),
+        else => StreamError.UnsupportedType,
+    };
+}
+
+fn buildTensorTypeT(allocator: std.mem.Allocator, dt: DataType) WriterError!fbs.TypeT {
+    try validateTensorValueType(dt);
+    return try buildTypeT(allocator, dt);
+}
+
+fn buildTensorLikeMessage(allocator: std.mem.Allocator, metadata: TensorLikeMetadata, body: []const u8) WriterError!fbs.MessageT {
+    return switch (metadata) {
+        .tensor => |tensor| blk: {
+            const type_t = try buildTensorTypeT(allocator, tensor.value_type);
+
+            var shape = try std.ArrayList(fbs.TensorDimT).initCapacity(allocator, tensor.shape.len);
+            for (tensor.shape) |dim| {
+                try shape.append(allocator, .{
+                    .size = dim.size,
+                    .name = dim.name orelse "",
+                });
+            }
+
+            var strides = if (tensor.strides) |vals|
+                try std.ArrayList(i64).initCapacity(allocator, vals.len)
+            else
+                try std.ArrayList(i64).initCapacity(allocator, 0);
+            if (tensor.strides) |vals| {
+                for (vals) |v| try strides.append(allocator, v);
+            }
+
+            const data_ptr = try bufferRegionToFbs(allocator, tensor.data, body.len);
+
+            const tensor_ptr = try allocT(allocator, fbs.TensorT, .{
+                .type = type_t,
+                .shape = shape,
+                .strides = strides,
+                .data = data_ptr,
+            });
+
+            break :blk fbs.MessageT{
+                .version = .V5,
+                .header = .{ .Tensor = tensor_ptr },
+                .bodyLength = try castI64Metadata(body.len),
+                .custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 0),
+            };
+        },
+        .sparse_tensor => |sparse| blk: {
+            const type_t = try buildTensorTypeT(allocator, sparse.value_type);
+
+            var shape = try std.ArrayList(fbs.TensorDimT).initCapacity(allocator, sparse.shape.len);
+            for (sparse.shape) |dim| {
+                try shape.append(allocator, .{
+                    .size = dim.size,
+                    .name = dim.name orelse "",
+                });
+            }
+
+            const sparse_index: fbs.SparseTensorIndexT = switch (sparse.sparse_index) {
+                .coo => |coo| idx_blk: {
+                    const indices_type = try buildFbsIntTypeFromIntType(allocator, coo.indices_type);
+                    var indices_strides = if (coo.indices_strides) |vals|
+                        try std.ArrayList(i64).initCapacity(allocator, vals.len)
+                    else
+                        try std.ArrayList(i64).initCapacity(allocator, 0);
+                    if (coo.indices_strides) |vals| {
+                        for (vals) |v| try indices_strides.append(allocator, v);
+                    }
+                    const indices_buf = try bufferRegionToFbs(allocator, coo.indices, body.len);
+                    const coo_ptr = try allocT(allocator, fbs.SparseTensorIndexCOOT, .{
+                        .indicesType = indices_type,
+                        .indicesStrides = indices_strides,
+                        .indicesBuffer = indices_buf,
+                        .isCanonical = coo.is_canonical,
+                    });
+                    break :idx_blk .{ .SparseTensorIndexCOO = coo_ptr };
+                },
+                .csx => |csx| idx_blk: {
+                    const axis: fbs.SparseMatrixCompressedAxis = switch (csx.compressed_axis) {
+                        .row => .Row,
+                        .column => .Column,
+                    };
+                    const indptr_type = try buildFbsIntTypeFromIntType(allocator, csx.indptr_type);
+                    const indices_type = try buildFbsIntTypeFromIntType(allocator, csx.indices_type);
+                    const indptr_buf = try bufferRegionToFbs(allocator, csx.indptr, body.len);
+                    const indices_buf = try bufferRegionToFbs(allocator, csx.indices, body.len);
+                    const csx_ptr = try allocT(allocator, fbs.SparseMatrixIndexCSXT, .{
+                        .compressedAxis = axis,
+                        .indptrType = indptr_type,
+                        .indptrBuffer = indptr_buf,
+                        .indicesType = indices_type,
+                        .indicesBuffer = indices_buf,
+                    });
+                    break :idx_blk .{ .SparseMatrixIndexCSX = csx_ptr };
+                },
+                .csf => |csf| idx_blk: {
+                    const indptr_type = try buildFbsIntTypeFromIntType(allocator, csf.indptr_type);
+                    const indices_type = try buildFbsIntTypeFromIntType(allocator, csf.indices_type);
+
+                    var indptr_buffers = try std.ArrayList(fbs.BufferT).initCapacity(allocator, csf.indptr_buffers.len);
+                    for (csf.indptr_buffers) |buf_region| {
+                        try validateBufferRegionWithinBody(buf_region, body.len);
+                        try indptr_buffers.append(allocator, .{
+                            .offset = try castI64Metadata(buf_region.offset),
+                            .length = try castI64Metadata(buf_region.length),
+                        });
+                    }
+
+                    var indices_buffers = try std.ArrayList(fbs.BufferT).initCapacity(allocator, csf.indices_buffers.len);
+                    for (csf.indices_buffers) |buf_region| {
+                        try validateBufferRegionWithinBody(buf_region, body.len);
+                        try indices_buffers.append(allocator, .{
+                            .offset = try castI64Metadata(buf_region.offset),
+                            .length = try castI64Metadata(buf_region.length),
+                        });
+                    }
+
+                    var axis_order = try std.ArrayList(i32).initCapacity(allocator, csf.axis_order.len);
+                    for (csf.axis_order) |axis| try axis_order.append(allocator, axis);
+
+                    const csf_ptr = try allocT(allocator, fbs.SparseTensorIndexCSFT, .{
+                        .indptrType = indptr_type,
+                        .indptrBuffers = indptr_buffers,
+                        .indicesType = indices_type,
+                        .indicesBuffers = indices_buffers,
+                        .axisOrder = axis_order,
+                    });
+                    break :idx_blk .{ .SparseTensorIndexCSF = csf_ptr };
+                },
+            };
+
+            const data_ptr = try bufferRegionToFbs(allocator, sparse.data, body.len);
+            const sparse_ptr = try allocT(allocator, fbs.SparseTensorT, .{
+                .type = type_t,
+                .shape = shape,
+                .non_zero_length = try castI64Metadata(sparse.non_zero_length),
+                .sparseIndex = sparse_index,
+                .data = data_ptr,
+            });
+
+            break :blk fbs.MessageT{
+                .version = .V5,
+                .header = .{ .SparseTensor = sparse_ptr },
+                .bodyLength = try castI64Metadata(body.len),
+                .custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 0),
+            };
+        },
+    };
+}
+
+fn buildSchemaT(
+    allocator: std.mem.Allocator,
+    schema: Schema,
+    next_dictionary_id: *i64,
+    endianness_mode: EndiannessMode,
+) WriterError!fbs.SchemaT {
+    if (schema.endianness != .little and !(schema.endianness == .big and endianness_mode == .normalize_to_little)) {
+        return StreamError.UnsupportedType;
+    }
     var fields = try std.ArrayList(fbs.FieldT).initCapacity(allocator, 0);
     for (schema.fields) |field| {
         try fields.append(allocator, try buildFieldT(allocator, field, next_dictionary_id));
@@ -1506,4 +1748,87 @@ test "ipc writer rejects big-endian schema" {
     defer writer.deinit();
 
     try std.testing.expectError(StreamError.UnsupportedType, writer.writeSchema(schema));
+}
+
+test "ipc writer normalizes big-endian schema when configured" {
+    const allocator = std.testing.allocator;
+
+    const id_type = DataType{ .int32 = {} };
+    const fields = [_]Field{
+        .{ .name = "id", .data_type = &id_type, .nullable = false },
+    };
+    const schema = Schema{ .fields = fields[0..], .endianness = .big };
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    defer out.deinit();
+    var writer = StreamWriter(@TypeOf(out.writer())).initWithOptions(allocator, out.writer(), .{
+        .endianness_mode = .normalize_to_little,
+    });
+    defer writer.deinit();
+
+    try writer.writeSchema(schema);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out.items);
+    var reader = @import("stream_reader.zig").StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    defer reader.deinit();
+    const out_schema = try reader.readSchema();
+    try std.testing.expectEqual(datatype.Endianness.little, out_schema.endianness);
+}
+
+test "ipc writer emits tensor message via public tensor-like api" {
+    const allocator = std.testing.allocator;
+
+    var body: [24]u8 = undefined;
+    for (0..6) |i| {
+        const value: i32 = @intCast(i + 1);
+        var encoded: [4]u8 = undefined;
+        std.mem.writeInt(i32, &encoded, value, .little);
+        @memcpy(body[i * 4 .. i * 4 + 4], encoded[0..]);
+    }
+
+    const value_type = DataType{ .int32 = {} };
+    const shape = [_]TensorDim{
+        .{ .size = 2, .name = "rows" },
+        .{ .size = 3, .name = "cols" },
+    };
+    const strides = [_]i64{ 12, 4 };
+    const metadata = TensorLikeMetadata{
+        .tensor = .{
+            .value_type = value_type,
+            .shape = shape[0..],
+            .strides = strides[0..],
+            .data = .{ .offset = 0, .length = body.len },
+        },
+    };
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    defer out.deinit();
+    var writer = StreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    defer writer.deinit();
+
+    try writer.writeTensorLikeMessage(metadata, body[0..]);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out.items);
+    var reader = @import("stream_reader.zig").StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    defer reader.deinit();
+
+    const maybe_msg = try reader.nextTensorLikeMessage();
+    try std.testing.expect(maybe_msg != null);
+    var msg = maybe_msg.?;
+    defer msg.deinit();
+    switch (msg.metadata) {
+        .tensor => |tensor| {
+            try std.testing.expect(tensor.value_type == .int32);
+            try std.testing.expectEqual(@as(usize, 2), tensor.shape.len);
+            try std.testing.expectEqual(@as(i64, 2), tensor.shape[0].size);
+            try std.testing.expectEqual(@as(i64, 3), tensor.shape[1].size);
+            const data = tensor.data.bytes(msg.body.data);
+            try std.testing.expectEqualSlices(u8, body[0..], data);
+        },
+        else => return error.TestExpectedEqual,
+    }
+
+    try std.testing.expect((try reader.nextTensorLikeMessage()) == null);
 }
