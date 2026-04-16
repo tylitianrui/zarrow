@@ -3573,6 +3573,96 @@ test "ipc stream roundtrip sparse union int32/bool" {
     try std.testing.expectEqual(true, b1.value(0));
 }
 
+test "ipc stream roundtrip sparse union int32/bool with metadata version V4" {
+    const allocator = std.testing.allocator;
+
+    const int_type = DataType{ .int32 = {} };
+    const bool_type = DataType{ .bool = {} };
+    const union_fields = [_]Field{
+        .{ .name = "i", .data_type = &int_type, .nullable = true },
+        .{ .name = "b", .data_type = &bool_type, .nullable = true },
+    };
+    const union_type_ids = [_]i8{ 5, 7 };
+    const union_type = datatype.UnionType{
+        .type_ids = union_type_ids[0..],
+        .fields = union_fields[0..],
+        .mode = .sparse,
+    };
+    const sparse_union_type = DataType{ .sparse_union = union_type };
+    const fields = [_]Field{
+        .{ .name = "u", .data_type = &sparse_union_type, .nullable = true },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var int_builder = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 3);
+    defer int_builder.deinit();
+    try int_builder.append(10);
+    try int_builder.append(20);
+    try int_builder.append(30);
+    var int_ref = try int_builder.finish();
+    defer int_ref.release();
+
+    var bool_builder = try @import("../array/boolean_array.zig").BooleanBuilder.init(allocator, 3);
+    defer bool_builder.deinit();
+    try bool_builder.append(false);
+    try bool_builder.append(true);
+    try bool_builder.append(false);
+    var bool_ref = try bool_builder.finish();
+    defer bool_ref.release();
+
+    var union_builder = try @import("../array/advanced_array.zig").SparseUnionBuilder.init(allocator, union_type, 3);
+    defer union_builder.deinit();
+    try union_builder.appendTypeId(5);
+    try union_builder.appendTypeId(7);
+    try union_builder.appendTypeId(5);
+    var union_ref = try union_builder.finish(&[_]ArrayRef{ int_ref, bool_ref });
+    defer union_ref.release();
+
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{union_ref});
+    defer batch.deinit();
+
+    var out_buf = std.array_list.Managed(u8).init(allocator);
+    defer out_buf.deinit();
+
+    var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).initWithOptions(
+        allocator,
+        out_buf.writer(),
+        .{ .metadata_version = .v4 },
+    );
+    defer writer.deinit();
+    try writer.writeSchema(schema);
+    try writer.writeRecordBatch(batch);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out_buf.items);
+    var reader = StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    defer reader.deinit();
+
+    const out_schema = try reader.readSchema();
+    try std.testing.expect(out_schema.fields[0].data_type.* == .sparse_union);
+    try std.testing.expectEqual(@as(i8, 5), out_schema.fields[0].data_type.sparse_union.type_ids[0]);
+    try std.testing.expectEqual(@as(i8, 7), out_schema.fields[0].data_type.sparse_union.type_ids[1]);
+
+    const out_batch_opt = try reader.nextRecordBatch();
+    try std.testing.expect(out_batch_opt != null);
+    var out_batch = out_batch_opt.?;
+    defer out_batch.deinit();
+
+    const out_union = @import("../array/advanced_array.zig").SparseUnionArray{ .data = out_batch.columns[0].data() };
+    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(0));
+    try std.testing.expectEqual(@as(i8, 7), out_union.typeId(1));
+    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(2));
+
+    var v0 = try out_union.value(0);
+    defer v0.release();
+    var v1 = try out_union.value(1);
+    defer v1.release();
+    const int_at_0 = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = v0.data() };
+    const b1 = @import("../array/boolean_array.zig").BooleanArray{ .data = v1.data() };
+    try std.testing.expectEqual(@as(i32, 10), int_at_0.value(0));
+    try std.testing.expectEqual(true, b1.value(0));
+}
+
 test "ipc stream roundtrip dense union int32/bool" {
     const allocator = std.testing.allocator;
 
@@ -3622,6 +3712,96 @@ test "ipc stream roundtrip dense union int32/bool" {
     defer out_buf.deinit();
 
     var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).init(allocator, out_buf.writer());
+    defer writer.deinit();
+    try writer.writeSchema(schema);
+    try writer.writeRecordBatch(batch);
+    try writer.writeEnd();
+
+    var stream = std.io.fixedBufferStream(out_buf.items);
+    var reader = StreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    defer reader.deinit();
+
+    const out_schema = try reader.readSchema();
+    try std.testing.expect(out_schema.fields[0].data_type.* == .dense_union);
+    try std.testing.expectEqual(@as(i8, 5), out_schema.fields[0].data_type.dense_union.type_ids[0]);
+    try std.testing.expectEqual(@as(i8, 7), out_schema.fields[0].data_type.dense_union.type_ids[1]);
+
+    const out_batch_opt = try reader.nextRecordBatch();
+    try std.testing.expect(out_batch_opt != null);
+    var out_batch = out_batch_opt.?;
+    defer out_batch.deinit();
+
+    const out_union = @import("../array/advanced_array.zig").DenseUnionArray{ .data = out_batch.columns[0].data() };
+    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(0));
+    try std.testing.expectEqual(@as(i8, 7), out_union.typeId(1));
+    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(2));
+    try std.testing.expectEqual(@as(i32, 0), out_union.childOffset(0));
+    try std.testing.expectEqual(@as(i32, 0), out_union.childOffset(1));
+    try std.testing.expectEqual(@as(i32, 1), out_union.childOffset(2));
+
+    var v1 = try out_union.value(1);
+    defer v1.release();
+    var v2 = try out_union.value(2);
+    defer v2.release();
+    const b1 = @import("../array/boolean_array.zig").BooleanArray{ .data = v1.data() };
+    const int_at_2 = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = v2.data() };
+    try std.testing.expectEqual(true, b1.value(0));
+    try std.testing.expectEqual(@as(i32, 20), int_at_2.value(0));
+}
+
+test "ipc stream roundtrip dense union int32/bool with metadata version V4" {
+    const allocator = std.testing.allocator;
+
+    const int_type = DataType{ .int32 = {} };
+    const bool_type = DataType{ .bool = {} };
+    const union_fields = [_]Field{
+        .{ .name = "i", .data_type = &int_type, .nullable = true },
+        .{ .name = "b", .data_type = &bool_type, .nullable = true },
+    };
+    const union_type_ids = [_]i8{ 5, 7 };
+    const union_type = datatype.UnionType{
+        .type_ids = union_type_ids[0..],
+        .fields = union_fields[0..],
+        .mode = .dense,
+    };
+    const dense_union_type = DataType{ .dense_union = union_type };
+    const fields = [_]Field{
+        .{ .name = "u", .data_type = &dense_union_type, .nullable = true },
+    };
+    const schema = Schema{ .fields = fields[0..] };
+
+    var int_builder = try @import("../array/primitive_array.zig").PrimitiveBuilder(i32, DataType{ .int32 = {} }).init(allocator, 2);
+    defer int_builder.deinit();
+    try int_builder.append(10);
+    try int_builder.append(20);
+    var int_ref = try int_builder.finish();
+    defer int_ref.release();
+
+    var bool_builder = try @import("../array/boolean_array.zig").BooleanBuilder.init(allocator, 1);
+    defer bool_builder.deinit();
+    try bool_builder.append(true);
+    var bool_ref = try bool_builder.finish();
+    defer bool_ref.release();
+
+    var union_builder = try @import("../array/advanced_array.zig").DenseUnionBuilder.init(allocator, union_type, 3);
+    defer union_builder.deinit();
+    try union_builder.append(5, 0);
+    try union_builder.append(7, 0);
+    try union_builder.append(5, 1);
+    var union_ref = try union_builder.finish(&[_]ArrayRef{ int_ref, bool_ref });
+    defer union_ref.release();
+
+    var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]ArrayRef{union_ref});
+    defer batch.deinit();
+
+    var out_buf = std.array_list.Managed(u8).init(allocator);
+    defer out_buf.deinit();
+
+    var writer = @import("stream_writer.zig").StreamWriter(@TypeOf(out_buf.writer())).initWithOptions(
+        allocator,
+        out_buf.writer(),
+        .{ .metadata_version = .v4 },
+    );
     defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
