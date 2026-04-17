@@ -43,7 +43,7 @@ pub const MapArray = struct {
         std.debug.assert(self.data.buffers.len >= 2);
         std.debug.assert(self.data.children.len == 1);
 
-        const offsets = self.data.buffers[1].typedSlice(i32);
+        const offsets = try self.data.buffers[1].typedSlice(i32);
         const base = self.data.offset + i;
         const start: usize = @intCast(offsets[base]);
         const end: usize = @intCast(offsets[base + 1]);
@@ -62,7 +62,7 @@ pub const SparseUnionArray = struct {
     pub fn typeId(self: SparseUnionArray, i: usize) i8 {
         std.debug.assert(i < self.data.length);
         std.debug.assert(self.data.buffers.len >= 1);
-        return self.data.buffers[0].typedSlice(i8)[self.data.offset + i];
+        return (self.data.buffers[0].typedSlice(i8) catch unreachable)[self.data.offset + i];
     }
 
     pub fn childRef(self: SparseUnionArray, child_index: usize) *const ArrayRef {
@@ -99,13 +99,13 @@ pub const DenseUnionArray = struct {
     pub fn typeId(self: DenseUnionArray, i: usize) i8 {
         std.debug.assert(i < self.data.length);
         std.debug.assert(self.data.buffers.len >= 1);
-        return self.data.buffers[0].typedSlice(i8)[self.data.offset + i];
+        return (self.data.buffers[0].typedSlice(i8) catch unreachable)[self.data.offset + i];
     }
 
     pub fn childOffset(self: DenseUnionArray, i: usize) i32 {
         std.debug.assert(i < self.data.length);
         std.debug.assert(self.data.buffers.len >= 2);
-        return self.data.buffers[1].typedSlice(i32)[self.data.offset + i];
+        return (self.data.buffers[1].typedSlice(i32) catch unreachable)[self.data.offset + i];
     }
 
     /// Return the logical value view at the requested index.
@@ -146,21 +146,21 @@ pub const RunEndEncodedArray = struct {
         const run_ty = self.data.data_type.run_end_encoded.run_end_type;
         return switch (run_ty.bit_width) {
             8 => if (run_ty.signed)
-                @as(i64, run_ends.buffers[1].typedSlice(i8)[run_ends.offset + run_index])
+                @as(i64, (try run_ends.buffers[1].typedSlice(i8))[run_ends.offset + run_index])
             else
-                @as(i64, @intCast(run_ends.buffers[1].typedSlice(u8)[run_ends.offset + run_index])),
+                @as(i64, @intCast((try run_ends.buffers[1].typedSlice(u8))[run_ends.offset + run_index])),
             16 => if (run_ty.signed)
-                @as(i64, run_ends.buffers[1].typedSlice(i16)[run_ends.offset + run_index])
+                @as(i64, (try run_ends.buffers[1].typedSlice(i16))[run_ends.offset + run_index])
             else
-                @as(i64, @intCast(run_ends.buffers[1].typedSlice(u16)[run_ends.offset + run_index])),
+                @as(i64, @intCast((try run_ends.buffers[1].typedSlice(u16))[run_ends.offset + run_index])),
             32 => if (run_ty.signed)
-                @as(i64, run_ends.buffers[1].typedSlice(i32)[run_ends.offset + run_index])
+                @as(i64, (try run_ends.buffers[1].typedSlice(i32))[run_ends.offset + run_index])
             else
-                @as(i64, @intCast(run_ends.buffers[1].typedSlice(u32)[run_ends.offset + run_index])),
+                @as(i64, @intCast((try run_ends.buffers[1].typedSlice(u32))[run_ends.offset + run_index])),
             64 => if (run_ty.signed)
-                run_ends.buffers[1].typedSlice(i64)[run_ends.offset + run_index]
+                (try run_ends.buffers[1].typedSlice(i64))[run_ends.offset + run_index]
             else
-                std.math.cast(i64, run_ends.buffers[1].typedSlice(u64)[run_ends.offset + run_index]) orelse return error.InvalidRunEnds,
+                std.math.cast(i64, (try run_ends.buffers[1].typedSlice(u64))[run_ends.offset + run_index]) orelse return error.InvalidRunEnds,
             else => error.InvalidRunEnds,
         };
     }

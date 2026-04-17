@@ -360,12 +360,12 @@ pub const ArrayData = struct {
                 const child_data = self.children[0].data();
                 const child_len = std.math.add(usize, child_data.length, child_data.offset) catch return error.InvalidChildren;
                 if (offset_width == 4) {
-                    const offsets = self.buffers[1].typedSlice(i32);
-                    const sizes = self.buffers[2].typedSlice(i32);
+                    const offsets = self.buffers[1].typedSlice(i32) catch return error.InvalidOffsetBuffer;
+                    const sizes = self.buffers[2].typedSlice(i32) catch return error.InvalidOffsetBuffer;
                     try validateOffsetsSizesI32(offsets, sizes, total_len, child_len);
                 } else {
-                    const offsets = self.buffers[1].typedSlice(i64);
-                    const sizes = self.buffers[2].typedSlice(i64);
+                    const offsets = self.buffers[1].typedSlice(i64) catch return error.InvalidOffsetBuffer;
+                    const sizes = self.buffers[2].typedSlice(i64) catch return error.InvalidOffsetBuffer;
                     try validateOffsetsSizesI64(offsets, sizes, total_len, child_len);
                 }
             },
@@ -387,10 +387,10 @@ pub const ArrayData = struct {
                 } else if (self.buffers.len >= 3) self.buffers[2].len() else 0;
 
                 if (offset_width == 4) {
-                    const offsets = self.buffers[1].typedSlice(i32);
+                    const offsets = self.buffers[1].typedSlice(i32) catch return error.InvalidOffsetBuffer;
                     try validateOffsetsI32(offsets, total_len, data_len);
                 } else {
-                    const offsets = self.buffers[1].typedSlice(i64);
+                    const offsets = self.buffers[1].typedSlice(i64) catch return error.InvalidOffsetBuffer;
                     try validateOffsetsI64(offsets, total_len, data_len);
                 }
             },
@@ -461,17 +461,17 @@ pub const ArrayData = struct {
 
                 switch (byte_width) {
                     2 => if (dt.run_end_encoded.run_end_type.signed)
-                        try validateRunEndsSigned(i16, run_ends.buffers[1].typedSlice(i16)[run_ends_slice_start..run_ends_slice_end], total_len)
+                        try validateRunEndsSigned(i16, (run_ends.buffers[1].typedSlice(i16) catch return error.InvalidOffsetBuffer)[run_ends_slice_start..run_ends_slice_end], total_len)
                     else
-                        try validateRunEndsUnsigned(u16, run_ends.buffers[1].typedSlice(u16)[run_ends_slice_start..run_ends_slice_end], total_len),
+                        try validateRunEndsUnsigned(u16, (run_ends.buffers[1].typedSlice(u16) catch return error.InvalidOffsetBuffer)[run_ends_slice_start..run_ends_slice_end], total_len),
                     4 => if (dt.run_end_encoded.run_end_type.signed)
-                        try validateRunEndsSigned(i32, run_ends.buffers[1].typedSlice(i32)[run_ends_slice_start..run_ends_slice_end], total_len)
+                        try validateRunEndsSigned(i32, (run_ends.buffers[1].typedSlice(i32) catch return error.InvalidOffsetBuffer)[run_ends_slice_start..run_ends_slice_end], total_len)
                     else
-                        try validateRunEndsUnsigned(u32, run_ends.buffers[1].typedSlice(u32)[run_ends_slice_start..run_ends_slice_end], total_len),
+                        try validateRunEndsUnsigned(u32, (run_ends.buffers[1].typedSlice(u32) catch return error.InvalidOffsetBuffer)[run_ends_slice_start..run_ends_slice_end], total_len),
                     8 => if (dt.run_end_encoded.run_end_type.signed)
-                        try validateRunEndsSigned(i64, run_ends.buffers[1].typedSlice(i64)[run_ends_slice_start..run_ends_slice_end], total_len)
+                        try validateRunEndsSigned(i64, (run_ends.buffers[1].typedSlice(i64) catch return error.InvalidOffsetBuffer)[run_ends_slice_start..run_ends_slice_end], total_len)
                     else
-                        try validateRunEndsUnsigned(u64, run_ends.buffers[1].typedSlice(u64)[run_ends_slice_start..run_ends_slice_end], total_len),
+                        try validateRunEndsUnsigned(u64, (run_ends.buffers[1].typedSlice(u64) catch return error.InvalidOffsetBuffer)[run_ends_slice_start..run_ends_slice_end], total_len),
                     else => return error.InvalidOffsetBuffer,
                 }
             },

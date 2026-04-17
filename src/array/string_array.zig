@@ -38,7 +38,7 @@ pub const StringArray = struct {
         std.debug.assert(i < self.data.length);
         std.debug.assert(self.data.buffers.len >= 3);
 
-        const offsets = self.data.buffers[1].typedSlice(i32);
+        const offsets = self.data.buffers[1].typedSlice(i32) catch unreachable;
         const start = offsets[self.data.offset + i];
         const end = offsets[self.data.offset + i + 1];
         return self.data.buffers[2].data[@intCast(start)..@intCast(end)];
@@ -63,7 +63,7 @@ pub const LargeStringArray = struct {
         std.debug.assert(i < self.data.length);
         std.debug.assert(self.data.buffers.len >= 3);
 
-        const offsets = self.data.buffers[1].typedSlice(i64);
+        const offsets = self.data.buffers[1].typedSlice(i64) catch unreachable;
         const start = offsets[self.data.offset + i];
         const end = offsets[self.data.offset + i + 1];
         return self.data.buffers[2].data[@intCast(start)..@intCast(end)];

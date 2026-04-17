@@ -741,11 +741,11 @@ fn importArrayRecursive(
         filled_buffers += 1;
 
         if ((layout_dt == .string or layout_dt == .binary or layout_dt == .list) and i == 1) {
-            offsets_i32 = buffers[i].typedSlice(i32);
+            offsets_i32 = buffers[i].typedSlice(i32) catch return error.InvalidOffset;
             data_buffer_len = std.math.cast(usize, offsets_i32.?[total_len]) orelse return error.InvalidOffset;
         }
         if ((layout_dt == .large_string or layout_dt == .large_binary or layout_dt == .large_list) and i == 1) {
-            offsets_i64 = buffers[i].typedSlice(i64);
+            offsets_i64 = buffers[i].typedSlice(i64) catch return error.InvalidOffset;
             data_buffer_len = std.math.cast(usize, offsets_i64.?[total_len]) orelse return error.InvalidOffset;
         }
     }
@@ -1943,7 +1943,7 @@ test "c data map import validates offsets and entries values explicitly" {
     try std.testing.expect(map_view.isNull(1));
     try std.testing.expect(!map_view.isNull(2));
 
-    const offsets = imported.data().buffers[1].typedSlice(i32);
+    const offsets = try imported.data().buffers[1].typedSlice(i32);
     try std.testing.expectEqual(@as(i32, 0), offsets[0]);
     try std.testing.expectEqual(@as(i32, 2), offsets[1]);
     try std.testing.expectEqual(@as(i32, 2), offsets[2]);
@@ -2333,8 +2333,8 @@ test "c data array import supports list_view and large_list_view" {
     try std.testing.expect(lv_imported.data().data_type == .list_view);
     try std.testing.expectEqual(@as(usize, 2), lv_imported.data().length);
     try std.testing.expectEqual(@as(usize, 3), lv_imported.data().buffers.len);
-    const lv_offs = lv_imported.data().buffers[1].typedSlice(i32);
-    const lv_szs = lv_imported.data().buffers[2].typedSlice(i32);
+    const lv_offs = try lv_imported.data().buffers[1].typedSlice(i32);
+    const lv_szs = try lv_imported.data().buffers[2].typedSlice(i32);
     try std.testing.expectEqual(@as(i32, 0), lv_offs[0]);
     try std.testing.expectEqual(@as(i32, 2), lv_offs[1]);
     try std.testing.expectEqual(@as(i32, 2), lv_szs[0]);
@@ -2362,8 +2362,8 @@ test "c data array import supports list_view and large_list_view" {
     try std.testing.expect(llv_imported.data().data_type == .large_list_view);
     try std.testing.expectEqual(@as(usize, 2), llv_imported.data().length);
     try std.testing.expectEqual(@as(usize, 3), llv_imported.data().buffers.len);
-    const llv_offs = llv_imported.data().buffers[1].typedSlice(i64);
-    const llv_szs = llv_imported.data().buffers[2].typedSlice(i64);
+    const llv_offs = try llv_imported.data().buffers[1].typedSlice(i64);
+    const llv_szs = try llv_imported.data().buffers[2].typedSlice(i64);
     try std.testing.expectEqual(@as(i64, 1), llv_offs[0]);
     try std.testing.expectEqual(@as(i64, 3), llv_offs[1]);
     try std.testing.expectEqual(@as(i64, 2), llv_szs[0]);

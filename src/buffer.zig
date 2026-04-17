@@ -37,6 +37,12 @@ pub const SharedBuffer = struct {
 
     const Self = @This();
 
+    pub const Error = error{
+        SliceOutOfBounds,
+        MisalignedPointer,
+        LengthNotMultipleOfTypeSize,
+    };
+
     pub const empty: SharedBuffer = .{ .storage = null, .data = &.{} };
 
     /// Build a borrowed non-owning shared buffer view from an existing slice.
@@ -73,17 +79,30 @@ pub const SharedBuffer = struct {
     }
 
     /// Create a logical slice view over the current value.
-    pub fn slice(self: Self, start: usize, end: usize) Self {
-        std.debug.assert(start <= end);
-        std.debug.assert(end <= self.data.len);
+    pub fn slice(self: Self, start: usize, end: usize) Error!Self {
+        if (start > end or end > self.data.len) {
+            return error.SliceOutOfBounds;
+        }
         const out = Self{ .storage = self.storage, .data = self.data[start..end] };
+
         if (out.storage) |storage| {
             _ = storage.ref_count.fetchAdd(1, .monotonic);
         }
         return out;
     }
 
-    pub fn typedSlice(self: Self, comptime T: type) []const T {
+    /// Reinterpret raw bytes as a typed immutable slice.
+    /// Returns an error when pointer alignment or byte-length constraints are not met.
+    pub fn typedSlice(self: Self, comptime T: type) Error![]const T {
+        comptime {
+            if (@sizeOf(T) == 0) @compileError("typedSlice does not support zero-sized types");
+        }
+        if (!std.mem.isAligned(@intFromPtr(self.data.ptr), @alignOf(T))) {
+            return error.MisalignedPointer;
+        }
+        if (self.data.len % @sizeOf(T) != 0) {
+            return error.LengthNotMultipleOfTypeSize;
+        }
         const aligned: []align(@alignOf(T)) const u8 = @alignCast(self.data);
         return std.mem.bytesAsSlice(T, aligned);
     }
@@ -202,7 +221,7 @@ test "shared buffer slice keeps owner but narrows logical data window" {
     var whole = try owned.toShared(8);
     defer whole.release();
 
-    var mid = whole.slice(2, 6);
+    var mid = try whole.slice(2, 6);
     defer mid.release();
 
     try std.testing.expect(whole.storage == mid.storage);
@@ -217,9 +236,41 @@ test "borrowed shared buffer slice stays non-owning" {
     var borrowed = SharedBuffer.fromSlice(raw);
     defer borrowed.release();
 
-    var part = borrowed.slice(1, 4);
+    var part = try borrowed.slice(1, 4);
     defer part.release();
 
     try std.testing.expect(part.storage == null);
     try std.testing.expectEqualStrings("bcd", part.data);
+}
+
+test "shared buffer slice validates bounds in all build modes" {
+    const raw = "abcdef";
+    const borrowed = SharedBuffer.fromSlice(raw);
+
+    try std.testing.expectError(SharedBuffer.Error.SliceOutOfBounds, borrowed.slice(5, 2));
+    try std.testing.expectError(SharedBuffer.Error.SliceOutOfBounds, borrowed.slice(0, 7));
+}
+
+test "shared buffer typedSlice returns error on misaligned pointer" {
+    var owned = try OwnedBuffer.init(std.testing.allocator, 8);
+    defer owned.deinit();
+    @memcpy(owned.data[0..8], "abcdefgh");
+
+    var whole = try owned.toShared(8);
+    defer whole.release();
+    var misaligned = try whole.slice(1, 5);
+    defer misaligned.release();
+
+    try std.testing.expectError(SharedBuffer.Error.MisalignedPointer, misaligned.typedSlice(u16));
+}
+
+test "shared buffer typedSlice returns error on invalid byte length" {
+    var owned = try OwnedBuffer.init(std.testing.allocator, 8);
+    defer owned.deinit();
+    @memcpy(owned.data[0..8], "abcdefgh");
+
+    var shared = try owned.toShared(3);
+    defer shared.release();
+
+    try std.testing.expectError(SharedBuffer.Error.LengthNotMultipleOfTypeSize, shared.typedSlice(u16));
 }

@@ -129,8 +129,8 @@ pub const ListViewArray = struct {
         std.debug.assert(self.data.buffers.len >= 3);
         std.debug.assert(self.data.children.len == 1);
 
-        const offsets = self.data.buffers[1].typedSlice(i32);
-        const sizes = self.data.buffers[2].typedSlice(i32);
+        const offsets = try self.data.buffers[1].typedSlice(i32);
+        const sizes = try self.data.buffers[2].typedSlice(i32);
         const base = self.data.offset + i;
         const start: usize = @intCast(offsets[base]);
         const size: usize = @intCast(sizes[base]);
@@ -162,8 +162,8 @@ pub const LargeListViewArray = struct {
         std.debug.assert(self.data.buffers.len >= 3);
         std.debug.assert(self.data.children.len == 1);
 
-        const offsets = self.data.buffers[1].typedSlice(i64);
-        const sizes = self.data.buffers[2].typedSlice(i64);
+        const offsets = try self.data.buffers[1].typedSlice(i64);
+        const sizes = try self.data.buffers[2].typedSlice(i64);
         const base = self.data.offset + i;
         const start: usize = @intCast(offsets[base]);
         const size: usize = @intCast(sizes[base]);
@@ -187,7 +187,7 @@ fn convertListToView(
 
     const sizes_slice = std.mem.bytesAsSlice(OffsetT, sizes.data)[0..total_len];
     @memset(sizes_slice, 0);
-    const offsets = base.buffers[1].typedSlice(OffsetT);
+    const offsets = try base.buffers[1].typedSlice(OffsetT);
     var i: usize = 0;
     while (i < base.length) : (i += 1) {
         const idx = base.offset + i;

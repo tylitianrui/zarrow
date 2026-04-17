@@ -36,7 +36,7 @@ pub fn PrimitiveArray(comptime T: type) type {
         pub fn values(self: Self) []const T {
             // Primitive arrays require [validity] and [values] buffers.
             std.debug.assert(self.data.buffers.len >= 2);
-            const raw = self.data.buffers[1].typedSlice(T);
+            const raw = self.data.buffers[1].typedSlice(T) catch unreachable;
             return raw[self.data.offset .. self.data.offset + self.data.length];
         }
 

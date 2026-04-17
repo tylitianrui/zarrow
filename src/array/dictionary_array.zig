@@ -46,21 +46,21 @@ pub const DictionaryArray = struct {
         const pos = self.data.offset + i;
         return switch (idx_ty.bit_width) {
             8 => if (idx_ty.signed)
-                @as(i64, self.data.buffers[1].typedSlice(i8)[pos])
+                @as(i64, (self.data.buffers[1].typedSlice(i8) catch unreachable)[pos])
             else
-                @as(i64, @intCast(self.data.buffers[1].typedSlice(u8)[pos])),
+                @as(i64, @intCast((self.data.buffers[1].typedSlice(u8) catch unreachable)[pos])),
             16 => if (idx_ty.signed)
-                @as(i64, self.data.buffers[1].typedSlice(i16)[pos])
+                @as(i64, (self.data.buffers[1].typedSlice(i16) catch unreachable)[pos])
             else
-                @as(i64, @intCast(self.data.buffers[1].typedSlice(u16)[pos])),
+                @as(i64, @intCast((self.data.buffers[1].typedSlice(u16) catch unreachable)[pos])),
             32 => if (idx_ty.signed)
-                @as(i64, self.data.buffers[1].typedSlice(i32)[pos])
+                @as(i64, (self.data.buffers[1].typedSlice(i32) catch unreachable)[pos])
             else
-                @as(i64, @intCast(self.data.buffers[1].typedSlice(u32)[pos])),
+                @as(i64, @intCast((self.data.buffers[1].typedSlice(u32) catch unreachable)[pos])),
             64 => if (idx_ty.signed)
-                self.data.buffers[1].typedSlice(i64)[pos]
+                (self.data.buffers[1].typedSlice(i64) catch unreachable)[pos]
             else
-                @as(i64, @intCast(self.data.buffers[1].typedSlice(u64)[pos])),
+                @as(i64, @intCast((self.data.buffers[1].typedSlice(u64) catch unreachable)[pos])),
             else => std.debug.panic("invalid dictionary index bit width: {}", .{idx_ty.bit_width}),
         };
     }

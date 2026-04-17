@@ -44,7 +44,7 @@ pub const ListArray = struct {
         std.debug.assert(self.data.buffers.len >= 2);
         std.debug.assert(self.data.children.len == 1);
 
-        const offsets = self.data.buffers[1].typedSlice(i32);
+        const offsets = try self.data.buffers[1].typedSlice(i32);
         const base = self.data.offset + i;
         const start: usize = @intCast(offsets[base]);
         const end: usize = @intCast(offsets[base + 1]);
@@ -76,7 +76,7 @@ pub const LargeListArray = struct {
         std.debug.assert(self.data.buffers.len >= 2);
         std.debug.assert(self.data.children.len == 1);
 
-        const offsets = self.data.buffers[1].typedSlice(i64);
+        const offsets = try self.data.buffers[1].typedSlice(i64);
         const base = self.data.offset + i;
         const start: usize = @intCast(offsets[base]);
         const end: usize = @intCast(offsets[base + 1]);

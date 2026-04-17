@@ -1222,7 +1222,7 @@ fn readArrayFromMeta(
         } else {
             const required_alignment = requiredBufferAlignment(layout_dt, i, metadata_version);
             if (canReuseBodySlice(body, start, required_alignment)) {
-                buffers[i] = body.slice(start, end);
+                buffers[i] = body.slice(start, end) catch return StreamError.InvalidBody;
             } else {
                 var owned = try buffer.OwnedBuffer.init(allocator, len);
                 errdefer owned.deinit();
@@ -1565,7 +1565,7 @@ fn decodeRecordBatchBody(
         const payload = chunk[8..];
 
         const part = if (uncompressed_len_i64 == -1)
-            body.slice(start + 8, end)
+            body.slice(start + 8, end) catch return StreamError.InvalidBody
         else blk: {
             if (uncompressed_len_i64 < 0) return StreamError.InvalidBody;
             const expected_len = std.math.cast(usize, uncompressed_len_i64) orelse return StreamError.InvalidBody;
@@ -1810,8 +1810,8 @@ fn concatListLikeArrayI32(
         owned.release();
     };
 
-    const left_offsets = left.buffers[1].typedSlice(i32);
-    const right_offsets = right.buffers[1].typedSlice(i32);
+    const left_offsets = left.buffers[1].typedSlice(i32) catch return StreamError.InvalidMetadata;
+    const right_offsets = right.buffers[1].typedSlice(i32) catch return StreamError.InvalidMetadata;
     const left_base = left_offsets[left.offset];
     const left_last = left_offsets[left.offset + left.length];
     const right_base = right_offsets[right.offset];
@@ -1889,8 +1889,8 @@ fn concatListLikeArrayI64(
         owned.release();
     };
 
-    const left_offsets = left.buffers[1].typedSlice(i64);
-    const right_offsets = right.buffers[1].typedSlice(i64);
+    const left_offsets = left.buffers[1].typedSlice(i64) catch return StreamError.InvalidMetadata;
+    const right_offsets = right.buffers[1].typedSlice(i64) catch return StreamError.InvalidMetadata;
     const left_base = left_offsets[left.offset];
     const left_last = left_offsets[left.offset + left.length];
     const right_base = right_offsets[right.offset];
@@ -2188,8 +2188,8 @@ fn concatVariableBinaryArrayI32(
         owned.release();
     };
 
-    const left_offsets = left.buffers[1].typedSlice(i32);
-    const right_offsets = right.buffers[1].typedSlice(i32);
+    const left_offsets = left.buffers[1].typedSlice(i32) catch return StreamError.InvalidMetadata;
+    const right_offsets = right.buffers[1].typedSlice(i32) catch return StreamError.InvalidMetadata;
     const left_start = std.math.cast(usize, left_offsets[left.offset]) orelse return StreamError.InvalidMetadata;
     const left_end = std.math.cast(usize, left_offsets[left.offset + left.length]) orelse return StreamError.InvalidMetadata;
     const right_start = std.math.cast(usize, right_offsets[right.offset]) orelse return StreamError.InvalidMetadata;
@@ -2265,8 +2265,8 @@ fn concatVariableBinaryArrayI64(
         owned.release();
     };
 
-    const left_offsets = left.buffers[1].typedSlice(i64);
-    const right_offsets = right.buffers[1].typedSlice(i64);
+    const left_offsets = left.buffers[1].typedSlice(i64) catch return StreamError.InvalidMetadata;
+    const right_offsets = right.buffers[1].typedSlice(i64) catch return StreamError.InvalidMetadata;
     const left_start = std.math.cast(usize, left_offsets[left.offset]) orelse return StreamError.InvalidMetadata;
     const left_end = std.math.cast(usize, left_offsets[left.offset + left.length]) orelse return StreamError.InvalidMetadata;
     const right_start = std.math.cast(usize, right_offsets[right.offset]) orelse return StreamError.InvalidMetadata;
@@ -3308,7 +3308,7 @@ test "ipc reader dictionary delta merge supports list values" {
 
     try std.testing.expect(merged.data().data_type == .list);
     try std.testing.expectEqual(@as(usize, 4), merged.data().length);
-    const offsets = merged.data().buffers[1].typedSlice(i32);
+    const offsets = try merged.data().buffers[1].typedSlice(i32);
     try std.testing.expectEqual(@as(i32, 0), offsets[0]);
     try std.testing.expectEqual(@as(i32, 2), offsets[1]);
     try std.testing.expectEqual(@as(i32, 3), offsets[2]);

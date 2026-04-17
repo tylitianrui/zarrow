@@ -1101,8 +1101,8 @@ fn fixedWidthEqual(a: *const ArrayData, b: *const ArrayData, byte_width: usize) 
 
 fn variableBinaryEqualI32(a: *const ArrayData, b: *const ArrayData) StreamError!bool {
     if (a.buffers.len < 3 or b.buffers.len < 3) return StreamError.InvalidMetadata;
-    const a_offsets = a.buffers[1].typedSlice(i32);
-    const b_offsets = b.buffers[1].typedSlice(i32);
+    const a_offsets = a.buffers[1].typedSlice(i32) catch return StreamError.InvalidMetadata;
+    const b_offsets = b.buffers[1].typedSlice(i32) catch return StreamError.InvalidMetadata;
     var i: usize = 0;
     while (i < a.length) : (i += 1) {
         const a_null = a.isNull(i);
@@ -1122,8 +1122,8 @@ fn variableBinaryEqualI32(a: *const ArrayData, b: *const ArrayData) StreamError!
 
 fn variableBinaryEqualI64(a: *const ArrayData, b: *const ArrayData) StreamError!bool {
     if (a.buffers.len < 3 or b.buffers.len < 3) return StreamError.InvalidMetadata;
-    const a_offsets = a.buffers[1].typedSlice(i64);
-    const b_offsets = b.buffers[1].typedSlice(i64);
+    const a_offsets = a.buffers[1].typedSlice(i64) catch return StreamError.InvalidMetadata;
+    const b_offsets = b.buffers[1].typedSlice(i64) catch return StreamError.InvalidMetadata;
     var i: usize = 0;
     while (i < a.length) : (i += 1) {
         const a_null = a.isNull(i);
