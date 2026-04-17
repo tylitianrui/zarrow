@@ -292,13 +292,15 @@ fn writeU32Le(writer: anytype, value: u32) !void {
 }
 
 fn encodeBlocksToString(allocator: std.mem.Allocator, blocks: []const fbs.BlockT) error{OutOfMemory}![]u8 {
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
+    var buf = std.ArrayList(u8){};
+    defer buf.deinit(allocator);
     for (blocks, 0..) |blk, i| {
-        if (i > 0) try buf.append(',');
-        try buf.writer().print("{d}:{d}:{d}", .{ blk.offset, blk.metaDataLength, blk.bodyLength });
+        if (i > 0) try buf.append(allocator, ',');
+        const entry = try std.fmt.allocPrint(allocator, "{d}:{d}:{d}", .{ blk.offset, blk.metaDataLength, blk.bodyLength });
+        defer allocator.free(entry);
+        try buf.appendSlice(allocator, entry);
     }
-    return buf.toOwnedSlice();
+    return buf.toOwnedSlice(allocator);
 }
 
 fn buildFooterBytes(
@@ -310,28 +312,19 @@ fn buildFooterBytes(
     sparse_tensor_blocks: std.ArrayList(fbs.BlockT),
     metadata_version: fbs.MetadataVersion,
 ) FileError![]u8 {
-    var custom_metadata = try std.ArrayList(fbs.KeyValueT).initCapacity(allocator, 2);
-    defer {
-        for (custom_metadata.items) |*kv| {
-            if (kv.key) |k| allocator.free(k);
-            if (kv.value) |v| allocator.free(v);
-        }
-        custom_metadata.deinit(allocator);
-    }
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var custom_metadata = std.ArrayList(fbs.KeyValueT){};
 
     if (tensor_blocks.items.len > 0) {
-        const encoded = try encodeBlocksToString(allocator, tensor_blocks.items);
-        errdefer allocator.free(encoded);
-        const key = try allocator.dupe(u8, "zarrow:tensor_blocks");
-        errdefer allocator.free(key);
-        try custom_metadata.append(allocator, fbs.KeyValueT{ .key = key, .value = encoded });
+        const encoded = try encodeBlocksToString(aa, tensor_blocks.items);
+        try custom_metadata.append(aa, fbs.KeyValueT{ .key = "zarrow:tensor_blocks", .value = encoded });
     }
     if (sparse_tensor_blocks.items.len > 0) {
-        const encoded = try encodeBlocksToString(allocator, sparse_tensor_blocks.items);
-        errdefer allocator.free(encoded);
-        const key = try allocator.dupe(u8, "zarrow:sparse_tensor_blocks");
-        errdefer allocator.free(key);
-        try custom_metadata.append(allocator, fbs.KeyValueT{ .key = key, .value = encoded });
+        const encoded = try encodeBlocksToString(aa, sparse_tensor_blocks.items);
+        try custom_metadata.append(aa, fbs.KeyValueT{ .key = "zarrow:sparse_tensor_blocks", .value = encoded });
     }
 
     const footer = fbs.FooterT{

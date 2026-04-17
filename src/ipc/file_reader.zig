@@ -411,13 +411,12 @@ pub fn FileReader(comptime ReaderType: type) type {
             expected_header: MessageHeaderKind,
             meta_key: []const u8,
         ) (FileError || ReaderIoError)![]IndexedBlock {
-            var blocks = std.ArrayList(IndexedBlock).init(self.allocator);
+            var blocks = std.ArrayList(IndexedBlock){};
             errdefer blocks.deinit(self.allocator);
 
             for (footer_t.custom_metadata.items) |kv| {
-                const key = kv.key orelse continue;
-                if (!std.mem.eql(u8, key, meta_key)) continue;
-                const value = kv.value orelse continue;
+                if (!std.mem.eql(u8, kv.key, meta_key)) continue;
+                const value = kv.value;
 
                 var it = std.mem.splitScalar(u8, value, ',');
                 while (it.next()) |entry| {
@@ -438,7 +437,7 @@ pub fn FileReader(comptime ReaderType: type) type {
                 break;
             }
 
-            return try blocks.toOwnedSlice();
+            return try blocks.toOwnedSlice(self.allocator);
         }
 
         fn collectIndexedBlocks(
@@ -1156,4 +1155,110 @@ test "ipc file reader accepts file with leading padding before schema message" {
     const id_arr = prim.PrimitiveArray(i32){ .data = out_batch.columns[0].data() };
     try std.testing.expectEqual(@as(i32, 11), id_arr.value(0));
     try std.testing.expectEqual(@as(i32, 22), id_arr.value(1));
+}
+
+test "ipc file roundtrips tensor and sparse tensor messages" {
+    const allocator = std.testing.allocator;
+    const DataType = @import("../datatype.zig").DataType;
+
+    // Build tensor body: 2×3 i32 matrix [1,2,3,4,5,6] row-major.
+    var tensor_body: [24]u8 = undefined;
+    for (0..6) |i| {
+        std.mem.writeInt(i32, tensor_body[i * 4 ..][0..4], @intCast(i + 1), .little);
+    }
+    const tensor_meta = stream_reader.TensorLikeMetadata{
+        .tensor = .{
+            .value_type = DataType{ .int32 = {} },
+            .shape = &.{
+                .{ .size = 2, .name = "rows" },
+                .{ .size = 3, .name = "cols" },
+            },
+            .strides = &.{ 12, 4 },
+            .data = .{ .offset = 0, .length = tensor_body.len },
+        },
+    };
+
+    // Build sparse COO body: indices (0,1),(1,2) then values 10,20.
+    var sparse_body: [40]u8 = undefined;
+    std.mem.writeInt(i64, sparse_body[0..8], 0, .little);
+    std.mem.writeInt(i64, sparse_body[8..16], 1, .little);
+    std.mem.writeInt(i64, sparse_body[16..24], 1, .little);
+    std.mem.writeInt(i64, sparse_body[24..32], 2, .little);
+    std.mem.writeInt(i32, sparse_body[32..36], 10, .little);
+    std.mem.writeInt(i32, sparse_body[36..40], 20, .little);
+    const sparse_meta = stream_reader.TensorLikeMetadata{
+        .sparse_tensor = .{
+            .value_type = DataType{ .int32 = {} },
+            .shape = &.{
+                .{ .size = 2, .name = "rows" },
+                .{ .size = 3, .name = "cols" },
+            },
+            .non_zero_length = 2,
+            .sparse_index = .{
+                .coo = .{
+                    .indices_type = .{ .signed = true, .bit_width = 64 },
+                    .indices_strides = null,
+                    .indices = .{ .offset = 0, .length = 32 },
+                    .is_canonical = true,
+                },
+            },
+            .data = .{ .offset = 32, .length = 8 },
+        },
+    };
+
+    const id_type = @import("../datatype.zig").DataType{ .int32 = {} };
+    const fields = [_]@import("../datatype.zig").Field{
+        .{ .name = "id", .data_type = &id_type, .nullable = false },
+    };
+    const schema_val = Schema{ .fields = fields[0..] };
+
+    // Write file.
+    var file_bytes = std.ArrayList(u8){};
+    defer file_bytes.deinit(allocator);
+    const Sink = struct {
+        allocator: std.mem.Allocator,
+        out: *std.ArrayList(u8),
+        pub const Error = error{OutOfMemory};
+        pub fn writeAll(self: @This(), bytes: []const u8) Error!void {
+            try self.out.appendSlice(self.allocator, bytes);
+        }
+    };
+
+    var fw = try file_writer.FileWriter(Sink).init(allocator, .{ .allocator = allocator, .out = &file_bytes });
+    defer fw.deinit();
+    try fw.writeSchema(schema_val);
+    try fw.writeTensorLikeMessage(tensor_meta, tensor_body[0..]);
+    try fw.writeTensorLikeMessage(sparse_meta, sparse_body[0..]);
+    try fw.writeEnd();
+
+    // Read back.
+    var fixed = std.io.fixedBufferStream(file_bytes.items);
+    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    defer fr.deinit();
+
+    _ = try fr.readSchema();
+    try std.testing.expectEqual(@as(usize, 0), try fr.recordBatchCount());
+    try std.testing.expectEqual(@as(usize, 1), try fr.tensorCount());
+    try std.testing.expectEqual(@as(usize, 1), try fr.sparseTensorCount());
+
+    // Verify tensor.
+    var t_msg = try fr.readTensorAt(0);
+    defer t_msg.deinit();
+    const t_meta = t_msg.metadata.tensor;
+    try std.testing.expectEqual(@as(usize, 2), t_meta.shape.len);
+    try std.testing.expectEqual(@as(i64, 2), t_meta.shape[0].size);
+    try std.testing.expectEqual(@as(i64, 3), t_meta.shape[1].size);
+    try std.testing.expectEqual(@as(usize, 24), t_meta.data.length);
+    const t_bytes = t_meta.data.bytes(t_msg.body.data);
+    try std.testing.expectEqual(@as(i32, 1), std.mem.readInt(i32, t_bytes[0..4], .little));
+    try std.testing.expectEqual(@as(i32, 6), std.mem.readInt(i32, t_bytes[20..24], .little));
+
+    // Verify sparse tensor.
+    var s_msg = try fr.readSparseTensorAt(0);
+    defer s_msg.deinit();
+    const s_meta = s_msg.metadata.sparse_tensor;
+    try std.testing.expectEqual(@as(usize, 2), s_meta.non_zero_length);
+    const s_bytes = s_meta.data.bytes(s_msg.body.data);
+    try std.testing.expectEqual(@as(i32, 10), std.mem.readInt(i32, s_bytes[0..4], .little));
+    try std.testing.expectEqual(@as(i32, 20), std.mem.readInt(i32, s_bytes[4..8], .little));
 }

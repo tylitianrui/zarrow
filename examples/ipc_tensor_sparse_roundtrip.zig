@@ -162,5 +162,32 @@ pub fn main() !void {
 
     const file_schema = try file_reader.readSchema();
     const file_batch_count = try file_reader.recordBatchCount();
-    std.debug.print("file schema endianness={s}, record_batches={d}\n", .{ @tagName(file_schema.endianness), file_batch_count });
+    const tensor_count = try file_reader.tensorCount();
+    const sparse_count = try file_reader.sparseTensorCount();
+    std.debug.print("file schema endianness={s}, record_batches={d}, tensors={d}, sparse_tensors={d}\n", .{
+        @tagName(file_schema.endianness),
+        file_batch_count,
+        tensor_count,
+        sparse_count,
+    });
+
+    // Read tensor by index.
+    if (tensor_count > 0) {
+        var t_msg = try file_reader.readTensorAt(0);
+        defer t_msg.deinit();
+        const t_meta = t_msg.metadata.tensor;
+        std.debug.print("file tensor[0]: dims={d} data_len={d}\n", .{ t_meta.shape.len, t_meta.data.length });
+        const t_bytes = t_meta.data.bytes(t_msg.body.data);
+        printI32Slice("  values: ", t_bytes);
+    }
+
+    // Read sparse tensor by index.
+    if (sparse_count > 0) {
+        var s_msg = try file_reader.readSparseTensorAt(0);
+        defer s_msg.deinit();
+        const s_meta = s_msg.metadata.sparse_tensor;
+        std.debug.print("file sparse_tensor[0]: nnz={d} data_len={d}\n", .{ s_meta.non_zero_length, s_meta.data.length });
+        const s_bytes = s_meta.data.bytes(s_msg.body.data);
+        printI32Slice("  sparse values: ", s_bytes);
+    }
 }
