@@ -16,7 +16,7 @@ A Zig implementation of Apache Arrow.
 |---|---|
 | Name | `zarrow` |
 | Current version | `0.0.1` |
-| Minimum Zig version | `0.15.2` |
+| Minimum Zig version | `0.15.1` |
 | Maximum Zig version | `0.15.x` (Zig 0.16+ not yet supported) |
 | Dependencies declared | Yes (`build.zig.zon`) |
 | Direct dependencies | `flatbufferz` |

@@ -7,7 +7,7 @@
             .hash = "flatbufferz-0.0.1-jV8N7owbBQCWrSfiCRd_jRyoagWiDgsa3lWKzmcwG69T",
         },
     },
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.15.1",
     .paths = .{""},
     .fingerprint = 0x56e9627134bc023,
 }
