@@ -2,6 +2,7 @@ const std = @import("std");
 const schema_mod = @import("../schema.zig");
 const record_batch = @import("../record_batch.zig");
 const stream_reader = @import("stream_reader.zig");
+const fbs_lite_verify = @import("fbs_lite/verify.zig");
 const format = @import("format.zig");
 const file_writer = @import("file_writer.zig");
 const array_data = @import("../array/array_data.zig");
@@ -29,8 +30,7 @@ const fbs = struct {
     const Footer = arrow_fbs.org_apache_arrow_flatbuf_Footer.Footer;
     const FooterT = arrow_fbs.org_apache_arrow_flatbuf_Footer.FooterT;
     const BlockT = arrow_fbs.org_apache_arrow_flatbuf_Block.BlockT;
-    const Message = arrow_fbs.org_apache_arrow_flatbuf_Message.Message;
-    const MessageT = arrow_fbs.org_apache_arrow_flatbuf_Message.MessageT;
+    const MessageHeader = arrow_fbs.org_apache_arrow_flatbuf_MessageHeader.MessageHeader;
 };
 
 const IndexedFile = struct {
@@ -229,7 +229,7 @@ pub fn FileReader(comptime ReaderType: type) type {
             const footer_bytes = try self.allocator.alloc(u8, footer_len);
             defer self.allocator.free(footer_bytes);
             try self.readAtNoEof(footer_start, footer_bytes);
-            if (!isSaneFlatbufferTable(footer_bytes)) return error.InvalidFile;
+            if (!fbs_lite_verify.isSaneTable(footer_bytes)) return error.InvalidFile;
 
             const footer = fbs.Footer.GetRootAs(@constCast(footer_bytes), 0);
             const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
@@ -533,27 +533,14 @@ pub fn FileReader(comptime ReaderType: type) type {
             const metadata = try self.allocator.alloc(u8, metadata_len);
             defer self.allocator.free(metadata);
             try self.readAtNoEof(metadata_start, metadata);
-            if (!isSaneFlatbufferTable(metadata)) return error.InvalidFile;
-
-            const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
-            const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
-            var msg_t = try fbs.MessageT.Unpack(msg, opts);
-            defer msg_t.deinit(self.allocator);
-
-            if (msg_t.bodyLength < 0) return error.InvalidFile;
-            const body_len = std.math.cast(usize, msg_t.bodyLength) orelse return error.InvalidFile;
+            const envelope = fbs_lite_verify.parseArrowMessageEnvelope(metadata) catch return error.InvalidFile;
+            if (envelope.body_length < 0) return error.InvalidFile;
+            const body_len = std.math.cast(usize, envelope.body_length) orelse return error.InvalidFile;
             const total_len = std.math.add(usize, prefix_len + metadata_len, body_len) catch return error.InvalidFile;
             const end = std.math.add(usize, offset, total_len) catch return error.InvalidFile;
             if (end > limit) return error.InvalidFile;
 
-            const header: MessageHeaderKind = switch (msg_t.header) {
-                .Schema => .schema,
-                .DictionaryBatch => .dictionary_batch,
-                .RecordBatch => .record_batch,
-                .Tensor => .tensor,
-                .SparseTensor => .sparse_tensor,
-                else => .other,
-            };
+            const header = messageHeaderFromTypeTag(envelope.header_type);
             return .{
                 .meta_len = prefix_len + metadata_len,
                 .body_len = body_len,
@@ -594,31 +581,13 @@ const IndexedBlock = struct {
     header: MessageHeaderKind,
 };
 
-fn isSaneFlatbufferTable(buf: []const u8) bool {
-    if (buf.len < 8) return false;
-
-    const root_u32 = std.mem.readInt(u32, @ptrCast(buf[0..4]), .little);
-    const root = std.math.cast(usize, root_u32) orelse return false;
-    if (root > buf.len - 4) return false;
-
-    const rel = std.mem.readInt(i32, @ptrCast(buf[root .. root + 4]), .little);
-    if (rel <= 0) return false;
-    const rel_usize = std.math.cast(usize, rel) orelse return false;
-    if (rel_usize > root) return false;
-
-    const vtable = root - rel_usize;
-    if (vtable > buf.len - 4) return false;
-
-    const vtable_len = std.mem.readInt(u16, @ptrCast(buf[vtable .. vtable + 2]), .little);
-    const object_len = std.mem.readInt(u16, @ptrCast(buf[vtable + 2 .. vtable + 4]), .little);
-    if (vtable_len < 4) return false;
-
-    const vtable_len_usize = @as(usize, vtable_len);
-    const object_len_usize = @as(usize, object_len);
-    if (vtable + vtable_len_usize > buf.len) return false;
-    if (root + object_len_usize > buf.len) return false;
-
-    return true;
+fn messageHeaderFromTypeTag(header_type: u8) MessageHeaderKind {
+    if (header_type == @intFromEnum(fbs.MessageHeader.Schema)) return .schema;
+    if (header_type == @intFromEnum(fbs.MessageHeader.DictionaryBatch)) return .dictionary_batch;
+    if (header_type == @intFromEnum(fbs.MessageHeader.RecordBatch)) return .record_batch;
+    if (header_type == @intFromEnum(fbs.MessageHeader.Tensor)) return .tensor;
+    if (header_type == @intFromEnum(fbs.MessageHeader.SparseTensor)) return .sparse_tensor;
+    return .other;
 }
 
 fn readU32Le(bytes: []const u8) u32 {
