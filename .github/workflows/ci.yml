@@ -42,12 +42,16 @@ jobs:
         with:
           version: "${{ matrix.zig }}"
 
-      - name: Run tests (all matrix targets except Linux with examples-enabled Zig versions)
-        if: ${{ !(runner.os == 'Linux' && (matrix.zig == '0.15.1' || matrix.zig == '0.16.0')) }}
+      - name: Run core tests (Zig 0.16.0 compatibility lane)
+        if: ${{ matrix.zig == '0.16.0' }}
+        run: zig test src/core.zig
+
+      - name: Run tests (all non-0.16 targets except Linux examples lane)
+        if: ${{ matrix.zig != '0.16.0' && !(runner.os == 'Linux' && matrix.zig == '0.15.1') }}
         run: zig build test
 
-      - name: Run tests then examples serially (Linux Zig 0.15.1/0.16.0)
-        if: ${{ runner.os == 'Linux' && (matrix.zig == '0.15.1' || matrix.zig == '0.16.0') }}
+      - name: Run tests then examples serially (Linux Zig 0.15.1)
+        if: ${{ runner.os == 'Linux' && matrix.zig == '0.15.1' }}
         run: |
           zig build test
           zig build examples
