@@ -1,4 +1,14 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+// Enforce supported Zig version range at compile time.
+// Zig 0.16+ is not yet supported; update this check when compatibility is confirmed.
+comptime {
+    const ver = builtin.zig_version;
+    if (ver.major == 0 and ver.minor >= 16) {
+        @compileError("zarrow requires Zig 0.15.x. Zig 0.16+ is not yet supported.");
+    }
+}
 
 fn flatcPathArg(b: *std.Build, comptime rel: []const u8) []const u8 {
     if (b.graph.host.result.os.tag == .windows) return rel;
