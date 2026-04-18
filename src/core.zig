@@ -1,4 +1,4 @@
-// Re-export the public buffer types from the package root.
+// Re-export the core, non-IPC public types from the package root.
 const buffer = @import("buffer.zig");
 const bitmap = @import("bitmap.zig");
 const datatype = @import("datatype.zig");
@@ -8,8 +8,6 @@ const table = @import("table.zig");
 const record_batch_reader = @import("record_batch_reader.zig");
 const array = @import("array/array.zig");
 const record_batch = @import("record_batch.zig");
-const ipc = @import("ipc/mod.zig");
-const ffi = @import("ffi/mod.zig");
 const compute = @import("compute/mod.zig");
 
 pub const SharedBuffer = buffer.SharedBuffer;
@@ -52,42 +50,6 @@ pub const RecordBatch = record_batch.RecordBatch;
 pub const RecordBatchError = record_batch.RecordBatchError;
 pub const RecordBatchBuilder = record_batch.RecordBatchBuilder;
 pub const RecordBatchBuilderError = record_batch.RecordBatchBuilderError;
-pub const IpcFormat = ipc.format;
-pub const IpcStreamWriter = ipc.StreamWriter;
-pub const IpcBodyCompressionCodec = ipc.BodyCompressionCodec;
-pub const IpcEndiannessMode = ipc.EndiannessMode;
-pub const IpcMetadataVersion = ipc.MetadataVersion;
-pub const IpcStreamWriterOptions = ipc.StreamWriterOptions;
-pub const IpcStreamReader = ipc.StreamReader;
-pub const IpcStreamReaderOptions = ipc.StreamReaderOptions;
-pub const IpcFileWriter = ipc.FileWriter;
-pub const IpcFileWriterOptions = ipc.FileWriterOptions;
-pub const IpcFileReader = ipc.FileReader;
-pub const IpcFileReaderOptions = ipc.FileReaderOptions;
-pub const IpcOwnedSchema = ipc.OwnedSchema;
-pub const IpcTensorDim = ipc.TensorDim;
-pub const IpcBufferRegion = ipc.BufferRegion;
-pub const IpcTensorMetadata = ipc.TensorMetadata;
-pub const IpcSparseMatrixAxis = ipc.SparseMatrixAxis;
-pub const IpcSparseTensorIndexMetadata = ipc.SparseTensorIndexMetadata;
-pub const IpcSparseTensorMetadata = ipc.SparseTensorMetadata;
-pub const IpcTensorLikeMetadata = ipc.TensorLikeMetadata;
-pub const IpcOwnedTensorLikeMessage = ipc.OwnedTensorLikeMessage;
-pub const decodeIpcTensorFromMessageMetadata = ipc.decodeTensorFromMessageMetadata;
-pub const decodeIpcSparseTensorFromMessageMetadata = ipc.decodeSparseTensorFromMessageMetadata;
-pub const ArrowSchema = ffi.ArrowSchema;
-pub const ArrowArray = ffi.ArrowArray;
-pub const ArrowArrayStream = ffi.ArrowArrayStream;
-pub const CDataOwnedSchema = ffi.CDataOwnedSchema;
-pub const CDataError = ffi.CDataError;
-pub const CStreamOwnedRecordBatchStream = ffi.CStreamOwnedRecordBatchStream;
-pub const CStreamError = ffi.CStreamError;
-pub const exportSchemaToC = ffi.exportSchema;
-pub const importSchemaFromC = ffi.importSchemaOwned;
-pub const exportArrayToC = ffi.exportArray;
-pub const importArrayFromC = ffi.importArray;
-pub const exportRecordBatchStreamToC = ffi.exportRecordBatchStream;
-pub const importRecordBatchStreamFromC = ffi.importRecordBatchStreamOwned;
 pub const ArrayData = array.ArrayData;
 pub const ArrayRef = array.ArrayRef;
 pub const NullArray = array.NullArray;
@@ -195,7 +157,6 @@ pub const ComputeKernel = compute.Kernel;
 pub const ComputeFunctionRegistry = compute.FunctionRegistry;
 pub const ComputeExecContext = compute.ExecContext;
 
-// Pull buffer tests into the root test target.
 test {
     _ = @import("buffer.zig");
     _ = @import("bitmap.zig");
@@ -204,14 +165,7 @@ test {
     _ = @import("chunked_array.zig");
     _ = @import("table.zig");
     _ = @import("record_batch_reader.zig");
-    _ = @import("core.zig");
     _ = @import("record_batch.zig");
-    _ = @import("ipc/stream_writer.zig");
-    _ = @import("ipc/stream_reader.zig");
-    _ = @import("ipc/file_writer.zig");
-    _ = @import("ipc/file_reader.zig");
-    _ = @import("ffi/c_data.zig");
-    _ = @import("ffi/c_stream.zig");
     _ = @import("compute/core.zig");
     _ = @import("array/array.zig");
     _ = @import("array/array_data.zig");

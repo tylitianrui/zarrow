@@ -36,6 +36,13 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    // Core-only module for downstream libraries that do not require IPC/FFI.
+    _ = b.addModule("zarrow-core", .{
+        .root_source_file = b.path("src/core.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const fbz_dep = b.dependency("flatbufferz", .{
         .target = target,
         .optimize = optimize,
