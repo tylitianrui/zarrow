@@ -10,8 +10,9 @@ const array = @import("array/array.zig");
 const record_batch = @import("record_batch.zig");
 const ipc = @import("ipc/mod.zig");
 const ffi = @import("ffi/mod.zig");
-const compute = @import("compute/mod.zig");
+const compute_mod = @import("compute/mod.zig");
 
+pub const compute = compute_mod;
 pub const SharedBuffer = buffer.SharedBuffer;
 pub const OwnedBuffer = buffer.OwnedBuffer;
 pub const ValidityBitmap = bitmap.ValidityBitmap;
@@ -182,18 +183,18 @@ pub const MapBuilder = array.MapBuilder;
 pub const SparseUnionBuilder = array.SparseUnionBuilder;
 pub const DenseUnionBuilder = array.DenseUnionBuilder;
 pub const RunEndEncodedBuilder = array.RunEndEncodedBuilder;
-pub const ComputeFunctionKind = compute.FunctionKind;
-pub const ComputeScalarValue = compute.ScalarValue;
-pub const ComputeScalar = compute.Scalar;
-pub const ComputeDatum = compute.Datum;
-pub const ComputeChunkedArray = compute.ChunkedArray;
-pub const ComputeKernelError = compute.KernelError;
-pub const ComputeTypeCheckFn = compute.TypeCheckFn;
-pub const ComputeKernelExecFn = compute.KernelExecFn;
-pub const ComputeKernelSignature = compute.KernelSignature;
-pub const ComputeKernel = compute.Kernel;
-pub const ComputeFunctionRegistry = compute.FunctionRegistry;
-pub const ComputeExecContext = compute.ExecContext;
+pub const ComputeFunctionKind = compute_mod.FunctionKind;
+pub const ComputeScalarValue = compute_mod.ScalarValue;
+pub const ComputeScalar = compute_mod.Scalar;
+pub const ComputeDatum = compute_mod.Datum;
+pub const ComputeChunkedArray = compute_mod.ChunkedArray;
+pub const ComputeKernelError = compute_mod.KernelError;
+pub const ComputeTypeCheckFn = compute_mod.TypeCheckFn;
+pub const ComputeKernelExecFn = compute_mod.KernelExecFn;
+pub const ComputeKernelSignature = compute_mod.KernelSignature;
+pub const ComputeKernel = compute_mod.Kernel;
+pub const ComputeFunctionRegistry = compute_mod.FunctionRegistry;
+pub const ComputeExecContext = compute_mod.ExecContext;
 
 // Pull buffer tests into the root test target.
 test {
