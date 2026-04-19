@@ -48,9 +48,8 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const fbz_dep = b.dependency("flatbufferz", .{
-        .target = target,
-        .optimize = optimize,
+    const fbz_module = b.createModule(.{
+        .root_source_file = b.path("src/fbs_runtime/lib.zig"),
     });
 
     const compression_deps_check_exe = b.addExecutable(.{
@@ -70,10 +69,10 @@ pub fn build(b: *std.Build) !void {
 
     const arrow_fbs_module = b.createModule(.{
         .root_source_file = b.path("src/arrow_fbs/lib.zig"),
-        .imports = &.{.{ .name = "flatbufferz", .module = fbz_dep.module("flatbufferz") }},
+        .imports = &.{.{ .name = "flatbufferz", .module = fbz_module }},
     });
 
-    zarrow_module.addImport("flatbufferz", fbz_dep.module("flatbufferz"));
+    zarrow_module.addImport("flatbufferz", fbz_module);
     zarrow_module.addImport("arrow_fbs", arrow_fbs_module);
 
     // Tests still build a runnable artifact, but the package itself does not.
@@ -82,7 +81,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    test_module.addImport("flatbufferz", fbz_dep.module("flatbufferz"));
+    test_module.addImport("flatbufferz", fbz_module);
     test_module.addImport("arrow_fbs", arrow_fbs_module);
 
     const tests = b.addTest(.{ .root_module = test_module });

@@ -1,12 +1,7 @@
 .{
     .name = .zarrow,
     .version = "0.0.1",
-    .dependencies = .{
-        .flatbufferz = .{
-            .url = "git+https://github.com/archaistvolts/flatbufferz#315ed9575b97c99b45235243145e4b45c184c12a",
-            .hash = "flatbufferz-0.0.1-jV8N7owbBQCWrSfiCRd_jRyoagWiDgsa3lWKzmcwG69T",
-        },
-    },
+    .dependencies = .{},
     .minimum_zig_version = "0.15.1",
     .paths = .{""},
     .fingerprint = 0x56e9627134bc023,
