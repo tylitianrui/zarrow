@@ -10,6 +10,7 @@ const FixtureCase = enum {
     complex,
     extension,
     view,
+    tensor,
 };
 
 const ContainerMode = enum {
@@ -26,7 +27,7 @@ pub fn main() !void {
     defer args.deinit();
     _ = args.next(); // exe
     const in_path = args.next() orelse {
-        std.log.err("usage: interop-fixture-check <in.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]", .{});
+        std.log.err("usage: interop-fixture-check <in.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view|tensor] [stream|file]", .{});
         return error.InvalidArgs;
     };
     const fixture_case: FixtureCase = blk: {
@@ -39,6 +40,7 @@ pub fn main() !void {
         if (std.mem.eql(u8, mode, "complex")) break :blk .complex;
         if (std.mem.eql(u8, mode, "extension")) break :blk .extension;
         if (std.mem.eql(u8, mode, "view")) break :blk .view;
+        if (std.mem.eql(u8, mode, "tensor")) break :blk .tensor;
         std.log.err("unknown fixture mode: {s}", .{mode});
         return error.InvalidArgs;
     };
@@ -50,7 +52,7 @@ pub fn main() !void {
         return error.InvalidArgs;
     };
     if (args.next() != null) {
-        std.log.err("usage: interop-fixture-check <in.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view] [stream|file]", .{});
+        std.log.err("usage: interop-fixture-check <in.arrow> [canonical|dict-delta|ree|ree-int16|ree-int64|complex|extension|view|tensor] [stream|file]", .{});
         return error.InvalidArgs;
     }
     if (container_mode == .file and fixture_case == .dict_delta) {
@@ -66,12 +68,20 @@ pub fn main() !void {
         .stream => {
             var reader = zarrow.IpcStreamReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
             defer reader.deinit();
-            try checkFixture(&reader, fixture_case);
+            if (fixture_case == .tensor) {
+                try checkTensorStream(&reader);
+            } else {
+                try checkFixture(&reader, fixture_case);
+            }
         },
         .file => {
             var reader = zarrow.IpcFileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
             defer reader.deinit();
-            try checkFixture(&reader, fixture_case);
+            if (fixture_case == .tensor) {
+                try checkTensorFile(&reader);
+            } else {
+                try checkFixture(&reader, fixture_case);
+            }
         },
     }
 }
@@ -86,7 +96,63 @@ fn checkFixture(reader: anytype, fixture_case: FixtureCase) !void {
         .complex => try checkComplex(reader),
         .extension => try checkExtension(reader),
         .view => try checkView(reader),
+        .tensor => unreachable,
     }
+}
+
+fn checkTensorSchema(schema: zarrow.Schema) !void {
+    if (schema.fields.len != 1) return error.InvalidSchema;
+    if (!std.mem.eql(u8, schema.fields[0].name, "id")) return error.InvalidSchema;
+    if (schema.fields[0].data_type.* != .int32) return error.InvalidSchema;
+}
+
+fn checkTensorMessage(msg: zarrow.IpcOwnedTensorLikeMessage) !void {
+    switch (msg.metadata) {
+        .tensor => |tensor| {
+            if (tensor.value_type != .int32) return error.InvalidTensor;
+            if (tensor.shape.len != 2) return error.InvalidTensor;
+            if (tensor.shape[0].size != 2 or tensor.shape[1].size != 3) return error.InvalidTensor;
+            if (tensor.shape[0].name == null or !std.mem.eql(u8, tensor.shape[0].name.?, "rows")) return error.InvalidTensor;
+            if (tensor.shape[1].name == null or !std.mem.eql(u8, tensor.shape[1].name.?, "cols")) return error.InvalidTensor;
+            if (tensor.strides == null or tensor.strides.?.len != 2) return error.InvalidTensor;
+            if (tensor.strides.?[0] != 12 or tensor.strides.?[1] != 4) return error.InvalidTensor;
+
+            const data_bytes = tensor.data.bytes(msg.body.data);
+            const ints = std.mem.bytesAsSlice(i32, data_bytes);
+            const expected = [_]i32{ 1, 2, 3, 4, 5, 6 };
+            if (ints.len != expected.len) return error.InvalidTensor;
+            for (expected, 0..) |want, i| {
+                if (ints[i] != want) return error.InvalidTensor;
+            }
+        },
+        else => return error.InvalidTensor,
+    }
+}
+
+fn checkTensorStream(reader: anytype) !void {
+    const schema = try reader.readSchema();
+    try checkTensorSchema(schema);
+
+    const msg_opt = try reader.nextTensorLikeMessage();
+    if (msg_opt == null) return error.MissingTensorMessage;
+    var msg = msg_opt.?;
+    defer msg.deinit();
+    try checkTensorMessage(msg);
+
+    const done = try reader.nextTensorLikeMessage();
+    if (done != null) return error.UnexpectedExtraTensorMessage;
+}
+
+fn checkTensorFile(reader: anytype) !void {
+    const schema = try reader.readSchema();
+    try checkTensorSchema(schema);
+
+    if (try reader.tensorCount() != 1) return error.InvalidTensor;
+    if (try reader.sparseTensorCount() != 0) return error.InvalidTensor;
+
+    var msg = try reader.readTensorAt(0);
+    defer msg.deinit();
+    try checkTensorMessage(msg);
 }
 
 fn checkView(reader: anytype) !void {

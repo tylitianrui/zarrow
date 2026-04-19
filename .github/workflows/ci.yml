@@ -255,12 +255,14 @@ jobs:
           mkdir -p .interop-fixtures
           zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_file.arrow canonical file
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_tensor.arrow tensor stream
           python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow.arrow canonical stream
           python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_file.arrow canonical file
           zig build interop-fixture-check -- .interop-fixtures/pyarrow.arrow canonical stream
           zig build interop-fixture-check -- .interop-fixtures/pyarrow_file.arrow canonical file
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow.arrow canonical stream
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_file.arrow canonical file
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_tensor.arrow tensor stream
 
 
   interop-pyarrow:
@@ -296,6 +298,7 @@ jobs:
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_complex.arrow complex stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_extension.arrow extension stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_view.arrow view stream
+          zig build interop-fixture-writer -- .interop-fixtures/zarrow_tensor.arrow tensor stream
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_file.arrow canonical file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_file.arrow ree file
           zig build interop-fixture-writer -- .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
@@ -330,6 +333,7 @@ jobs:
           python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_view.arrow view stream
           zig build interop-fixture-check -- .interop-fixtures/pyarrow_view.arrow view stream
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_view.arrow view stream
+          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_tensor.arrow tensor stream
           python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow_file.arrow canonical file
           zig build interop-fixture-check -- .interop-fixtures/pyarrow_file.arrow canonical file
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_file.arrow canonical file
