@@ -96,6 +96,9 @@ pub const Kernel = struct {
     exec: KernelExecFn,
 };
 
+const function_kind_count = @typeInfo(FunctionKind).@"enum".fields.len;
+const FunctionIndexMap = std.StringHashMap(usize);
+
 const RegisteredFunction = struct {
     allocator: std.mem.Allocator,
     name: []u8,
@@ -111,15 +114,20 @@ const RegisteredFunction = struct {
 pub const FunctionRegistry = struct {
     allocator: std.mem.Allocator,
     functions: std.ArrayList(RegisteredFunction),
+    function_index_by_kind: [function_kind_count]FunctionIndexMap,
 
     pub fn init(allocator: std.mem.Allocator) FunctionRegistry {
         return .{
             .allocator = allocator,
             .functions = .{},
+            .function_index_by_kind = initFunctionIndexMaps(allocator),
         };
     }
 
     pub fn deinit(self: *FunctionRegistry) void {
+        for (&self.function_index_by_kind) |*index_map| {
+            index_map.deinit();
+        }
         for (self.functions.items) |*entry| {
             entry.deinit();
         }
@@ -146,6 +154,12 @@ pub const FunctionRegistry = struct {
         errdefer self.allocator.free(entry.name);
         try entry.kernels.append(self.allocator, kernel);
         try self.functions.append(self.allocator, entry);
+        errdefer {
+            var popped = self.functions.pop().?;
+            popped.deinit();
+        }
+        const new_idx = self.functions.items.len - 1;
+        try self.getIndexMap(kind).put(self.functions.items[new_idx].name, new_idx);
     }
 
     pub fn findFunction(self: *const FunctionRegistry, name: []const u8, kind: FunctionKind) ?*const RegisteredFunction {
@@ -157,10 +171,13 @@ pub const FunctionRegistry = struct {
         const function = self.findFunction(name, kind) orelse return error.FunctionNotFound;
         if (function.kernels.items.len == 0) return error.NoMatchingKernel;
 
+        var saw_matching_arity = false;
         for (function.kernels.items) |*kernel| {
+            if (kernel.signature.arity != args.len) continue;
+            saw_matching_arity = true;
             if (kernel.signature.matches(args)) return kernel;
         }
-        if (function.kernels.items.len > 0 and args.len != function.kernels.items[0].signature.arity) return error.InvalidArity;
+        if (!saw_matching_arity) return error.InvalidArity;
         return error.NoMatchingKernel;
     }
 
@@ -177,12 +194,27 @@ pub const FunctionRegistry = struct {
     }
 
     fn findFunctionIndex(self: *const FunctionRegistry, name: []const u8, kind: FunctionKind) ?usize {
-        for (self.functions.items, 0..) |entry, i| {
-            if (entry.kind == kind and std.mem.eql(u8, entry.name, name)) return i;
-        }
-        return null;
+        const idx = self.getIndexMapConst(kind).get(name) orelse return null;
+        if (idx >= self.functions.items.len) return null;
+        return idx;
+    }
+
+    fn getIndexMap(self: *FunctionRegistry, kind: FunctionKind) *FunctionIndexMap {
+        return &self.function_index_by_kind[@intFromEnum(kind)];
+    }
+
+    fn getIndexMapConst(self: *const FunctionRegistry, kind: FunctionKind) *const FunctionIndexMap {
+        return &self.function_index_by_kind[@intFromEnum(kind)];
     }
 };
+
+fn initFunctionIndexMaps(allocator: std.mem.Allocator) [function_kind_count]FunctionIndexMap {
+    var maps: [function_kind_count]FunctionIndexMap = undefined;
+    inline for (0..function_kind_count) |i| {
+        maps[i] = FunctionIndexMap.init(allocator);
+    }
+    return maps;
+}
 
 pub const ExecContext = struct {
     allocator: std.mem.Allocator,
@@ -281,6 +313,25 @@ test "compute registry reports function and arity errors" {
         error.InvalidArity,
         ctx.invoke("identity", .scalar, &[_]Datum{}, null),
     );
+}
+
+test "compute registry keeps separate indices per function kind" {
+    const allocator = std.testing.allocator;
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.registerKernel("same_name", .scalar, .{
+        .signature = .{ .arity = 1, .type_check = isInt32Datum },
+        .exec = passthroughInt32Kernel,
+    });
+    try registry.registerKernel("same_name", .vector, .{
+        .signature = .{ .arity = 1, .type_check = isInt32Datum },
+        .exec = passthroughInt32Kernel,
+    });
+
+    try std.testing.expect(registry.findFunction("same_name", .scalar) != null);
+    try std.testing.expect(registry.findFunction("same_name", .vector) != null);
+    try std.testing.expect(registry.findFunction("same_name", .aggregate) == null);
 }
 
 test "compute datum chunked variant retain and release" {

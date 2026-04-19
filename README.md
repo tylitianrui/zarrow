@@ -44,35 +44,7 @@ zig fetch --save "git+https://github.com/tylitianrui/zarrow#master"
 
 ### 2. Configure `build.zig`
 
-Choose one of the two options below.
-
-#### **Option 1 (recommended)**
-
-**Option 1 (recommended)** — Inside `pub fn build(b: *std.Build) void`, add the zarrow dependency and a pre-generation step for FlatBuffers code. The step runs automatically on the first build and has no overhead afterward:
-
-```zig
-const zarrow_dep = b.dependency("zarrow", .{
-    .target = target,
-    .optimize = optimize,
-});
-const zarrow_path = zarrow_dep.builder.build_root.path.?;
-const lib_zig_path = std.fs.path.join(b.allocator, &.{
-    zarrow_path, ".zig-cache", "flatc-zig", "lib.zig",
-}) catch @panic("OOM");
-std.fs.accessAbsolute(lib_zig_path, .{}) catch {
-    var child = std.process.Child.init(
-        &.{ b.graph.zig_exe, "build", "test" },
-        b.allocator,
-    );
-    child.cwd = zarrow_path;
-    _ = child.spawnAndWait() catch @panic("zarrow: failed to pre-generate FlatBuffers code");
-};
-exe.root_module.addImport("zarrow", zarrow_dep.module("zarrow"));
-```
-
-#### **Option 2 (simple)**  
-
-**Option 2 (simple)** — Inside `pub fn build(b: *std.Build) void`, add only the zarrow dependency. Skip the pre-generation step and run it manually once if the first build fails:
+`zarrow` now uses pre-generated `arrow_fbs` sources committed in the repository, while keeping `flatbufferz` as the FlatBuffers runtime dependency. Consumers only need to add the module import:
 
 ```zig
 const zarrow_dep = b.dependency("zarrow", .{
@@ -80,13 +52,6 @@ const zarrow_dep = b.dependency("zarrow", .{
     .optimize = optimize,
 });
 exe.root_module.addImport("zarrow", zarrow_dep.module("zarrow"));
-```
-
-If the first build fails, run once in the dependency directory:
-```sh
-# Run once in the dependency directory if the first build fails
-cd ~/.cache/zig/p/zarrow-<version>-<hash>/
-zig build test
 ```
 
 ### 3. Example

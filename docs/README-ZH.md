@@ -16,7 +16,8 @@ Apache Arrow 的 Zig 实现。
 |---|---|
 | 名称 | `zarrow` |
 | 当前版本 | `0.0.1` |
-| 最低 Zig 版本 | `0.15.2` |
+| 最低 Zig 版本 | `0.15.1` |
+| 最高 Zig 版本 | `0.15.x`（暂不支持 Zig 0.16+） |
 | 依赖是否清晰 | 是（`build.zig.zon` 中声明） |
 | 当前直接依赖 | `flatbufferz` |
 
@@ -43,31 +44,7 @@ zig fetch --save "git+https://github.com/tylitianrui/zarrow#master"
 
 ### 2. 配置 `build.zig`
 
-两种方式任选其一。
-
-**方式一（推荐）** — 在 `pub fn build(b: *std.Build) void` 中添加 zarrow 依赖，并加入预生成 FlatBuffers 代码的步骤。该步骤首次构建时自动触发，后续无额外开销：
-
-```zig
-const zarrow_dep = b.dependency("zarrow", .{
-    .target = target,
-    .optimize = optimize,
-});
-const zarrow_path = zarrow_dep.builder.build_root.path.?;
-const lib_zig_path = std.fs.path.join(b.allocator, &.{
-    zarrow_path, ".zig-cache", "flatc-zig", "lib.zig",
-}) catch @panic("OOM");
-std.fs.accessAbsolute(lib_zig_path, .{}) catch {
-    var child = std.process.Child.init(
-        &.{ b.graph.zig_exe, "build", "test" },
-        b.allocator,
-    );
-    child.cwd = zarrow_path;
-    _ = child.spawnAndWait() catch @panic("zarrow: failed to pre-generate FlatBuffers code");
-};
-exe.root_module.addImport("zarrow", zarrow_dep.module("zarrow"));
-```
-
-**方式二（简易）** — 在 `pub fn build(b: *std.Build) void` 中只添加 zarrow 依赖。跳过预生成步骤，首次构建失败时手动运行一次：
+`zarrow` 现在采用“`arrow_fbs` 预生成并提交仓库 + 保留 `flatbufferz` 运行时依赖”的模式。使用方只需正常引入模块，不需要再做 flatc 预生成步骤：
 
 ```zig
 const zarrow_dep = b.dependency("zarrow", .{
@@ -75,13 +52,6 @@ const zarrow_dep = b.dependency("zarrow", .{
     .optimize = optimize,
 });
 exe.root_module.addImport("zarrow", zarrow_dep.module("zarrow"));
-```
-
-如果首次构建失败，请在依赖目录下手动运行一次：
-```sh
-# 首次编译报错时，在依赖目录下执行一次即可
-cd ~/.cache/zig/p/zarrow-<version>-<hash>/
-zig build test
 ```
 
 ### 3. 示例

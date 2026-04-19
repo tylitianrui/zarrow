@@ -10,11 +10,6 @@ comptime {
     }
 }
 
-fn flatcPathArg(b: *std.Build, comptime rel: []const u8) []const u8 {
-    if (b.graph.host.result.os.tag == .windows) return rel;
-    return b.path(rel).getPath(b);
-}
-
 fn configureIpcCompression(b: *std.Build, step: *std.Build.Step.Compile, deps_check: *std.Build.Step) void {
     step.step.dependOn(deps_check);
 
@@ -58,40 +53,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const format_dir = flatcPathArg(b, "src/format");
-    const message_fbs = flatcPathArg(b, "src/format/Message.fbs");
-    const file_fbs = flatcPathArg(b, "src/format/File.fbs");
-    const schema_fbs = flatcPathArg(b, "src/format/Schema.fbs");
-    const tensor_fbs = flatcPathArg(b, "src/format/Tensor.fbs");
-    const sparse_tensor_fbs = flatcPathArg(b, "src/format/SparseTensor.fbs");
-    const gen_step = try @import("flatbufferz").GenStep.create(
-        b,
-        fbz_dep.artifact("flatc-zig"),
-        &.{
-            message_fbs,
-            file_fbs,
-            schema_fbs,
-            tensor_fbs,
-            sparse_tensor_fbs,
-        },
-        &.{ "-I", format_dir },
-        "flatc-zig",
-    );
-
-    // Work around a flatc-zig Windows path bug where generated lib.zig can use
-    // backslashes inside @import string literals.
-    const fix_flatc_lib = b.addExecutable(.{
-        .name = "fix-flatc-lib",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/fix_flatc_lib.zig"),
-            .target = b.graph.host,
-            .optimize = .ReleaseSafe,
-        }),
-    });
-    const run_fix_flatc_lib = b.addRunArtifact(fix_flatc_lib);
-    run_fix_flatc_lib.step.dependOn(&gen_step.step);
-    run_fix_flatc_lib.addFileArg(gen_step.module.root_source_file.?);
-
     const compression_deps_check_exe = b.addExecutable(.{
         .name = "check-ipc-compression-deps",
         .root_module = b.createModule(.{
@@ -108,7 +69,7 @@ pub fn build(b: *std.Build) !void {
     compression_deps_check_step.dependOn(&run_compression_deps_check.step);
 
     const arrow_fbs_module = b.createModule(.{
-        .root_source_file = gen_step.module.root_source_file,
+        .root_source_file = b.path("src/arrow_fbs/lib.zig"),
         .imports = &.{.{ .name = "flatbufferz", .module = fbz_dep.module("flatbufferz") }},
     });
 
@@ -126,7 +87,6 @@ pub fn build(b: *std.Build) !void {
 
     const tests = b.addTest(.{ .root_module = test_module });
     configureIpcCompression(b, tests, &run_compression_deps_check.step);
-    tests.step.dependOn(&run_fix_flatc_lib.step);
 
     // Discover example files in the `examples` directory and wire them into the build.
     const examples_dir = b.path("examples");
@@ -138,7 +98,6 @@ pub fn build(b: *std.Build) !void {
 
     // Wire the test artifact into a named build step for `zig build test`.
     const run_tests = b.addRunArtifact(tests);
-    run_tests.step.dependOn(&gen_step.step);
     const test_step = b.step("test", "Run zarrow unit tests");
     test_step.dependOn(&run_tests.step);
 
@@ -152,7 +111,6 @@ pub fn build(b: *std.Build) !void {
         }),
     });
     configureIpcCompression(b, fuzz_layout_exe, &run_compression_deps_check.step);
-    fuzz_layout_exe.step.dependOn(&run_fix_flatc_lib.step);
     fuzz_layout_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
     const run_fuzz_layout = b.addRunArtifact(fuzz_layout_exe);
@@ -169,7 +127,6 @@ pub fn build(b: *std.Build) !void {
         }),
     });
     configureIpcCompression(b, fuzz_ipc_exe, &run_compression_deps_check.step);
-    fuzz_ipc_exe.step.dependOn(&run_fix_flatc_lib.step);
     fuzz_ipc_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
     const run_fuzz_ipc = b.addRunArtifact(fuzz_ipc_exe);
@@ -232,7 +189,6 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         configureIpcCompression(b, exe, &run_compression_deps_check.step);
-        exe.step.dependOn(&run_fix_flatc_lib.step);
 
         exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
@@ -259,7 +215,6 @@ pub fn build(b: *std.Build) !void {
         }),
     });
     configureIpcCompression(b, interop_writer_exe, &run_compression_deps_check.step);
-    interop_writer_exe.step.dependOn(&run_fix_flatc_lib.step);
     interop_writer_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
     const run_interop_writer = b.addRunArtifact(interop_writer_exe);
@@ -276,7 +231,6 @@ pub fn build(b: *std.Build) !void {
         }),
     });
     configureIpcCompression(b, interop_check_exe, &run_compression_deps_check.step);
-    interop_check_exe.step.dependOn(&run_fix_flatc_lib.step);
     interop_check_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
     const run_interop_check = b.addRunArtifact(interop_check_exe);
@@ -318,7 +272,6 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         configureIpcCompression(b, bench_exe, &run_compression_deps_check.step);
-        bench_exe.step.dependOn(&run_fix_flatc_lib.step);
         bench_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
         const run_bench = b.addRunArtifact(bench_exe);
