@@ -27,21 +27,45 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
-fn sha256Hex(path: []const u8) ![64]u8 {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
+fn digestHex(data: []const u8) [64]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    var buf: [4096]u8 = undefined;
-    while (true) {
-        const n = try file.read(&buf);
-        if (n == 0) break;
-        hasher.update(buf[0..n]);
-    }
-
+    hasher.update(data);
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
     return std.fmt.bytesToHex(digest, .lower);
+}
+
+fn normalizedLfAlloc(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, data.len);
+    errdefer out.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < data.len) : (i += 1) {
+        const b = data[i];
+        if (b == '\r' and i + 1 < data.len and data[i + 1] == '\n') {
+            continue;
+        }
+        out.appendAssumeCapacity(b);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn hashMatchesExpected(allocator: std.mem.Allocator, path: []const u8, expected_hex: []const u8) !bool {
+    const file_data = std.fs.cwd().readFileAlloc(allocator, path, 100 * 1024 * 1024) catch |err| switch (err) {
+        error.FileTooBig => return false,
+        else => |e| return e,
+    };
+    defer allocator.free(file_data);
+
+    const raw_hex = digestHex(file_data);
+    if (std.mem.eql(u8, raw_hex[0..], expected_hex)) return true;
+
+    const normalized = try normalizedLfAlloc(allocator, file_data);
+    defer allocator.free(normalized);
+    if (normalized.len == file_data.len) return false;
+
+    const normalized_hex = digestHex(normalized);
+    return std.mem.eql(u8, normalized_hex[0..], expected_hex);
 }
 
 pub fn main() !void {
@@ -61,19 +85,18 @@ pub fn main() !void {
             continue;
         }
 
-        const actual_hash = sha256Hex(entry.path) catch |err| {
-            const line = try std.fmt.allocPrint(allocator, "{s}: hash read failed ({s})", .{
+        const ok = hashMatchesExpected(allocator, entry.path, entry.sha256_hex) catch |err| {
+            const line = try std.fmt.allocPrint(allocator, "{s}: hash check failed ({s})", .{
                 entry.path,
                 @errorName(err),
             });
             try mismatched.append(allocator, line);
             continue;
         };
-        if (!std.mem.eql(u8, actual_hash[0..], entry.sha256_hex)) {
-            const line = try std.fmt.allocPrint(allocator, "{s}: expected {s}, got {s}", .{
+        if (!ok) {
+            const line = try std.fmt.allocPrint(allocator, "{s}: expected sha256 {s} (raw or LF-normalized)", .{
                 entry.path,
                 entry.sha256_hex,
-                actual_hash,
             });
             try mismatched.append(allocator, line);
         }

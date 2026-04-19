@@ -451,7 +451,7 @@ jobs:
           version: "0.15.2"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust_toolchain }}
 
@@ -488,7 +488,9 @@ jobs:
           python-version: "3.11"
 
       - name: Arrow-RS cross-platform smoke (canonical stream)
+        shell: bash
         run: |
+          set -euo pipefail
           python -c "from pathlib import Path; Path('.interop-fixtures').mkdir(exist_ok=True)"
           zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
           cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs.arrow canonical stream
