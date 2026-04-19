@@ -2,12 +2,12 @@ const std = @import("std");
 const schema_mod = @import("../schema.zig");
 const record_batch = @import("../record_batch.zig");
 const stream_reader = @import("stream_reader.zig");
+const fbs_lite_builder = @import("fbs_lite/builder.zig");
 const fbs_lite_verify = @import("fbs_lite/verify.zig");
 const format = @import("format.zig");
 const file_writer = @import("file_writer.zig");
 const array_data = @import("../array/array_data.zig");
 const buffer = @import("../buffer.zig");
-const fb = @import("flatbufferz");
 const arrow_fbs = @import("arrow_fbs");
 
 pub const FileMagic = file_writer.FileMagic;
@@ -20,7 +20,7 @@ pub const ReaderOptions = struct {
     endianness_mode: EndiannessMode = .strict,
 };
 
-pub const FileError = stream_reader.StreamError || array_data.ValidationError || record_batch.RecordBatchError || fb.common.PackError || error{
+pub const FileError = stream_reader.StreamError || array_data.ValidationError || record_batch.RecordBatchError || fbs_lite_builder.PackError || error{
     OutOfMemory,
     InvalidFile,
     FooterTooLarge,
@@ -231,9 +231,7 @@ pub fn FileReader(comptime ReaderType: type) type {
             try self.readAtNoEof(footer_start, footer_bytes);
             if (!fbs_lite_verify.isSaneTable(footer_bytes)) return error.InvalidFile;
 
-            const footer = fbs.Footer.GetRootAs(@constCast(footer_bytes), 0);
-            const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
-            var footer_t = try fbs.FooterT.Unpack(footer, opts);
+            var footer_t = try fbs_lite_builder.unpackFooter(self.allocator, footer_bytes);
             defer footer_t.deinit(self.allocator);
             if (footer_t.schema == null) return error.InvalidFile;
 
@@ -902,20 +900,15 @@ test "ipc file reader rejects footer with out-of-bounds block offset" {
 
     // Parse the real footer, corrupt a block offset, re-serialize, and patch back into file bytes.
     const footer_bytes_orig = file_bytes.items[footer_start..footer_end];
-    const footer_fb = fbs.Footer.GetRootAs(@constCast(footer_bytes_orig), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    var footer_t = try fbs.FooterT.Unpack(footer_fb, opts);
+    var footer_t = try fbs_lite_builder.unpackFooter(allocator, footer_bytes_orig);
     defer footer_t.deinit(allocator);
 
     // Set the first recordBatch block offset to a value beyond the file end.
     try std.testing.expect(footer_t.recordBatches.items.len > 0);
     footer_t.recordBatches.items[0].offset = @intCast(file_bytes.items.len + 9999);
 
-    var builder = fb.Builder.init(allocator);
-    defer builder.deinitAll();
-    const footer_off = try fbs.FooterT.Pack(footer_t, &builder, opts);
-    try fbs.Footer.FinishBuffer(&builder, footer_off);
-    const new_footer_bytes = try builder.finishedBytes();
+    const new_footer_bytes = try fbs_lite_builder.packFooterBytes(allocator, footer_t);
+    defer allocator.free(new_footer_bytes);
 
     // Rebuild file bytes with the corrupted footer.
     var corrupted = std.ArrayList(u8){};
@@ -984,9 +977,7 @@ test "ipc file reader decodes using footer block index without stream reconstruc
     const footer_bytes_orig = file_bytes.items[footer_start..footer_end];
 
     // Insert non-message bytes in the message region and shift indexed block offsets.
-    const footer_fb = fbs.Footer.GetRootAs(@constCast(footer_bytes_orig), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    var footer_t = try fbs.FooterT.Unpack(footer_fb, opts);
+    var footer_t = try fbs_lite_builder.unpackFooter(allocator, footer_bytes_orig);
     defer footer_t.deinit(allocator);
     try std.testing.expect(footer_t.recordBatches.items.len > 0);
     const insert_pos = std.math.cast(usize, footer_t.recordBatches.items[0].offset) orelse return error.InvalidFile;
@@ -1005,11 +996,8 @@ test "ipc file reader decodes using footer block index without stream reconstruc
     try shifted_prefix.appendSlice(allocator, junk[0..]);
     try shifted_prefix.appendSlice(allocator, file_bytes.items[insert_pos..footer_start]);
 
-    var builder = fb.Builder.init(allocator);
-    defer builder.deinitAll();
-    const footer_off = try fbs.FooterT.Pack(footer_t, &builder, opts);
-    try fbs.Footer.FinishBuffer(&builder, footer_off);
-    const footer_bytes_new = try builder.finishedBytes();
+    const footer_bytes_new = try fbs_lite_builder.packFooterBytes(allocator, footer_t);
+    defer allocator.free(footer_bytes_new);
 
     var rewritten = std.ArrayList(u8){};
     defer rewritten.deinit(allocator);
@@ -1084,9 +1072,7 @@ test "ipc file reader accepts file with leading padding before schema message" {
     const footer_start = footer_end - @as(usize, footer_len_u32);
     const footer_bytes_orig = file_bytes.items[footer_start..footer_end];
 
-    const footer_fb = fbs.Footer.GetRootAs(@constCast(footer_bytes_orig), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    var footer_t = try fbs.FooterT.Unpack(footer_fb, opts);
+    var footer_t = try fbs_lite_builder.unpackFooter(allocator, footer_bytes_orig);
     defer footer_t.deinit(allocator);
 
     const header_len = FileMagic.len + 2;
@@ -1094,11 +1080,8 @@ test "ipc file reader accepts file with leading padding before schema message" {
     for (footer_t.dictionaries.items) |*blk| blk.offset += lead_pad_len;
     for (footer_t.recordBatches.items) |*blk| blk.offset += lead_pad_len;
 
-    var builder = fb.Builder.init(allocator);
-    defer builder.deinitAll();
-    const footer_off = try fbs.FooterT.Pack(footer_t, &builder, opts);
-    try fbs.Footer.FinishBuffer(&builder, footer_off);
-    const footer_bytes_new = try builder.finishedBytes();
+    const footer_bytes_new = try fbs_lite_builder.packFooterBytes(allocator, footer_t);
+    defer allocator.free(footer_bytes_new);
 
     var rewritten = std.ArrayList(u8){};
     defer rewritten.deinit(allocator);

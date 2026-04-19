@@ -4,9 +4,9 @@ const schema_mod = @import("../schema.zig");
 const record_batch = @import("../record_batch.zig");
 const stream_writer = @import("stream_writer.zig");
 const fbs_lite_reader = @import("fbs_lite/reader.zig");
+const fbs_lite_builder = @import("fbs_lite/builder.zig");
 const fbs_lite_verify = @import("fbs_lite/verify.zig");
 const format = @import("format.zig");
-const fb = @import("flatbufferz");
 const arrow_fbs = @import("arrow_fbs");
 
 pub const FileMagic = "ARROW1";
@@ -18,7 +18,7 @@ pub const RecordBatch = record_batch.RecordBatch;
 pub const TensorLikeMetadata = stream_writer.TensorLikeMetadata;
 pub const WriterOptions = stream_writer.WriterOptions;
 
-pub const FileError = stream_writer.StreamError || fb.common.PackError || error{
+pub const FileError = stream_writer.StreamError || fbs_lite_builder.PackError || error{
     OutOfMemory,
     AlreadyFinished,
     InvalidFile,
@@ -213,9 +213,7 @@ pub fn FileWriter(comptime WriterType: type) type {
                 const envelope = fbs_lite_verify.parseArrowMessageEnvelope(metadata) catch return error.InvalidMessage;
                 if (envelope.body_length < 0) return error.InvalidMessage;
                 const body_len = std.math.cast(usize, envelope.body_length) orelse return error.InvalidMessage;
-                const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
-                const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
-                var msg_t = try fbs.MessageT.Unpack(msg, opts);
+                var msg_t = try fbs_lite_builder.unpackMessage(self.allocator, metadata);
                 errdefer msg_t.deinit(self.allocator);
 
                 if (msg_t.bodyLength != envelope.body_length) return error.InvalidMessage;
@@ -232,9 +230,7 @@ pub fn FileWriter(comptime WriterType: type) type {
                         if (self.schema_msg != null) return error.InvalidMessage;
                         const metadata_copy = try self.allocator.dupe(u8, metadata);
                         errdefer self.allocator.free(metadata_copy);
-                        const schema_msg_root = fbs.Message.GetRootAs(@constCast(metadata_copy), 0);
-                        const schema_opts: fb.common.PackOptions = .{ .allocator = self.allocator };
-                        var schema_msg_t = try fbs.MessageT.Unpack(schema_msg_root, schema_opts);
+                        var schema_msg_t = try fbs_lite_builder.unpackMessage(self.allocator, metadata_copy);
                         errdefer schema_msg_t.deinit(self.allocator);
                         if (schema_msg_t.header != .Schema) return error.InvalidMessage;
                         const owned_msg = try self.allocator.create(fbs.MessageT);
@@ -338,14 +334,7 @@ fn buildFooterBytes(
         .custom_metadata = custom_metadata,
     };
 
-    var builder = fb.Builder.init(allocator);
-    defer builder.deinitAll();
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    const footer_off = try fbs.FooterT.Pack(footer, &builder, opts);
-    try fbs.Footer.FinishBuffer(&builder, footer_off);
-
-    const footer_bytes = try builder.finishedBytes();
-    return try allocator.dupe(u8, footer_bytes);
+    return try fbs_lite_builder.packFooterBytes(allocator, footer);
 }
 
 fn readU32Le(bytes: []const u8) u32 {
@@ -454,9 +443,7 @@ test "ipc file writer can emit footer metadata version V4" {
     const footer_start = out.items.len - trailer_len - footer_len;
     const footer_bytes = out.items[footer_start .. out.items.len - trailer_len];
 
-    const footer = fbs.Footer.GetRootAs(@constCast(footer_bytes), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    var footer_t = try fbs.FooterT.Unpack(footer, opts);
+    var footer_t = try fbs_lite_builder.unpackFooter(allocator, footer_bytes);
     defer footer_t.deinit(allocator);
 
     try std.testing.expectEqual(fbs.MetadataVersion.V4, footer_t.version);

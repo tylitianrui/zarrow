@@ -11,7 +11,7 @@ const bitmap = @import("../bitmap.zig");
 const stream_writer = @import("stream_writer.zig");
 const tensor_types = @import("tensor_types.zig");
 const fbs_lite_verify = @import("fbs_lite/verify.zig");
-const fb = @import("flatbufferz");
+const fbs_lite_builder = @import("fbs_lite/builder.zig");
 const arrow_fbs = @import("arrow_fbs");
 
 pub const StreamError = format.StreamError;
@@ -172,7 +172,7 @@ pub fn StreamReader(comptime ReaderType: type) type {
             self.dictionary_values.clearRetainingCapacity();
         }
 
-        pub fn readSchema(self: *Self) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!Schema {
+        pub fn readSchema(self: *Self) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fbs_lite_builder.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!Schema {
             self.clearDictionaryValues();
             var msg = try readMessage(self.*);
             defer msg.deinit(self.allocator);
@@ -191,7 +191,7 @@ pub fn StreamReader(comptime ReaderType: type) type {
             return s;
         }
 
-        pub fn nextRecordBatch(self: *Self) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?RecordBatch {
+        pub fn nextRecordBatch(self: *Self) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fbs_lite_builder.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?RecordBatch {
             if (self.schema_ref == null) return StreamError.SchemaNotRead;
 
             const schema_ref = self.schema_ref.?;
@@ -232,7 +232,7 @@ pub fn StreamReader(comptime ReaderType: type) type {
             }
         }
 
-        pub fn nextTensorLikeMessage(self: *Self) (StreamError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?OwnedTensorLikeMessage {
+        pub fn nextTensorLikeMessage(self: *Self) (StreamError || fbs_lite_builder.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?OwnedTensorLikeMessage {
             while (true) {
                 const maybe_msg = try readMessageOptional(self.*);
                 if (maybe_msg == null) return null;
@@ -279,7 +279,7 @@ const MessageWithBody = struct {
     }
 };
 
-fn readMessageOptional(self: anytype) (StreamError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?MessageWithBody {
+fn readMessageOptional(self: anytype) (StreamError || fbs_lite_builder.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!?MessageWithBody {
     const meta_len_opt = try format.readMessageLength(self.reader);
     if (meta_len_opt == null) return null;
     const meta_len = meta_len_opt.?;
@@ -293,9 +293,7 @@ fn readMessageOptional(self: anytype) (StreamError || fb.common.PackError || @Ty
 
     const envelope = fbs_lite_verify.parseArrowMessageEnvelope(metadata.data) catch return StreamError.InvalidMetadata;
 
-    const msg = fbs.Message.GetRootAs(@constCast(metadata.data), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = self.allocator };
-    const msg_t = try fbs.MessageT.Unpack(msg, opts);
+    const msg_t = try fbs_lite_builder.unpackMessage(self.allocator, metadata.data);
     errdefer {
         var tmp = msg_t;
         tmp.deinit(self.allocator);
@@ -323,7 +321,7 @@ test "ipc reader flatbuffer sanity guard rejects out-of-bounds root offset" {
     try std.testing.expect(!fbs_lite_verify.isSaneTable(malformed[0..]));
 }
 
-fn readMessage(self: anytype) (StreamError || fb.common.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!MessageWithBody {
+fn readMessage(self: anytype) (StreamError || fbs_lite_builder.PackError || @TypeOf(self.reader).Error || error{ EndOfStream, OutOfMemory })!MessageWithBody {
     const msg_opt = try readMessageOptional(self);
     if (msg_opt == null) return StreamError.InvalidMessage;
     return msg_opt.?;
@@ -332,11 +330,9 @@ fn readMessage(self: anytype) (StreamError || fb.common.PackError || @TypeOf(sel
 fn unpackMessageFromMetadata(
     allocator: std.mem.Allocator,
     metadata: []const u8,
-) (StreamError || fb.common.PackError || error{OutOfMemory})!fbs.MessageT {
+) (StreamError || fbs_lite_builder.PackError || error{OutOfMemory})!fbs.MessageT {
     _ = fbs_lite_verify.parseArrowMessageEnvelope(metadata) catch return StreamError.InvalidMetadata;
-    const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    var msg_t = try fbs.MessageT.Unpack(msg, opts);
+    var msg_t = try fbs_lite_builder.unpackMessage(allocator, metadata);
     errdefer msg_t.deinit(allocator);
     if (!isSupportedMetadataVersion(msg_t.version)) return StreamError.InvalidMetadata;
     return msg_t;
@@ -351,7 +347,7 @@ fn isSupportedMetadataVersion(version: fbs.MetadataVersion) bool {
 pub fn decodeSchemaFromMessageMetadata(
     allocator: std.mem.Allocator,
     metadata: []const u8,
-) (StreamError || fb.common.PackError || error{OutOfMemory})!Schema {
+) (StreamError || fbs_lite_builder.PackError || error{OutOfMemory})!Schema {
     return try decodeSchemaFromMessageMetadataWithEndiannessMode(allocator, metadata, .strict);
 }
 
@@ -359,7 +355,7 @@ pub fn decodeSchemaFromMessageMetadataWithEndiannessMode(
     allocator: std.mem.Allocator,
     metadata: []const u8,
     mode: EndiannessMode,
-) (StreamError || fb.common.PackError || error{OutOfMemory})!Schema {
+) (StreamError || fbs_lite_builder.PackError || error{OutOfMemory})!Schema {
     var msg_t = try unpackMessageFromMetadata(allocator, metadata);
     defer msg_t.deinit(allocator);
     if (msg_t.header != .Schema) return StreamError.InvalidMessage;
@@ -370,7 +366,7 @@ pub fn decodeTensorFromMessageMetadata(
     allocator: std.mem.Allocator,
     metadata: []const u8,
     body: array_data.SharedBuffer,
-) (StreamError || fb.common.PackError || error{OutOfMemory})!TensorMetadata {
+) (StreamError || fbs_lite_builder.PackError || error{OutOfMemory})!TensorMetadata {
     var msg_t = try unpackMessageFromMetadata(allocator, metadata);
     defer msg_t.deinit(allocator);
     if (msg_t.header != .Tensor) return StreamError.InvalidMessage;
@@ -381,7 +377,7 @@ pub fn decodeSparseTensorFromMessageMetadata(
     allocator: std.mem.Allocator,
     metadata: []const u8,
     body: array_data.SharedBuffer,
-) (StreamError || fb.common.PackError || error{OutOfMemory})!SparseTensorMetadata {
+) (StreamError || fbs_lite_builder.PackError || error{OutOfMemory})!SparseTensorMetadata {
     var msg_t = try unpackMessageFromMetadata(allocator, metadata);
     defer msg_t.deinit(allocator);
     if (msg_t.header != .SparseTensor) return StreamError.InvalidMessage;
@@ -620,7 +616,7 @@ pub fn ingestDictionaryBatchFromMessageMetadata(
     dictionary_values: *std.AutoHashMap(i64, ArrayRef),
     metadata: []const u8,
     body: array_data.SharedBuffer,
-) (StreamError || array_data.ValidationError || fb.common.PackError || error{OutOfMemory})!void {
+) (StreamError || array_data.ValidationError || fbs_lite_builder.PackError || error{OutOfMemory})!void {
     var msg_t = try unpackMessageFromMetadata(allocator, metadata);
     defer msg_t.deinit(allocator);
     if (msg_t.header != .DictionaryBatch) return StreamError.InvalidMessage;
@@ -640,7 +636,7 @@ pub fn buildRecordBatchFromMessageMetadata(
     dictionary_values: *const std.AutoHashMap(i64, ArrayRef),
     metadata: []const u8,
     body: array_data.SharedBuffer,
-) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fb.common.PackError || error{OutOfMemory})!RecordBatch {
+) (StreamError || array_data.ValidationError || record_batch.RecordBatchError || fbs_lite_builder.PackError || error{OutOfMemory})!RecordBatch {
     var msg_t = try unpackMessageFromMetadata(allocator, metadata);
     defer msg_t.deinit(allocator);
     if (msg_t.header != .RecordBatch) return StreamError.InvalidMessage;
@@ -4816,13 +4812,8 @@ test "ipc reader rejects unexpected variadic buffer counts" {
 }
 
 fn appendEncodedMessage(allocator: std.mem.Allocator, writer: anytype, msg: fbs.MessageT, body: []const u8) !void {
-    var builder = fb.Builder.init(allocator);
-    defer builder.deinitAll();
-
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    const msg_off = try fbs.MessageT.Pack(msg, &builder, opts);
-    try fbs.Message.FinishBuffer(&builder, msg_off);
-    const metadata = try builder.finishedBytes();
+    const metadata = try fbs_lite_builder.packMessageBytes(allocator, msg);
+    defer allocator.free(metadata);
 
     try format.writeMessageLength(writer, @intCast(metadata.len));
     try writer.writeAll(metadata);
@@ -4975,9 +4966,6 @@ fn appendSchemaMessageWithBodyAndEndianness(
     body_opt: ?[]const u8,
     endianness: fbs.Endianness,
 ) !void {
-    var builder = fb.Builder.init(allocator);
-    defer builder.deinitAll();
-
     const schema_ptr = try allocator.create(fbs.SchemaT);
     errdefer allocator.destroy(schema_ptr);
     schema_ptr.* = .{
@@ -4995,10 +4983,8 @@ fn appendSchemaMessageWithBodyAndEndianness(
     };
     defer msg.deinit(allocator);
 
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    const msg_off = try fbs.MessageT.Pack(msg, &builder, opts);
-    try fbs.Message.FinishBuffer(&builder, msg_off);
-    const metadata = try builder.finishedBytes();
+    const metadata = try fbs_lite_builder.packMessageBytes(allocator, msg);
+    defer allocator.free(metadata);
 
     try format.writeMessageLength(writer, @intCast(metadata.len));
     try writer.writeAll(metadata);

@@ -6,10 +6,10 @@ const array_ref = @import("../array/array_ref.zig");
 const array_data = @import("../array/array_data.zig");
 const buffer = @import("../buffer.zig");
 const format = @import("format.zig");
+const fbs_lite_builder = @import("fbs_lite/builder.zig");
 const fbs_lite_verify = @import("fbs_lite/verify.zig");
 const compression_dynlib = @import("compression_dynlib.zig");
 const tensor_types = @import("tensor_types.zig");
-const fb = @import("flatbufferz");
 const arrow_fbs = @import("arrow_fbs");
 
 pub const StreamError = format.StreamError;
@@ -21,7 +21,7 @@ pub const ArrayRef = array_ref.ArrayRef;
 pub const ArrayData = array_data.ArrayData;
 pub const RecordBatch = record_batch.RecordBatch;
 
-const WriterError = StreamError || fb.common.PackError || error{OutOfMemory};
+const WriterError = StreamError || fbs_lite_builder.PackError || error{OutOfMemory};
 const extension_name_key = "ARROW:extension:name";
 const extension_metadata_key = "ARROW:extension:metadata";
 
@@ -327,12 +327,8 @@ pub fn StreamWriter(comptime WriterType: type) type {
 }
 
 fn writeMessage(allocator: std.mem.Allocator, writer: anytype, msg: fbs.MessageT, body_buffers: []const array_data.SharedBuffer) (WriterError || @TypeOf(writer).Error)!void {
-    var builder = fb.Builder.init(allocator);
-    defer builder.deinitAll();
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    const msg_off = try fbs.MessageT.Pack(msg, &builder, opts);
-    try fbs.Message.FinishBuffer(&builder, msg_off);
-    const metadata = try builder.finishedBytes();
+    const metadata = try fbs_lite_builder.packMessageBytes(allocator, msg);
+    defer allocator.free(metadata);
 
     // IPC stream framing stores the padded metadata length in the prefix.
     const metadata_len = format.paddedLen(metadata.len);
@@ -1360,9 +1356,7 @@ fn readNextMessageForTest(allocator: std.mem.Allocator, reader: anytype) anyerro
     if (envelope.body_length < 0) return StreamError.InvalidBody;
     const body_len = std.math.cast(usize, envelope.body_length) orelse return StreamError.InvalidBody;
 
-    const msg = fbs.Message.GetRootAs(@constCast(metadata), 0);
-    const opts: fb.common.PackOptions = .{ .allocator = allocator };
-    const msg_t = try fbs.MessageT.Unpack(msg, opts);
+    const msg_t = try fbs_lite_builder.unpackMessage(allocator, metadata);
     if (msg_t.bodyLength != envelope.body_length) return StreamError.InvalidMetadata;
 
     if (body_len > 0) {
