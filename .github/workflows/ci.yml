@@ -10,6 +10,27 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  lint:
+    name: Lint (Zig fmt check)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+
+      - name: Check Zig formatting
+        run: |
+          files="$(git ls-files '*.zig')"
+          if [ -z "$files" ]; then
+            echo "No Zig files found."
+            exit 0
+          fi
+          echo "$files" | xargs zig fmt --check
+
   fuzz-corpus:
     name: Fuzz Corpus Replay
     runs-on: ubuntu-latest

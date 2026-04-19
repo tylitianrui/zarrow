@@ -18,7 +18,6 @@ pub const IntType = datatype.IntType;
 const ArrayRef = array_ref.ArrayRef;
 const BuilderState = builder_state.BuilderState;
 
-
 pub const MapArray = struct {
     data: *const ArrayData,
 
