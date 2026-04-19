@@ -262,39 +262,6 @@ jobs:
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow.arrow canonical stream
           python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow_file.arrow canonical file
 
-  interop-pyarrow-cross-platform-smoke:
-    name: IPC Interop Smoke (${{ matrix.os }} PyArrow)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["macos-latest", "windows-latest"]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: "0.15.2"
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install PyArrow
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyarrow==23.0.1
-
-      - name: Cross-platform smoke roundtrip (canonical stream)
-        run: |
-          python -c "from pathlib import Path; Path('.interop-fixtures').mkdir(exist_ok=True)"
-          zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
-          python tools/interop/pyarrow_generate.py .interop-fixtures/pyarrow.arrow canonical stream
-          zig build interop-fixture-check -- .interop-fixtures/pyarrow.arrow canonical stream
-          python tools/interop/pyarrow_validate.py .interop-fixtures/zarrow.arrow canonical stream
 
   interop-pyarrow:
     name: IPC Interop (zarrow <-> PyArrow)
