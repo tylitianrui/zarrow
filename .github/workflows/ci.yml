@@ -732,27 +732,55 @@ jobs:
       - name: Install Arrow C++ toolchain
         shell: bash -l {0}
         run: |
-          set -euo pipefail
+          set -eo pipefail
           conda activate arrow-cpp-env
           conda install -y arrow-cpp=23.0.1 pkg-config cxx-compiler
 
       - name: Build C++ interop tool
         shell: bash -l {0}
         run: |
-          set -euo pipefail
+          set -eo pipefail
           conda activate arrow-cpp-env
           mkdir -p .interop-bin .interop-fixtures
           interop_bin=".interop-bin/interop_cpp"
           if [ "${{ runner.os }}" = "Windows" ]; then
             interop_bin=".interop-bin/interop_cpp.exe"
           fi
-          c++ -std=c++17 tools/interop/cpp/interop.cpp -o "$interop_bin" $(pkg-config --cflags --libs arrow)
+
+          compiler="${CXX:-c++}"
+          echo "Using compiler: $compiler"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "Windows Arrow C++ compile path (with pkg-config fallback)"
+            pkg-config --version || true
+            pkg-config --modversion arrow || true
+
+            arrow_cflags="$(pkg-config --cflags arrow 2>/dev/null || true)"
+            arrow_libs="$(pkg-config --libs arrow 2>/dev/null || true)"
+
+            if [ -z "$arrow_cflags" ]; then
+              arrow_cflags="-I$CONDA_PREFIX/Library/include"
+            fi
+            if [ -z "$arrow_libs" ]; then
+              arrow_libs="-L$CONDA_PREFIX/Library/lib -larrow -larrow_compute -larrow_ipc"
+            fi
+
+            echo "Arrow cflags: $arrow_cflags"
+            echo "Arrow libs: $arrow_libs"
+
+            read -r -a arrow_cflags_arr <<< "$arrow_cflags"
+            read -r -a arrow_libs_arr <<< "$arrow_libs"
+            "$compiler" -std=c++17 tools/interop/cpp/interop.cpp -o "$interop_bin" "${arrow_cflags_arr[@]}" "${arrow_libs_arr[@]}"
+          else
+            "$compiler" -std=c++17 tools/interop/cpp/interop.cpp -o "$interop_bin" $(pkg-config --cflags --libs arrow)
+          fi
+
           echo "INTEROP_BIN=$interop_bin" >> "$GITHUB_ENV"
 
       - name: Arrow C++ cross-platform smoke (canonical stream)
         shell: bash -l {0}
         run: |
-          set -euo pipefail
+          set -eo pipefail
           conda activate arrow-cpp-env
           zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
           "$INTEROP_BIN" generate .interop-fixtures/arrow_cpp.arrow canonical stream
