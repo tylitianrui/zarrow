@@ -1,6 +1,12 @@
 pub const core = @import("core.zig");
 
 pub const FunctionKind = core.FunctionKind;
+pub const OptionsTag = core.OptionsTag;
+pub const CastOptions = core.CastOptions;
+pub const ArithmeticOptions = core.ArithmeticOptions;
+pub const FilterOptions = core.FilterOptions;
+pub const CustomOptions = core.CustomOptions;
+pub const Options = core.Options;
 pub const ScalarValue = core.ScalarValue;
 pub const Scalar = core.Scalar;
 pub const Datum = core.Datum;
@@ -8,6 +14,8 @@ pub const ChunkedArray = core.ChunkedArray;
 pub const KernelError = core.KernelError;
 pub const Function = core.Function;
 pub const TypeCheckFn = core.TypeCheckFn;
+pub const OptionsCheckFn = core.OptionsCheckFn;
+pub const ResultTypeFn = core.ResultTypeFn;
 pub const KernelExecFn = core.KernelExecFn;
 pub const KernelSignature = core.KernelSignature;
 pub const Kernel = core.Kernel;

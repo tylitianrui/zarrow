@@ -130,16 +130,88 @@ pub const KernelError = error{
 };
 
 pub const TypeCheckFn = *const fn (args: []const Datum) bool;
-pub const KernelExecFn = *const fn (ctx: *ExecContext, args: []const Datum, options: ?*const anyopaque) KernelError!Datum;
+/// Well-known options payload tags used by compute kernels.
+pub const OptionsTag = enum {
+    /// Kernel does not require options.
+    none,
+    /// Type conversion / cast behavior.
+    cast,
+    /// Arithmetic behavior (overflow, divide-by-zero, etc.).
+    arithmetic,
+    /// Filter behavior.
+    filter,
+    /// Escape hatch for downstream custom kernels.
+    custom,
+};
 
+/// Common options for cast-like kernels.
+pub const CastOptions = struct {
+    /// If true, conversion must fail on lossy/overflowing cast.
+    safe: bool = true,
+    /// Optional target type override used by cast kernels.
+    to_type: ?DataType = null,
+};
+
+/// Common options for arithmetic kernels.
+pub const ArithmeticOptions = struct {
+    /// If true, overflow should produce an error instead of wrapping.
+    check_overflow: bool = true,
+    /// If true, division by zero should return an error.
+    divide_by_zero_is_error: bool = true,
+};
+
+/// Common options for filter-like kernels.
+pub const FilterOptions = struct {
+    /// If true, nulls in predicate are treated as false and dropped.
+    drop_nulls: bool = true,
+};
+
+/// Custom untyped options hook for downstream extension kernels.
+pub const CustomOptions = struct {
+    /// Caller-defined discriminator.
+    tag: []const u8,
+    /// Optional opaque payload owned by caller.
+    payload: ?*const anyopaque = null,
+};
+
+/// Type-safe options payload passed to all kernel signatures and executors.
+pub const Options = union(OptionsTag) {
+    none: void,
+    cast: CastOptions,
+    arithmetic: ArithmeticOptions,
+    filter: FilterOptions,
+    custom: CustomOptions,
+
+    pub fn noneValue() Options {
+        return .{ .none = {} };
+    }
+
+    pub fn tag(self: Options) OptionsTag {
+        return std.meta.activeTag(self);
+    }
+};
+
+pub const OptionsCheckFn = *const fn (options: Options) bool;
+pub const ResultTypeFn = *const fn (args: []const Datum, options: Options) KernelError!DataType;
+pub const KernelExecFn = *const fn (ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum;
+
+/// Kernel signature metadata used for dispatch and type inference.
 pub const KernelSignature = struct {
+    /// Required argument count.
     arity: usize,
+    /// Optional argument validator for logical type matching.
     type_check: ?TypeCheckFn = null,
+    /// Optional options validator for type-safe options enforcement.
+    options_check: ?OptionsCheckFn = null,
+    /// Optional result type inference callback.
+    result_type_fn: ?ResultTypeFn = null,
 
     pub fn any(arity: usize) KernelSignature {
         return .{
             .arity = arity,
             .type_check = null,
+            .options_check = null,
+            .result_type_fn = null,
         };
     }
 
@@ -147,6 +219,8 @@ pub const KernelSignature = struct {
         return .{
             .arity = 1,
             .type_check = type_check,
+            .options_check = null,
+            .result_type_fn = null,
         };
     }
 
@@ -154,6 +228,26 @@ pub const KernelSignature = struct {
         return .{
             .arity = 2,
             .type_check = type_check,
+            .options_check = null,
+            .result_type_fn = null,
+        };
+    }
+
+    pub fn unaryWithResult(type_check: ?TypeCheckFn, result_type_fn: ResultTypeFn) KernelSignature {
+        return .{
+            .arity = 1,
+            .type_check = type_check,
+            .options_check = null,
+            .result_type_fn = result_type_fn,
+        };
+    }
+
+    pub fn binaryWithResult(type_check: ?TypeCheckFn, result_type_fn: ResultTypeFn) KernelSignature {
+        return .{
+            .arity = 2,
+            .type_check = type_check,
+            .options_check = null,
+            .result_type_fn = result_type_fn,
         };
     }
 
@@ -161,6 +255,55 @@ pub const KernelSignature = struct {
         if (args.len != self.arity) return false;
         if (self.type_check) |check| return check(args);
         return true;
+    }
+
+    pub fn matchesOptions(self: KernelSignature, options: Options) bool {
+        if (self.options_check) |check| return check(options);
+        return true;
+    }
+
+    pub fn accepts(self: KernelSignature, args: []const Datum, options: Options) bool {
+        return self.matches(args) and self.matchesOptions(options);
+    }
+
+    /// Human-readable mismatch reason for diagnostics and debugging.
+    pub fn explainMismatch(self: KernelSignature, args: []const Datum, options: Options) []const u8 {
+        if (args.len != self.arity) return "arity mismatch: argument count does not match kernel signature";
+        if (self.type_check) |check| {
+            if (!check(args)) return "type mismatch: arguments did not satisfy kernel type_check";
+        }
+        if (self.options_check) |check| {
+            if (!check(options)) return "options mismatch: options did not satisfy kernel options_check";
+        }
+        return "signature accepted";
+    }
+
+    pub fn inferResultType(self: KernelSignature, args: []const Datum, options: Options) KernelError!DataType {
+        if (args.len != self.arity) return error.InvalidArity;
+        if (self.type_check) |check| {
+            if (!check(args)) return error.NoMatchingKernel;
+        }
+        if (self.options_check) |check| {
+            if (!check(options)) return error.InvalidOptions;
+        }
+        if (self.result_type_fn) |infer| {
+            return infer(args, options);
+        }
+        if (args.len == 0) return error.InvalidInput;
+        return args[0].dataType();
+    }
+
+    /// Human-readable reason for result-type inference failure.
+    pub fn explainInferResultTypeFailure(self: KernelSignature, args: []const Datum, options: Options) []const u8 {
+        if (args.len != self.arity) return "cannot infer result type: invalid arity";
+        if (self.type_check) |check| {
+            if (!check(args)) return "cannot infer result type: argument type_check failed";
+        }
+        if (self.options_check) |check| {
+            if (!check(options)) return "cannot infer result type: options_check failed";
+        }
+        if (self.result_type_fn == null and args.len == 0) return "cannot infer result type: no arguments and no result_type_fn";
+        return "result type inference should succeed";
     }
 };
 
@@ -278,18 +421,81 @@ pub const FunctionRegistry = struct {
         return &self.functions.items[idx];
     }
 
-    pub fn resolveKernel(self: *const FunctionRegistry, name: []const u8, kind: FunctionKind, args: []const Datum) KernelError!*const Kernel {
+    pub fn resolveKernel(
+        self: *const FunctionRegistry,
+        name: []const u8,
+        kind: FunctionKind,
+        args: []const Datum,
+        options: Options,
+    ) KernelError!*const Kernel {
         const function = self.findFunction(name, kind) orelse return error.FunctionNotFound;
         if (function.kernels.items.len == 0) return error.NoMatchingKernel;
 
         var saw_matching_arity = false;
+        var saw_matching_type = false;
         for (function.kernels.items) |*kernel| {
             if (kernel.signature.arity != args.len) continue;
             saw_matching_arity = true;
-            if (kernel.signature.matches(args)) return kernel;
+            if (!kernel.signature.matches(args)) continue;
+            saw_matching_type = true;
+            if (kernel.signature.matchesOptions(options)) return kernel;
         }
         if (!saw_matching_arity) return error.InvalidArity;
+        if (saw_matching_type) return error.InvalidOptions;
         return error.NoMatchingKernel;
+    }
+
+    /// Explain why kernel resolution would fail for the given call site.
+    pub fn explainResolveKernelFailure(
+        self: *const FunctionRegistry,
+        name: []const u8,
+        kind: FunctionKind,
+        args: []const Datum,
+        options: Options,
+    ) []const u8 {
+        const function = self.findFunction(name, kind) orelse return "function not found";
+        if (function.kernels.items.len == 0) return "function has no registered kernels";
+
+        var saw_matching_arity = false;
+        var saw_matching_type = false;
+        for (function.kernels.items) |*kernel| {
+            if (kernel.signature.arity != args.len) continue;
+            saw_matching_arity = true;
+            if (!kernel.signature.matches(args)) continue;
+            saw_matching_type = true;
+            if (kernel.signature.matchesOptions(options)) return "kernel resolution should succeed";
+        }
+        if (!saw_matching_arity) return "no kernel matched arity";
+        if (saw_matching_type) return "kernel matched args but options were invalid";
+        return "no kernel matched argument types";
+    }
+
+    pub fn resolveResultType(
+        self: *const FunctionRegistry,
+        name: []const u8,
+        kind: FunctionKind,
+        args: []const Datum,
+        options: Options,
+    ) KernelError!DataType {
+        const kernel = try self.resolveKernel(name, kind, args, options);
+        return kernel.signature.inferResultType(args, options);
+    }
+
+    /// Explain why result-type inference would fail for the given call site.
+    pub fn explainResolveResultTypeFailure(
+        self: *const FunctionRegistry,
+        name: []const u8,
+        kind: FunctionKind,
+        args: []const Datum,
+        options: Options,
+    ) []const u8 {
+        const function = self.findFunction(name, kind) orelse return "cannot infer result type: function not found";
+        if (function.kernels.items.len == 0) return "cannot infer result type: function has no kernels";
+        for (function.kernels.items) |*kernel| {
+            if (!kernel.signature.accepts(args, options)) continue;
+            return kernel.signature.explainInferResultTypeFailure(args, options);
+        }
+        return self.explainResolveKernelFailure(name, kind, args, options);
     }
 
     pub fn invoke(
@@ -298,9 +504,10 @@ pub const FunctionRegistry = struct {
         name: []const u8,
         kind: FunctionKind,
         args: []const Datum,
-        options: ?*const anyopaque,
+        options: Options,
     ) KernelError!Datum {
-        const kernel = try self.resolveKernel(name, kind, args);
+        const kernel = try self.resolveKernel(name, kind, args, options);
+        _ = try kernel.signature.inferResultType(args, options);
         return kernel.exec(ctx, args, options);
     }
 
@@ -309,7 +516,7 @@ pub const FunctionRegistry = struct {
         ctx: *ExecContext,
         name: []const u8,
         args: []const Datum,
-        options: ?*const anyopaque,
+        options: Options,
     ) KernelError!Datum {
         return self.invoke(ctx, name, .scalar, args, options);
     }
@@ -319,7 +526,7 @@ pub const FunctionRegistry = struct {
         ctx: *ExecContext,
         name: []const u8,
         args: []const Datum,
-        options: ?*const anyopaque,
+        options: Options,
     ) KernelError!Datum {
         return self.invoke(ctx, name, .vector, args, options);
     }
@@ -329,7 +536,7 @@ pub const FunctionRegistry = struct {
         ctx: *ExecContext,
         name: []const u8,
         args: []const Datum,
-        options: ?*const anyopaque,
+        options: Options,
     ) KernelError!Datum {
         return self.invoke(ctx, name, .aggregate, args, options);
     }
@@ -373,7 +580,7 @@ pub const ExecContext = struct {
         name: []const u8,
         kind: FunctionKind,
         args: []const Datum,
-        options: ?*const anyopaque,
+        options: Options,
     ) KernelError!Datum {
         return self.registry.invoke(self, name, kind, args, options);
     }
@@ -382,7 +589,7 @@ pub const ExecContext = struct {
         self: *ExecContext,
         name: []const u8,
         args: []const Datum,
-        options: ?*const anyopaque,
+        options: Options,
     ) KernelError!Datum {
         return self.registry.invokeScalar(self, name, args, options);
     }
@@ -391,7 +598,7 @@ pub const ExecContext = struct {
         self: *ExecContext,
         name: []const u8,
         args: []const Datum,
-        options: ?*const anyopaque,
+        options: Options,
     ) KernelError!Datum {
         return self.registry.invokeVector(self, name, args, options);
     }
@@ -400,7 +607,7 @@ pub const ExecContext = struct {
         self: *ExecContext,
         name: []const u8,
         args: []const Datum,
-        options: ?*const anyopaque,
+        options: Options,
     ) KernelError!Datum {
         return self.registry.invokeAggregate(self, name, args, options);
     }
@@ -454,13 +661,13 @@ fn isTwoInt32(args: []const Datum) bool {
     return args.len == 2 and args[0].dataType() == .int32 and args[1].dataType() == .int32;
 }
 
-fn passthroughInt32Kernel(ctx: *ExecContext, args: []const Datum, options: ?*const anyopaque) KernelError!Datum {
+fn passthroughInt32Kernel(ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum {
     _ = ctx;
     _ = options;
     return args[0].retain();
 }
 
-fn countLenAggregateKernel(ctx: *ExecContext, args: []const Datum, options: ?*const anyopaque) KernelError!Datum {
+fn countLenAggregateKernel(ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum {
     _ = ctx;
     _ = options;
     if (args.len != 1) return error.InvalidArity;
@@ -472,6 +679,27 @@ fn countLenAggregateKernel(ctx: *ExecContext, args: []const Datum, options: ?*co
     };
 
     return Datum.fromScalar(Scalar.init(.{ .int64 = {} }, .{ .i64 = @intCast(count) }));
+}
+
+fn onlyCastOptions(options: Options) bool {
+    return switch (options) {
+        .cast => true,
+        else => false,
+    };
+}
+
+fn firstArgResultType(args: []const Datum, options: Options) KernelError!DataType {
+    _ = options;
+    if (args.len == 0) return error.InvalidInput;
+    return args[0].dataType();
+}
+
+fn castResultType(args: []const Datum, options: Options) KernelError!DataType {
+    if (args.len != 1) return error.InvalidArity;
+    return switch (options) {
+        .cast => |cast_opts| cast_opts.to_type orelse args[0].dataType(),
+        else => error.InvalidOptions,
+    };
 }
 
 test "compute registry registers and invokes scalar kernel" {
@@ -507,7 +735,7 @@ test "compute registry registers and invokes scalar kernel" {
     }
 
     var ctx = ExecContext.init(allocator, &registry);
-    var out = try ctx.invokeScalar("identity", args[0..], null);
+    var out = try ctx.invokeScalar("identity", args[0..], Options.noneValue());
     defer out.release();
 
     try std.testing.expect(out == .array);
@@ -533,11 +761,11 @@ test "compute registry reports function and arity errors" {
     var ctx = ExecContext.init(allocator, &registry);
     try std.testing.expectError(
         error.FunctionNotFound,
-        ctx.invoke("missing", .scalar, &[_]Datum{}, null),
+        ctx.invoke("missing", .scalar, &[_]Datum{}, Options.noneValue()),
     );
     try std.testing.expectError(
         error.InvalidArity,
-        ctx.invoke("identity", .scalar, &[_]Datum{}, null),
+        ctx.invoke("identity", .scalar, &[_]Datum{}, Options.noneValue()),
     );
 }
 
@@ -663,7 +891,7 @@ test "compute invoke helpers cover vector and aggregate kernels" {
     }
 
     var ctx = ExecContext.init(allocator, &registry);
-    var vec_out = try ctx.invokeVector("vec_identity", args[0..], null);
+    var vec_out = try ctx.invokeVector("vec_identity", args[0..], Options.noneValue());
     defer vec_out.release();
     try std.testing.expect(vec_out.isArray());
     const vec_view = int32_array{ .data = vec_out.array.data() };
@@ -671,7 +899,7 @@ test "compute invoke helpers cover vector and aggregate kernels" {
     try std.testing.expectEqual(@as(i32, 10), vec_view.value(0));
     try std.testing.expectEqual(@as(i32, 40), vec_view.value(3));
 
-    var agg_out = try ctx.invokeAggregate("count_len", args[0..], null);
+    var agg_out = try ctx.invokeAggregate("count_len", args[0..], Options.noneValue());
     defer agg_out.release();
     try std.testing.expect(agg_out.isScalar());
     try std.testing.expectEqual(@as(i64, 4), agg_out.scalar.value.i64);
@@ -718,6 +946,8 @@ test "compute datum accessors and signature helpers" {
     try std.testing.expect(sig_any.matches(args_bad[0..]));
     try std.testing.expect(!sig_binary_int32.matches(args_bad[0..]));
     try std.testing.expect(sig_binary_int32.matches(args_ok[0..]));
+    const inferred_binary = try sig_binary_int32.inferResultType(args_ok[0..], Options.noneValue());
+    try std.testing.expect(inferred_binary.eql(.{ .int32 = {} }));
 }
 
 test "compute registry functionAt out of range returns null" {
@@ -732,4 +962,101 @@ test "compute registry functionAt out of range returns null" {
     try std.testing.expect(registry.functionAt(0) != null);
     try std.testing.expect(registry.functionAt(1) == null);
     try std.testing.expect(registry.functionAt(99) == null);
+}
+
+test "compute kernel signature result type inference and typed options" {
+    const allocator = std.testing.allocator;
+    const int32_builder = @import("../array/array.zig").Int32Builder;
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.registerScalarKernel("cast_identity", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = isInt32Datum,
+            .options_check = onlyCastOptions,
+            .result_type_fn = castResultType,
+        },
+        .exec = passthroughInt32Kernel,
+    });
+
+    var builder = try int32_builder.init(allocator, 1);
+    defer builder.deinit();
+    try builder.append(5);
+    var arr = try builder.finish();
+    defer arr.release();
+
+    const args = [_]Datum{Datum.fromArray(arr.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    const cast_to_i64 = Options{
+        .cast = .{
+            .safe = true,
+            .to_type = .{ .int64 = {} },
+        },
+    };
+    const inferred_i64 = try registry.resolveResultType("cast_identity", .scalar, args[0..], cast_to_i64);
+    try std.testing.expect(inferred_i64.eql(.{ .int64 = {} }));
+
+    var ctx = ExecContext.init(allocator, &registry);
+    var out = try ctx.invokeScalar("cast_identity", args[0..], cast_to_i64);
+    defer out.release();
+    try std.testing.expect(out.isArray());
+
+    try std.testing.expectError(
+        error.InvalidOptions,
+        ctx.invokeScalar("cast_identity", args[0..], .{ .filter = .{ .drop_nulls = true } }),
+    );
+
+    const sig = KernelSignature.unaryWithResult(isInt32Datum, firstArgResultType);
+    const inferred_i32 = try sig.inferResultType(args[0..], Options.noneValue());
+    try std.testing.expect(inferred_i32.eql(.{ .int32 = {} }));
+}
+
+test "compute explain helpers provide readable diagnostics" {
+    const allocator = std.testing.allocator;
+    const int32_builder = @import("../array/array.zig").Int32Builder;
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.registerScalarKernel("cast_identity", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = isInt32Datum,
+            .options_check = onlyCastOptions,
+            .result_type_fn = castResultType,
+        },
+        .exec = passthroughInt32Kernel,
+    });
+
+    var builder = try int32_builder.init(allocator, 1);
+    defer builder.deinit();
+    try builder.append(123);
+    var arr = try builder.finish();
+    defer arr.release();
+
+    const args = [_]Datum{Datum.fromArray(arr.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    const function = registry.findFunction("cast_identity", .scalar).?;
+    const signature = function.kernelsSlice()[0].signature;
+
+    const bad_options = Options{ .filter = .{ .drop_nulls = true } };
+    const mismatch = signature.explainMismatch(args[0..], bad_options);
+    try std.testing.expect(std.mem.eql(u8, mismatch, "options mismatch: options did not satisfy kernel options_check"));
+
+    const infer_reason = signature.explainInferResultTypeFailure(args[0..], bad_options);
+    try std.testing.expect(std.mem.eql(u8, infer_reason, "cannot infer result type: options_check failed"));
+
+    const resolve_reason = registry.explainResolveKernelFailure("cast_identity", .scalar, args[0..], bad_options);
+    try std.testing.expect(std.mem.eql(u8, resolve_reason, "kernel matched args but options were invalid"));
+
+    const result_type_reason = registry.explainResolveResultTypeFailure("cast_identity", .scalar, args[0..], bad_options);
+    try std.testing.expect(std.mem.eql(u8, result_type_reason, "kernel matched args but options were invalid"));
 }
