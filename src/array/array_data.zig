@@ -298,6 +298,49 @@ pub const ArrayData = struct {
         if (prev < total_len_u64) return error.InvalidOffsets;
     }
 
+    fn unionTypeIdToChildIndex(uni: datatype.UnionType, type_id: i8) ?usize {
+        if (uni.type_ids.len == 0) {
+            if (type_id < 0) return null;
+            const index = std.math.cast(usize, type_id) orelse return null;
+            return if (index < uni.fields.len) index else null;
+        }
+        if (uni.type_ids.len != uni.fields.len) return null;
+        for (uni.type_ids, 0..) |configured_id, child_index| {
+            if (configured_id == type_id) return child_index;
+        }
+        return null;
+    }
+
+    fn validateUnionTypeIds(uni: datatype.UnionType, type_ids: []const i8, start: usize, end: usize) ValidationError!void {
+        if (type_ids.len < end) return error.BufferTooSmall;
+        var i = start;
+        while (i < end) : (i += 1) {
+            const type_id = type_ids[i];
+            if (unionTypeIdToChildIndex(uni, type_id) == null) return error.InvalidOffsets;
+        }
+    }
+
+    fn validateDenseUnionOffsets(
+        uni: datatype.UnionType,
+        type_ids: []const i8,
+        offsets: []const i32,
+        children: []const ArrayRef,
+        start: usize,
+        end: usize,
+    ) ValidationError!void {
+        if (offsets.len < end) return error.BufferTooSmall;
+        var i = start;
+        while (i < end) : (i += 1) {
+            const child_index = unionTypeIdToChildIndex(uni, type_ids[i]) orelse return error.InvalidOffsets;
+            const off = offsets[i];
+            if (off < 0) return error.InvalidOffsets;
+            const child_data = children[child_index].data();
+            const child_total = std.math.add(usize, child_data.length, child_data.offset) catch return error.InvalidOffsets;
+            const off_usize = std.math.cast(usize, off) orelse return error.InvalidOffsets;
+            if (off_usize >= child_total) return error.InvalidOffsets;
+        }
+    }
+
     // LargeListView offsets/sizes use 64-bit indices.
     fn validateOffsetsSizesI64(offsets: []const i64, sizes: []const i64, total_len: usize, child_len: usize) ValidationError!void {
         if (offsets.len < total_len) return error.BufferTooSmall;
@@ -422,6 +465,8 @@ pub const ArrayData = struct {
                 if (self.buffers.len < 1) return error.InvalidBufferCount;
                 if (self.children.len != uni.fields.len) return error.InvalidChildren;
                 if (self.buffers[0].len() < total_len) return error.BufferTooSmall;
+                const type_ids = self.buffers[0].typedSlice(i8) catch return error.InvalidOffsetBuffer;
+                try validateUnionTypeIds(uni, type_ids, self.offset, total_len);
             },
             .dense_union => |uni| {
                 if (self.buffers.len < 2) return error.InvalidBufferCount;
@@ -429,6 +474,10 @@ pub const ArrayData = struct {
                 if (self.buffers[0].len() < total_len) return error.BufferTooSmall;
                 const needed = std.math.mul(usize, total_len, @sizeOf(i32)) catch return error.BufferTooSmall;
                 if (self.buffers[1].len() < needed) return error.BufferTooSmall;
+                const type_ids = self.buffers[0].typedSlice(i8) catch return error.InvalidOffsetBuffer;
+                const offsets = self.buffers[1].typedSlice(i32) catch return error.InvalidOffsetBuffer;
+                try validateUnionTypeIds(uni, type_ids, self.offset, total_len);
+                try validateDenseUnionOffsets(uni, type_ids, offsets, self.children, self.offset, total_len);
             },
             .run_end_encoded => {
                 if (self.buffers.len != 0) return error.InvalidBufferCount;
@@ -689,6 +738,238 @@ test "array data validateLayout rejects sparse union nonzero null count" {
     };
 
     try std.testing.expectError(error.InvalidNullCount, data.validateLayout());
+}
+
+test "array data validateLayout rejects sparse union invalid type id" {
+    const value_type = DataType{ .int32 = {} };
+    const union_fields = [_]datatype.Field{.{ .name = "i", .data_type = &value_type, .nullable = true }};
+    const union_type_ids = [_]i8{5};
+    const sparse_union_type = DataType{
+        .sparse_union = .{
+            .type_ids = union_type_ids[0..],
+            .fields = union_fields[0..],
+            .mode = .sparse,
+        },
+    };
+
+    var child_values: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child_values[0..], std.mem.sliceAsBytes(&[_]i32{ 11, 22 }));
+    const child_data = ArrayData{
+        .data_type = value_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child_values[0..]) },
+    };
+    var child_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child_data);
+    defer child_ref.release();
+    const children = &[_]ArrayRef{child_ref.retain()};
+    defer {
+        var owned = children[0];
+        owned.release();
+    }
+
+    const type_ids: [2]u8 = .{ 5, 6 };
+    const data = ArrayData{
+        .data_type = sparse_union_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{SharedBuffer.fromSlice(type_ids[0..])},
+        .children = children,
+    };
+
+    try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
+}
+
+test "array data validateLayout accepts dense union with valid type ids and offsets" {
+    const int_type = DataType{ .int32 = {} };
+    const union_fields = [_]datatype.Field{
+        .{ .name = "a", .data_type = &int_type, .nullable = true },
+        .{ .name = "b", .data_type = &int_type, .nullable = true },
+    };
+    const union_type_ids = [_]i8{ 5, 7 };
+    const dense_union_type = DataType{
+        .dense_union = .{
+            .type_ids = union_type_ids[0..],
+            .fields = union_fields[0..],
+            .mode = .dense,
+        },
+    };
+
+    var child0_values: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child0_values[0..], std.mem.sliceAsBytes(&[_]i32{ 10, 11 }));
+    const child0_data = ArrayData{
+        .data_type = int_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child0_values[0..]) },
+    };
+    var child0_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child0_data);
+    defer child0_ref.release();
+
+    var child1_values: [1 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child1_values[0..], std.mem.sliceAsBytes(&[_]i32{20}));
+    const child1_data = ArrayData{
+        .data_type = int_type,
+        .length = 1,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child1_values[0..]) },
+    };
+    var child1_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child1_data);
+    defer child1_ref.release();
+
+    const children = &[_]ArrayRef{ child0_ref.retain(), child1_ref.retain() };
+    defer {
+        var owned0 = children[0];
+        owned0.release();
+        var owned1 = children[1];
+        owned1.release();
+    }
+
+    const type_ids: [3]u8 = .{ 5, 7, 5 };
+    const offsets = [_]i32{ 0, 0, 1 };
+    var offsets_bytes: [offsets.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(offsets_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
+
+    const data = ArrayData{
+        .data_type = dense_union_type,
+        .length = 3,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{
+            SharedBuffer.fromSlice(type_ids[0..]),
+            SharedBuffer.fromSlice(offsets_bytes[0..]),
+        },
+        .children = children,
+    };
+
+    try data.validateLayout();
+}
+
+test "array data validateLayout rejects dense union invalid type id" {
+    const int_type = DataType{ .int32 = {} };
+    const union_fields = [_]datatype.Field{
+        .{ .name = "a", .data_type = &int_type, .nullable = true },
+        .{ .name = "b", .data_type = &int_type, .nullable = true },
+    };
+    const union_type_ids = [_]i8{ 5, 7 };
+    const dense_union_type = DataType{
+        .dense_union = .{
+            .type_ids = union_type_ids[0..],
+            .fields = union_fields[0..],
+            .mode = .dense,
+        },
+    };
+
+    var child0_values: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child0_values[0..], std.mem.sliceAsBytes(&[_]i32{ 10, 11 }));
+    const child0_data = ArrayData{
+        .data_type = int_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child0_values[0..]) },
+    };
+    var child0_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child0_data);
+    defer child0_ref.release();
+
+    var child1_values: [1 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child1_values[0..], std.mem.sliceAsBytes(&[_]i32{20}));
+    const child1_data = ArrayData{
+        .data_type = int_type,
+        .length = 1,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child1_values[0..]) },
+    };
+    var child1_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child1_data);
+    defer child1_ref.release();
+
+    const children = &[_]ArrayRef{ child0_ref.retain(), child1_ref.retain() };
+    defer {
+        var owned0 = children[0];
+        owned0.release();
+        var owned1 = children[1];
+        owned1.release();
+    }
+
+    const type_ids: [3]u8 = .{ 5, 9, 5 };
+    const offsets = [_]i32{ 0, 0, 1 };
+    var offsets_bytes: [offsets.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(offsets_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
+
+    const data = ArrayData{
+        .data_type = dense_union_type,
+        .length = 3,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{
+            SharedBuffer.fromSlice(type_ids[0..]),
+            SharedBuffer.fromSlice(offsets_bytes[0..]),
+        },
+        .children = children,
+    };
+
+    try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
+}
+
+test "array data validateLayout rejects dense union offset out of bounds" {
+    const int_type = DataType{ .int32 = {} };
+    const union_fields = [_]datatype.Field{
+        .{ .name = "a", .data_type = &int_type, .nullable = true },
+        .{ .name = "b", .data_type = &int_type, .nullable = true },
+    };
+    const union_type_ids = [_]i8{ 5, 7 };
+    const dense_union_type = DataType{
+        .dense_union = .{
+            .type_ids = union_type_ids[0..],
+            .fields = union_fields[0..],
+            .mode = .dense,
+        },
+    };
+
+    var child0_values: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child0_values[0..], std.mem.sliceAsBytes(&[_]i32{ 10, 11 }));
+    const child0_data = ArrayData{
+        .data_type = int_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child0_values[0..]) },
+    };
+    var child0_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child0_data);
+    defer child0_ref.release();
+
+    var child1_values: [1 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(child1_values[0..], std.mem.sliceAsBytes(&[_]i32{20}));
+    const child1_data = ArrayData{
+        .data_type = int_type,
+        .length = 1,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child1_values[0..]) },
+    };
+    var child1_ref = try ArrayRef.fromBorrowed(std.testing.allocator, child1_data);
+    defer child1_ref.release();
+
+    const children = &[_]ArrayRef{ child0_ref.retain(), child1_ref.retain() };
+    defer {
+        var owned0 = children[0];
+        owned0.release();
+        var owned1 = children[1];
+        owned1.release();
+    }
+
+    const type_ids: [3]u8 = .{ 5, 7, 5 };
+    const offsets = [_]i32{ 0, 1, 1 };
+    var offsets_bytes: [offsets.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(offsets_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
+
+    const data = ArrayData{
+        .data_type = dense_union_type,
+        .length = 3,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{
+            SharedBuffer.fromSlice(type_ids[0..]),
+            SharedBuffer.fromSlice(offsets_bytes[0..]),
+        },
+        .children = children,
+    };
+
+    try std.testing.expectError(error.InvalidOffsets, data.validateLayout());
 }
 
 test "array data validateLayout rejects struct child count mismatch" {
