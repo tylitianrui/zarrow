@@ -189,12 +189,23 @@ def run_zig_runner(cases: list[dict[str, Any]]) -> dict[str, Any]:
         tmp_path = Path(tmp.name)
 
     try:
-        completed = subprocess.run(
-            ["zig", "build", "compute-compat-check", "--", str(tmp_path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            completed = subprocess.run(
+                ["zig", "build", "compute-compat-check", "--", str(tmp_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            case_names = ", ".join(case.get("name", "<unknown>") for case in cases)
+            raise RuntimeError(
+                "compute-compat-runner failed.\n"
+                f"command: {' '.join(exc.cmd)}\n"
+                f"return code: {exc.returncode}\n"
+                f"cases: {case_names}\n"
+                f"stdout:\n{exc.stdout}\n"
+                f"stderr:\n{exc.stderr}"
+            ) from exc
     finally:
         tmp_path.unlink(missing_ok=True)
 
