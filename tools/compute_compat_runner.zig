@@ -148,7 +148,10 @@ fn addI64Kernel(ctx: *compute.ExecContext, args: []const compute.Datum, options:
         var i: usize = 0;
         while (i < chunk.len) : (i += 1) {
             if (chunk.binaryNullAt(i)) {
-                try builder.appendNull();
+                builder.appendNull() catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.InvalidInput,
+                };
                 continue;
             }
             const lhs = try readI64(chunk.lhs, i);
@@ -157,11 +160,17 @@ fn addI64Kernel(ctx: *compute.ExecContext, args: []const compute.Datum, options:
                 std.math.add(i64, lhs, rhs) catch return error.Overflow
             else
                 lhs +% rhs;
-            try builder.append(sum);
+            builder.append(sum) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidInput,
+            };
         }
     }
 
-    const out = try builder.finish();
+    const out = builder.finish() catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidInput,
+    };
     return compute.Datum.fromArray(out);
 }
 
@@ -183,17 +192,26 @@ fn divideI64Kernel(ctx: *compute.ExecContext, args: []const compute.Datum, optio
         var i: usize = 0;
         while (i < chunk.len) : (i += 1) {
             if (chunk.binaryNullAt(i)) {
-                try builder.appendNull();
+                builder.appendNull() catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.InvalidInput,
+                };
                 continue;
             }
             const lhs = try readI64(chunk.lhs, i);
             const rhs = try readI64(chunk.rhs, i);
             const out = try compute.arithmeticDivI64(lhs, rhs, arithmetic_opts);
-            try builder.append(out);
+            builder.append(out) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidInput,
+            };
         }
     }
 
-    const out = try builder.finish();
+    const out = builder.finish() catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidInput,
+    };
     return compute.Datum.fromArray(out);
 }
 
@@ -218,7 +236,10 @@ fn castI64ToI32Kernel(ctx: *compute.ExecContext, args: []const compute.Datum, op
         var i: usize = 0;
         while (i < chunk.len) : (i += 1) {
             if (chunk.unaryNullAt(i)) {
-                try builder.appendNull();
+                builder.appendNull() catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.InvalidInput,
+                };
                 continue;
             }
             const value_i64 = try readI64(chunk.values, i);
@@ -226,15 +247,21 @@ fn castI64ToI32Kernel(ctx: *compute.ExecContext, args: []const compute.Datum, op
                 try compute.intCastOrInvalidCast(i32, value_i64)
             else
                 @truncate(value_i64);
-            try builder.append(casted);
+            builder.append(casted) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidInput,
+            };
         }
     }
 
-    const out = try builder.finish();
+    const out = builder.finish() catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidInput,
+    };
     return compute.Datum.fromArray(out);
 }
 
-fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !compute.ArrayRef {
+fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.ArrayRef {
     var builder = try zcore.Int64Builder.init(allocator, values.len);
     defer builder.deinit();
     for (values) |v| {
@@ -257,7 +284,7 @@ fn buildDatum(allocator: std.mem.Allocator, input: DatumInput) compute.KernelErr
         .chunked => blk: {
             const values = input.values orelse return error.InvalidInput;
             const chunk_sizes = input.chunks orelse return error.InvalidInput;
-            var refs: std.ArrayList(compute.ArrayRef) = .{};
+            var refs: std.ArrayList(zcore.ArrayRef) = .{};
             defer refs.deinit(allocator);
             errdefer {
                 for (refs.items) |*chunk| {
@@ -493,6 +520,9 @@ pub fn main() !void {
         }
     }
 
-    try std.json.stringify(Output{ .results = results.items }, .{}, std.io.getStdOut().writer());
-    try std.io.getStdOut().writer().writeByte('\n');
+    var out_buf: [4096]u8 = undefined;
+    var out_writer = std.fs.File.stdout().writer(&out_buf);
+    try std.json.Stringify.value(Output{ .results = results.items }, .{}, @constCast(&out_writer.interface));
+    try out_writer.interface.writeByte('\n');
+    try out_writer.interface.flush();
 }

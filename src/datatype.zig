@@ -327,7 +327,7 @@ pub const DataType = union(TypeId) {
     }
 
     pub fn isNumeric(self: DataType) bool {
-        return self.isInteger() or self.isFloating();
+        return self.isInteger() or self.isFloating() or self.isDecimal();
     }
 
     pub fn isDecimal(self: DataType) bool {
@@ -590,6 +590,7 @@ test "data type helpers classify primitive categories" {
     try std.testing.expect(f64_dt.isNumeric());
 
     try std.testing.expect(dec_dt.isDecimal());
+    try std.testing.expect(dec_dt.isNumeric());
     try std.testing.expectEqual(@as(?usize, 128), dec_dt.bitWidth());
 
     try std.testing.expect(str_dt.isStringLike());

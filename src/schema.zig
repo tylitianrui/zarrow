@@ -12,6 +12,23 @@ pub const Schema = struct {
     fields: []const Field,
     endianness: Endianness = .little,
     metadata: ?[]const KeyValue = null,
+
+    pub fn fieldIndex(self: Schema, name: []const u8) ?usize {
+        for (self.fields, 0..) |field, index| {
+            if (std.mem.eql(u8, field.name, name)) return index;
+        }
+        return null;
+    }
+
+    pub fn eql(self: Schema, other: Schema) bool {
+        if (self.endianness != other.endianness) return false;
+        if (!schemaMetadataEql(self.metadata, other.metadata)) return false;
+        if (self.fields.len != other.fields.len) return false;
+        for (self.fields, other.fields) |lhs, rhs| {
+            if (!lhs.eql(rhs)) return false;
+        }
+        return true;
+    }
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -46,6 +63,23 @@ pub const SchemaRef = struct {
     /// Borrow immutable access to the underlying schema.
     pub fn schema(self: SchemaRef) *const Schema {
         return &self.node.schema;
+    }
+
+    pub fn project(self: SchemaRef, allocator: std.mem.Allocator, indices: []const usize) !SchemaRef {
+        const source = self.schema().*;
+        const projected_fields = try allocator.alloc(Field, indices.len);
+        defer allocator.free(projected_fields);
+
+        for (indices, 0..) |index, out_i| {
+            if (index >= source.fields.len) return error.IndexOutOfBounds;
+            projected_fields[out_i] = source.fields[index];
+        }
+
+        return SchemaRef.fromBorrowed(allocator, .{
+            .fields = projected_fields,
+            .endianness = source.endianness,
+            .metadata = source.metadata,
+        });
     }
 
     /// Deep-clone a borrowed (stack/static) Schema into an owned SchemaRef.
@@ -182,6 +216,18 @@ fn cloneMetadata(a: std.mem.Allocator, meta: ?[]const KeyValue) !?[]const KeyVal
     return out;
 }
 
+fn schemaMetadataEql(lhs: ?[]const KeyValue, rhs: ?[]const KeyValue) bool {
+    if (lhs == null or rhs == null) return lhs == null and rhs == null;
+    const l = lhs.?;
+    const r = rhs.?;
+    if (l.len != r.len) return false;
+    for (l, r) |lv, rv| {
+        if (!std.mem.eql(u8, lv.key, rv.key)) return false;
+        if (!std.mem.eql(u8, lv.value, rv.value)) return false;
+    }
+    return true;
+}
+
 test "schema holds fields and defaults" {
     const name_type = datatype.DataType{ .string = {} };
     const id_type = datatype.DataType{ .int64 = {} };
@@ -269,4 +315,81 @@ test "schema ref fromBorrowed deep clones fields" {
     try std.testing.expect(sc.fields[0].data_type.* == .int32);
     try std.testing.expectEqualStrings("name", sc.fields[1].name);
     try std.testing.expect(sc.fields[1].data_type.* == .string);
+}
+
+test "schema fieldIndex finds and misses fields" {
+    const id_type = datatype.DataType{ .int64 = {} };
+    const name_type = datatype.DataType{ .string = {} };
+    const fields = [_]Field{
+        .{ .name = "id", .data_type = &id_type, .nullable = false },
+        .{ .name = "name", .data_type = &name_type, .nullable = true },
+    };
+    const s = Schema{ .fields = fields[0..] };
+
+    try std.testing.expectEqual(@as(?usize, 0), s.fieldIndex("id"));
+    try std.testing.expectEqual(@as(?usize, 1), s.fieldIndex("name"));
+    try std.testing.expectEqual(@as(?usize, null), s.fieldIndex("missing"));
+}
+
+test "schema eql compares endianness fields and metadata" {
+    const id_type = datatype.DataType{ .int32 = {} };
+    const fields_a = [_]Field{
+        .{ .name = "id", .data_type = &id_type, .nullable = false },
+    };
+    const fields_b = [_]Field{
+        .{ .name = "id", .data_type = &id_type, .nullable = false },
+    };
+    const metadata_a = [_]KeyValue{.{ .key = "k", .value = "v" }};
+    const metadata_b = [_]KeyValue{.{ .key = "k", .value = "v" }};
+
+    const lhs = Schema{
+        .fields = fields_a[0..],
+        .endianness = .little,
+        .metadata = metadata_a[0..],
+    };
+    const rhs = Schema{
+        .fields = fields_b[0..],
+        .endianness = .little,
+        .metadata = metadata_b[0..],
+    };
+    const different_endian = Schema{
+        .fields = fields_b[0..],
+        .endianness = .big,
+        .metadata = metadata_b[0..],
+    };
+
+    try std.testing.expect(lhs.eql(rhs));
+    try std.testing.expect(!lhs.eql(different_endian));
+}
+
+test "schema ref project selects ordered fields and deep clones" {
+    const allocator = std.testing.allocator;
+    const id_type = datatype.DataType{ .int64 = {} };
+    const name_type = datatype.DataType{ .string = {} };
+    const score_type = datatype.DataType{ .double = {} };
+    const fields = [_]Field{
+        .{ .name = "id", .data_type = &id_type, .nullable = false },
+        .{ .name = "name", .data_type = &name_type, .nullable = true },
+        .{ .name = "score", .data_type = &score_type, .nullable = true },
+    };
+    const metadata = [_]KeyValue{
+        .{ .key = "owner", .value = "analytics" },
+    };
+    const s = Schema{ .fields = fields[0..], .metadata = metadata[0..] };
+
+    var schema_ref = try SchemaRef.fromBorrowed(allocator, s);
+    defer schema_ref.release();
+
+    var projected = try schema_ref.project(allocator, &[_]usize{ 2, 0 });
+    defer projected.release();
+
+    const out = projected.schema();
+    try std.testing.expectEqual(@as(usize, 2), out.fields.len);
+    try std.testing.expectEqualStrings("score", out.fields[0].name);
+    try std.testing.expectEqualStrings("id", out.fields[1].name);
+    try std.testing.expect(out.metadata != null);
+    try std.testing.expectEqual(@as(usize, 1), out.metadata.?.len);
+    try std.testing.expect(out.fields[0].data_type != schema_ref.schema().fields[2].data_type);
+
+    try std.testing.expectError(error.IndexOutOfBounds, schema_ref.project(allocator, &[_]usize{3}));
 }
