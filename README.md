@@ -87,3 +87,17 @@ Run `zig build run` to see the output:
 ```
 len=3, v0=10, isNull1=true, v2=30
 ```
+
+## Compute API
+
+For compute framework APIs used by downstream `zarrow-compute`, see:
+
+- [docs/compute-api-zh.md](docs/compute-api-zh.md)
+- Example: `examples/compute_lifecycle.zig`
+
+## Downstream Repos
+
+For splitting `zarrow-compute`, `zarrow-flight`, and `zarrow-parquet` into separate repos while depending on `zarrow`, see:
+
+- [docs/multi-repo-split-zh.md](docs/multi-repo-split-zh.md)
+- Scaffold script: `tools/scaffold_downstream_repo.sh`

@@ -87,3 +87,17 @@ pub fn main() !void {
 ```
 len=3, v0=10, isNull1=true, v2=30
 ```
+
+## Compute API
+
+如果你要开发 `zarrow-compute`，请看：
+
+- [Compute API（zarrow-core）使用说明](compute-api-zh.md)
+- 示例：`examples/compute_lifecycle.zig`
+
+## 分库扩展
+
+如果你要把 `zarrow-compute`、`zarrow-flight`、`zarrow-parquet` 拆成独立仓库并依赖 `zarrow`，请看：
+
+- [分库方案与依赖规范](multi-repo-split-zh.md)
+- 脚手架：`tools/scaffold_downstream_repo.sh`

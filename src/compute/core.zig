@@ -27,8 +27,22 @@ pub const ScalarValue = union(enum) {
     f16: f16,
     f32: f32,
     f64: f64,
+    date32: i32,
+    date64: i64,
+    time32: i32,
+    time64: i64,
+    timestamp: i64,
+    duration: i64,
+    interval_months: i32,
+    interval_day_time: i64,
+    interval_month_day_nano: i128,
+    decimal32: i32,
+    decimal64: i64,
     decimal128: i128,
+    decimal256: i256,
+    /// Borrowed UTF-8 bytes. Caller (or ExecContext arena allocator) owns memory.
     string: []const u8,
+    /// Borrowed raw bytes. Caller (or ExecContext arena allocator) owns memory.
     binary: []const u8,
 };
 
@@ -126,6 +140,8 @@ pub const KernelError = error{
     InvalidOptions,
     InvalidInput,
     UnsupportedType,
+    MissingLifecycle,
+    AggregateStateMismatch,
     NoMatchingKernel,
 };
 
@@ -194,6 +210,20 @@ pub const Options = union(OptionsTag) {
 pub const OptionsCheckFn = *const fn (options: Options) bool;
 pub const ResultTypeFn = *const fn (args: []const Datum, options: Options) KernelError!DataType;
 pub const KernelExecFn = *const fn (ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum;
+pub const AggregateInitFn = *const fn (ctx: *ExecContext, options: Options) KernelError!*anyopaque;
+pub const AggregateUpdateFn = *const fn (ctx: *ExecContext, state: *anyopaque, args: []const Datum, options: Options) KernelError!void;
+pub const AggregateMergeFn = *const fn (ctx: *ExecContext, state: *anyopaque, other_state: *anyopaque, options: Options) KernelError!void;
+pub const AggregateFinalizeFn = *const fn (ctx: *ExecContext, state: *anyopaque, options: Options) KernelError!Datum;
+pub const AggregateDeinitFn = *const fn (ctx: *ExecContext, state: *anyopaque) void;
+
+/// Stateful aggregate lifecycle callbacks used for incremental/grouped aggregation.
+pub const AggregateLifecycle = struct {
+    init: AggregateInitFn,
+    update: AggregateUpdateFn,
+    merge: AggregateMergeFn,
+    finalize: AggregateFinalizeFn,
+    deinit: AggregateDeinitFn,
+};
 
 /// Kernel signature metadata used for dispatch and type inference.
 pub const KernelSignature = struct {
@@ -310,6 +340,40 @@ pub const KernelSignature = struct {
 pub const Kernel = struct {
     signature: KernelSignature,
     exec: KernelExecFn,
+    aggregate_lifecycle: ?AggregateLifecycle = null,
+
+    pub fn supportsAggregateLifecycle(self: Kernel) bool {
+        return self.aggregate_lifecycle != null;
+    }
+};
+
+/// Live aggregate state handle created from an aggregate kernel lifecycle.
+pub const AggregateSession = struct {
+    ctx: *ExecContext,
+    kernel: *const Kernel,
+    lifecycle: AggregateLifecycle,
+    options: Options,
+    state: *anyopaque,
+
+    pub fn update(self: *AggregateSession, args: []const Datum) KernelError!void {
+        if (!self.kernel.signature.matches(args)) return error.NoMatchingKernel;
+        if (!self.kernel.signature.matchesOptions(self.options)) return error.InvalidOptions;
+        return self.lifecycle.update(self.ctx, self.state, args, self.options);
+    }
+
+    pub fn merge(self: *AggregateSession, other: *AggregateSession) KernelError!void {
+        if (self.kernel != other.kernel) return error.AggregateStateMismatch;
+        return self.lifecycle.merge(self.ctx, self.state, other.state, self.options);
+    }
+
+    pub fn finalize(self: *AggregateSession) KernelError!Datum {
+        return self.lifecycle.finalize(self.ctx, self.state, self.options);
+    }
+
+    pub fn deinit(self: *AggregateSession) void {
+        self.lifecycle.deinit(self.ctx, self.state);
+        self.* = undefined;
+    }
 };
 
 const function_kind_count = @typeInfo(FunctionKind).@"enum".fields.len;
@@ -541,6 +605,26 @@ pub const FunctionRegistry = struct {
         return self.invoke(ctx, name, .aggregate, args, options);
     }
 
+    /// Create a stateful aggregate session from an aggregate kernel lifecycle.
+    pub fn beginAggregate(
+        self: *const FunctionRegistry,
+        ctx: *ExecContext,
+        name: []const u8,
+        prototype_args: []const Datum,
+        options: Options,
+    ) KernelError!AggregateSession {
+        const kernel = try self.resolveKernel(name, .aggregate, prototype_args, options);
+        const lifecycle = kernel.aggregate_lifecycle orelse return error.MissingLifecycle;
+        const state = try lifecycle.init(ctx, options);
+        return .{
+            .ctx = ctx,
+            .kernel = kernel,
+            .lifecycle = lifecycle,
+            .options = options,
+            .state = state,
+        };
+    }
+
     fn findFunctionIndex(self: *const FunctionRegistry, name: []const u8, kind: FunctionKind) ?usize {
         const idx = self.getIndexMapConst(kind).get(name) orelse return null;
         if (idx >= self.functions.items.len) return null;
@@ -564,15 +648,68 @@ fn initFunctionIndexMaps(allocator: std.mem.Allocator) [function_kind_count]Func
     return maps;
 }
 
+/// Overflow policy for arithmetic kernels.
+pub const OverflowMode = enum {
+    checked,
+    wrapping,
+    saturating,
+};
+
+/// Execution configuration shared by all kernel invocations in a context.
+pub const ExecConfig = struct {
+    /// Safe cast mode for cast kernels (fail on lossy casts when true).
+    safe_cast: bool = true,
+    /// Overflow policy for arithmetic kernels.
+    overflow_mode: OverflowMode = .checked,
+    /// Preferred thread count for vector/aggregate execution.
+    threads: usize = 1,
+    /// Optional arena-like allocator used for temporary/borrowed scalar payloads.
+    arena_allocator: ?std.mem.Allocator = null,
+};
+
 pub const ExecContext = struct {
     allocator: std.mem.Allocator,
     registry: *const FunctionRegistry,
+    config: ExecConfig,
 
     pub fn init(allocator: std.mem.Allocator, registry: *const FunctionRegistry) ExecContext {
+        return initWithConfig(allocator, registry, .{});
+    }
+
+    pub fn initWithConfig(allocator: std.mem.Allocator, registry: *const FunctionRegistry, config: ExecConfig) ExecContext {
+        var normalized = config;
+        if (normalized.threads == 0) normalized.threads = 1;
         return .{
             .allocator = allocator,
             .registry = registry,
+            .config = normalized,
         };
+    }
+
+    pub fn tempAllocator(self: *const ExecContext) std.mem.Allocator {
+        return self.config.arena_allocator orelse self.allocator;
+    }
+
+    /// Duplicate UTF-8 bytes into the context temp allocator for scalar string payloads.
+    pub fn dupScalarString(self: *const ExecContext, value: []const u8) KernelError![]const u8 {
+        return self.tempAllocator().dupe(u8, value) catch error.OutOfMemory;
+    }
+
+    /// Duplicate raw bytes into the context temp allocator for scalar binary payloads.
+    pub fn dupScalarBinary(self: *const ExecContext, value: []const u8) KernelError![]const u8 {
+        return self.tempAllocator().dupe(u8, value) catch error.OutOfMemory;
+    }
+
+    pub fn safeCastEnabled(self: *const ExecContext) bool {
+        return self.config.safe_cast;
+    }
+
+    pub fn overflowMode(self: *const ExecContext) OverflowMode {
+        return self.config.overflow_mode;
+    }
+
+    pub fn threads(self: *const ExecContext) usize {
+        return self.config.threads;
     }
 
     pub fn invoke(
@@ -610,6 +747,15 @@ pub const ExecContext = struct {
         options: Options,
     ) KernelError!Datum {
         return self.registry.invokeAggregate(self, name, args, options);
+    }
+
+    pub fn beginAggregate(
+        self: *ExecContext,
+        name: []const u8,
+        prototype_args: []const Datum,
+        options: Options,
+    ) KernelError!AggregateSession {
+        return self.registry.beginAggregate(self, name, prototype_args, options);
     }
 };
 
@@ -700,6 +846,55 @@ fn castResultType(args: []const Datum, options: Options) KernelError!DataType {
         .cast => |cast_opts| cast_opts.to_type orelse args[0].dataType(),
         else => error.InvalidOptions,
     };
+}
+
+fn countAggregateResultType(args: []const Datum, options: Options) KernelError!DataType {
+    _ = args;
+    _ = options;
+    return .{ .int64 = {} };
+}
+
+const CountAggState = struct {
+    count: usize,
+};
+
+fn countLifecycleInit(ctx: *ExecContext, options: Options) KernelError!*anyopaque {
+    _ = options;
+    const state = ctx.allocator.create(CountAggState) catch return error.OutOfMemory;
+    state.* = .{ .count = 0 };
+    return state;
+}
+
+fn countLifecycleUpdate(ctx: *ExecContext, state_ptr: *anyopaque, args: []const Datum, options: Options) KernelError!void {
+    _ = ctx;
+    _ = options;
+    if (!unaryArray(args)) return error.InvalidInput;
+    const state: *CountAggState = @ptrCast(@alignCast(state_ptr));
+    const count = args[0].array.data().length;
+    state.count = std.math.add(usize, state.count, count) catch return error.InvalidInput;
+}
+
+fn countLifecycleMerge(ctx: *ExecContext, state_ptr: *anyopaque, other_ptr: *anyopaque, options: Options) KernelError!void {
+    _ = ctx;
+    _ = options;
+    const state: *CountAggState = @ptrCast(@alignCast(state_ptr));
+    const other: *CountAggState = @ptrCast(@alignCast(other_ptr));
+    state.count = std.math.add(usize, state.count, other.count) catch return error.InvalidInput;
+}
+
+fn countLifecycleFinalize(ctx: *ExecContext, state_ptr: *anyopaque, options: Options) KernelError!Datum {
+    _ = ctx;
+    _ = options;
+    const state: *CountAggState = @ptrCast(@alignCast(state_ptr));
+    return Datum.fromScalar(.{
+        .data_type = .{ .int64 = {} },
+        .value = .{ .i64 = @intCast(state.count) },
+    });
+}
+
+fn countLifecycleDeinit(ctx: *ExecContext, state_ptr: *anyopaque) void {
+    const state: *CountAggState = @ptrCast(@alignCast(state_ptr));
+    ctx.allocator.destroy(state);
 }
 
 test "compute registry registers and invokes scalar kernel" {
@@ -1059,4 +1254,150 @@ test "compute explain helpers provide readable diagnostics" {
 
     const result_type_reason = registry.explainResolveResultTypeFailure("cast_identity", .scalar, args[0..], bad_options);
     try std.testing.expect(std.mem.eql(u8, result_type_reason, "kernel matched args but options were invalid"));
+}
+
+test "compute scalar value temporal and decimal coverage" {
+    const scalars = [_]Scalar{
+        .{ .data_type = .{ .date32 = {} }, .value = .{ .date32 = 18_630 } },
+        .{ .data_type = .{ .date64 = {} }, .value = .{ .date64 = 1_609_545_600_000 } },
+        .{ .data_type = .{ .time32 = .{ .unit = .millisecond } }, .value = .{ .time32 = 1234 } },
+        .{ .data_type = .{ .time64 = .{ .unit = .nanosecond } }, .value = .{ .time64 = 99_000 } },
+        .{ .data_type = .{ .timestamp = .{ .unit = .microsecond, .timezone = "UTC" } }, .value = .{ .timestamp = 1_700_000_000_123_456 } },
+        .{ .data_type = .{ .duration = .{ .unit = .nanosecond } }, .value = .{ .duration = 42 } },
+        .{ .data_type = .{ .interval_months = .{ .unit = .months } }, .value = .{ .interval_months = 7 } },
+        .{ .data_type = .{ .interval_day_time = .{ .unit = .day_time } }, .value = .{ .interval_day_time = -43_200_000 } },
+        .{ .data_type = .{ .interval_month_day_nano = .{ .unit = .month_day_nano } }, .value = .{ .interval_month_day_nano = -123_456_789_012_345_678 } },
+        .{ .data_type = .{ .decimal32 = .{ .precision = 9, .scale = 2 } }, .value = .{ .decimal32 = 123_45 } },
+        .{ .data_type = .{ .decimal64 = .{ .precision = 18, .scale = 4 } }, .value = .{ .decimal64 = -9_876_543_210 } },
+        .{ .data_type = .{ .decimal128 = .{ .precision = 38, .scale = 10 } }, .value = .{ .decimal128 = -987_654_321_098_765_432 } },
+        .{ .data_type = .{ .decimal256 = .{ .precision = 76, .scale = 20 } }, .value = .{ .decimal256 = -987_654_321_098_765_432_109_876_543_210 } },
+        .{ .data_type = .{ .string = {} }, .value = .{ .string = "borrowed-string" } },
+        .{ .data_type = .{ .binary = {} }, .value = .{ .binary = "borrowed-binary" } },
+    };
+
+    try std.testing.expectEqual(@as(usize, 15), scalars.len);
+    try std.testing.expect(scalars[0].data_type == .date32);
+    try std.testing.expect(scalars[12].data_type == .decimal256);
+    try std.testing.expectEqual(@as(i32, 18_630), scalars[0].value.date32);
+    try std.testing.expectEqual(@as(i256, -987_654_321_098_765_432_109_876_543_210), scalars[12].value.decimal256);
+    try std.testing.expectEqualStrings("borrowed-string", scalars[13].value.string);
+    try std.testing.expectEqualStrings("borrowed-binary", scalars[14].value.binary);
+}
+
+test "compute exec context config and scalar payload duplication" {
+    const allocator = std.testing.allocator;
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var ctx = ExecContext.initWithConfig(allocator, &registry, .{
+        .safe_cast = false,
+        .overflow_mode = .wrapping,
+        .threads = 0,
+        .arena_allocator = arena.allocator(),
+    });
+    try std.testing.expect(!ctx.safeCastEnabled());
+    try std.testing.expect(ctx.overflowMode() == .wrapping);
+    try std.testing.expectEqual(@as(usize, 1), ctx.threads());
+
+    const s = try ctx.dupScalarString("hello");
+    const b = try ctx.dupScalarBinary("world");
+    try std.testing.expectEqualStrings("hello", s);
+    try std.testing.expectEqualStrings("world", b);
+}
+
+test "compute aggregate lifecycle session supports init/update/merge/finalize" {
+    const allocator = std.testing.allocator;
+    const int32_builder = @import("../array/array.zig").Int32Builder;
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.registerAggregateKernel("count_stateful", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = unaryArray,
+            .result_type_fn = countAggregateResultType,
+        },
+        .exec = countLenAggregateKernel,
+        .aggregate_lifecycle = .{
+            .init = countLifecycleInit,
+            .update = countLifecycleUpdate,
+            .merge = countLifecycleMerge,
+            .finalize = countLifecycleFinalize,
+            .deinit = countLifecycleDeinit,
+        },
+    });
+
+    var b1 = try int32_builder.init(allocator, 3);
+    defer b1.deinit();
+    try b1.append(1);
+    try b1.append(2);
+    try b1.append(3);
+    var a1 = try b1.finish();
+    defer a1.release();
+
+    var b2 = try int32_builder.init(allocator, 2);
+    defer b2.deinit();
+    try b2.append(10);
+    try b2.append(20);
+    var a2 = try b2.finish();
+    defer a2.release();
+
+    const args1 = [_]Datum{Datum.fromArray(a1.retain())};
+    defer {
+        var d = args1[0];
+        d.release();
+    }
+    const args2 = [_]Datum{Datum.fromArray(a2.retain())};
+    defer {
+        var d = args2[0];
+        d.release();
+    }
+
+    var ctx = ExecContext.init(allocator, &registry);
+    var s1 = try ctx.beginAggregate("count_stateful", args1[0..], Options.noneValue());
+    defer s1.deinit();
+    var s2 = try ctx.beginAggregate("count_stateful", args2[0..], Options.noneValue());
+    defer s2.deinit();
+
+    try s1.update(args1[0..]);
+    try s2.update(args2[0..]);
+    try s1.merge(&s2);
+
+    var out = try s1.finalize();
+    defer out.release();
+    try std.testing.expect(out.isScalar());
+    try std.testing.expectEqual(@as(i64, 5), out.scalar.value.i64);
+}
+
+test "compute beginAggregate returns MissingLifecycle when not provided" {
+    const allocator = std.testing.allocator;
+    const int32_builder = @import("../array/array.zig").Int32Builder;
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.registerAggregateKernel("count_stateless_only", .{
+        .signature = KernelSignature.unary(unaryArray),
+        .exec = countLenAggregateKernel,
+    });
+
+    var b = try int32_builder.init(allocator, 1);
+    defer b.deinit();
+    try b.append(1);
+    var arr = try b.finish();
+    defer arr.release();
+
+    const args = [_]Datum{Datum.fromArray(arr.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var ctx = ExecContext.init(allocator, &registry);
+    try std.testing.expectError(
+        error.MissingLifecycle,
+        ctx.beginAggregate("count_stateless_only", args[0..], Options.noneValue()),
+    );
 }
