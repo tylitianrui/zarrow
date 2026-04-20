@@ -11,6 +11,7 @@ pub const ScalarValue = core.ScalarValue;
 pub const Scalar = core.Scalar;
 pub const Datum = core.Datum;
 pub const ChunkedArray = core.ChunkedArray;
+pub const DataType = core.DataType;
 pub const KernelError = core.KernelError;
 pub const Function = core.Function;
 pub const TypeCheckFn = core.TypeCheckFn;
