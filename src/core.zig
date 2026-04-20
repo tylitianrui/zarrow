@@ -156,6 +156,11 @@ pub const ComputeScalarValue = compute_mod.ScalarValue;
 pub const ComputeScalar = compute_mod.Scalar;
 pub const ComputeDatum = compute_mod.Datum;
 pub const ComputeChunkedArray = compute_mod.ChunkedArray;
+pub const ComputeExecChunkValue = compute_mod.ExecChunkValue;
+pub const ComputeUnaryExecChunk = compute_mod.UnaryExecChunk;
+pub const ComputeBinaryExecChunk = compute_mod.BinaryExecChunk;
+pub const ComputeUnaryExecChunkIterator = compute_mod.UnaryExecChunkIterator;
+pub const ComputeBinaryExecChunkIterator = compute_mod.BinaryExecChunkIterator;
 pub const ComputeKernelError = compute_mod.KernelError;
 pub const ComputeTypeCheckFn = compute_mod.TypeCheckFn;
 pub const ComputeOptionsCheckFn = compute_mod.OptionsCheckFn;
@@ -174,6 +179,9 @@ pub const ComputeKernelSignature = compute_mod.KernelSignature;
 pub const ComputeKernel = compute_mod.Kernel;
 pub const ComputeFunctionRegistry = compute_mod.FunctionRegistry;
 pub const ComputeExecContext = compute_mod.ExecContext;
+pub const computeUnaryNullPropagates = compute_mod.unaryNullPropagates;
+pub const computeBinaryNullPropagates = compute_mod.binaryNullPropagates;
+pub const computeInferBinaryExecLen = compute_mod.inferBinaryExecLen;
 
 test {
     _ = @import("buffer.zig");

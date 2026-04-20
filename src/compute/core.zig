@@ -759,6 +759,262 @@ pub const ExecContext = struct {
     }
 };
 
+pub const ExecChunkValue = union(enum) {
+    array: ArrayRef,
+    scalar: Scalar,
+
+    pub fn dataType(self: ExecChunkValue) DataType {
+        return switch (self) {
+            .array => |arr| arr.data().data_type,
+            .scalar => |s| s.data_type,
+        };
+    }
+
+    pub fn isNullAt(self: ExecChunkValue, logical_index: usize) bool {
+        return switch (self) {
+            .array => |arr| blk: {
+                std.debug.assert(logical_index < arr.data().length);
+                break :blk arr.data().isNull(logical_index);
+            },
+            .scalar => |s| blk: {
+                break :blk switch (s.value) {
+                    .null => true,
+                    else => false,
+                };
+            },
+        };
+    }
+
+    pub fn release(self: *ExecChunkValue) void {
+        switch (self.*) {
+            .array => |*arr| arr.release(),
+            .scalar => {},
+        }
+    }
+};
+
+/// Common null propagation helper for unary kernels.
+pub fn unaryNullPropagates(input: ExecChunkValue, logical_index: usize) bool {
+    return input.isNullAt(logical_index);
+}
+
+/// Common null propagation helper for binary kernels.
+pub fn binaryNullPropagates(lhs: ExecChunkValue, rhs: ExecChunkValue, logical_index: usize) bool {
+    return lhs.isNullAt(logical_index) or rhs.isNullAt(logical_index);
+}
+
+pub const UnaryExecChunk = struct {
+    values: ExecChunkValue,
+    len: usize,
+
+    pub fn unaryNullAt(self: UnaryExecChunk, logical_index: usize) bool {
+        std.debug.assert(logical_index < self.len);
+        return unaryNullPropagates(self.values, logical_index);
+    }
+
+    pub fn deinit(self: *UnaryExecChunk) void {
+        self.values.release();
+        self.* = undefined;
+    }
+};
+
+pub const BinaryExecChunk = struct {
+    lhs: ExecChunkValue,
+    rhs: ExecChunkValue,
+    len: usize,
+
+    pub fn binaryNullAt(self: BinaryExecChunk, logical_index: usize) bool {
+        std.debug.assert(logical_index < self.len);
+        return binaryNullPropagates(self.lhs, self.rhs, logical_index);
+    }
+
+    pub fn deinit(self: *BinaryExecChunk) void {
+        self.lhs.release();
+        self.rhs.release();
+        self.* = undefined;
+    }
+};
+
+fn datumArrayLikeLen(datum: Datum) ?usize {
+    return switch (datum) {
+        .array => |arr| arr.data().length,
+        .chunked => |chunks| chunks.len(),
+        .scalar => null,
+    };
+}
+
+/// Infer binary execution length with scalar-broadcast semantics.
+pub fn inferBinaryExecLen(lhs: Datum, rhs: Datum) KernelError!usize {
+    const lhs_len = datumArrayLikeLen(lhs);
+    const rhs_len = datumArrayLikeLen(rhs);
+
+    if (lhs_len == null and rhs_len == null) return 1;
+    if (lhs_len == null) return rhs_len.?;
+    if (rhs_len == null) return lhs_len.?;
+    if (lhs_len.? != rhs_len.?) return error.InvalidInput;
+    return lhs_len.?;
+}
+
+const ExecDatumCursor = union(enum) {
+    array: struct {
+        array: ArrayRef,
+        offset: usize = 0,
+    },
+    chunked: struct {
+        chunked: ChunkedArray,
+        chunk_index: usize = 0,
+        offset: usize = 0,
+    },
+    scalar: struct {
+        scalar: Scalar,
+    },
+
+    fn init(datum: Datum) ExecDatumCursor {
+        return switch (datum) {
+            .array => |arr| .{ .array = .{ .array = arr } },
+            .chunked => |chunks| .{ .chunked = .{ .chunked = chunks } },
+            .scalar => |s| .{ .scalar = .{ .scalar = s } },
+        };
+    }
+
+    fn normalize(self: *ExecDatumCursor) void {
+        switch (self.*) {
+            .array => {},
+            .chunked => |*s| {
+                while (s.chunk_index < s.chunked.numChunks()) {
+                    const chunk_len = s.chunked.chunk(s.chunk_index).data().length;
+                    if (chunk_len == 0 or s.offset == chunk_len) {
+                        s.chunk_index += 1;
+                        s.offset = 0;
+                        continue;
+                    }
+                    break;
+                }
+            },
+            .scalar => {},
+        }
+    }
+
+    fn remainingCurrent(self: *ExecDatumCursor) usize {
+        self.normalize();
+        return switch (self.*) {
+            .array => |*s| s.array.data().length - s.offset,
+            .chunked => |*s| blk: {
+                if (s.chunk_index >= s.chunked.numChunks()) break :blk 0;
+                const chunk_len = s.chunked.chunk(s.chunk_index).data().length;
+                break :blk chunk_len - s.offset;
+            },
+            .scalar => std.math.maxInt(usize),
+        };
+    }
+
+    fn take(self: *ExecDatumCursor, len: usize) KernelError!ExecChunkValue {
+        self.normalize();
+        return switch (self.*) {
+            .array => |*s| blk: {
+                const arr_len = s.array.data().length;
+                if (len > arr_len - s.offset) return error.InvalidInput;
+                const out = if (s.offset == 0 and len == arr_len)
+                    s.array.retain()
+                else
+                    s.array.slice(s.offset, len) catch return error.OutOfMemory;
+                s.offset += len;
+                break :blk .{ .array = out };
+            },
+            .chunked => |*s| blk: {
+                if (s.chunk_index >= s.chunked.numChunks()) return error.InvalidInput;
+                const chunk_ref = s.chunked.chunk(s.chunk_index).*;
+                const chunk_len = chunk_ref.data().length;
+                if (len > chunk_len - s.offset) return error.InvalidInput;
+
+                const out = if (s.offset == 0 and len == chunk_len)
+                    chunk_ref.retain()
+                else
+                    chunk_ref.slice(s.offset, len) catch return error.OutOfMemory;
+
+                s.offset += len;
+                if (s.offset == chunk_len) {
+                    s.chunk_index += 1;
+                    s.offset = 0;
+                }
+                break :blk .{ .array = out };
+            },
+            .scalar => |s| .{ .scalar = s.scalar },
+        };
+    }
+};
+
+pub const UnaryExecChunkIterator = struct {
+    cursor: ExecDatumCursor,
+    total_len: usize,
+    consumed: usize = 0,
+
+    pub fn init(datum: Datum) UnaryExecChunkIterator {
+        return .{
+            .cursor = ExecDatumCursor.init(datum),
+            .total_len = switch (datum) {
+                .array => |arr| arr.data().length,
+                .chunked => |chunks| chunks.len(),
+                .scalar => 1,
+            },
+        };
+    }
+
+    pub fn next(self: *UnaryExecChunkIterator) KernelError!?UnaryExecChunk {
+        if (self.consumed >= self.total_len) return null;
+        const remaining_total = self.total_len - self.consumed;
+        const current_remaining = self.cursor.remainingCurrent();
+        if (current_remaining == 0) return error.InvalidInput;
+        const run_len = @min(remaining_total, current_remaining);
+        var values = try self.cursor.take(run_len);
+        errdefer values.release();
+        self.consumed += run_len;
+        return .{
+            .values = values,
+            .len = run_len,
+        };
+    }
+};
+
+pub const BinaryExecChunkIterator = struct {
+    lhs_cursor: ExecDatumCursor,
+    rhs_cursor: ExecDatumCursor,
+    total_len: usize,
+    consumed: usize = 0,
+
+    pub fn init(lhs: Datum, rhs: Datum) KernelError!BinaryExecChunkIterator {
+        return .{
+            .lhs_cursor = ExecDatumCursor.init(lhs),
+            .rhs_cursor = ExecDatumCursor.init(rhs),
+            .total_len = try inferBinaryExecLen(lhs, rhs),
+        };
+    }
+
+    pub fn next(self: *BinaryExecChunkIterator) KernelError!?BinaryExecChunk {
+        if (self.consumed >= self.total_len) return null;
+        const remaining_total = self.total_len - self.consumed;
+
+        const lhs_remaining = self.lhs_cursor.remainingCurrent();
+        const rhs_remaining = self.rhs_cursor.remainingCurrent();
+        if (lhs_remaining == 0 or rhs_remaining == 0) return error.InvalidInput;
+
+        const run_len = @min(remaining_total, @min(lhs_remaining, rhs_remaining));
+        if (run_len == 0) return error.InvalidInput;
+
+        var lhs = try self.lhs_cursor.take(run_len);
+        errdefer lhs.release();
+        var rhs = try self.rhs_cursor.take(run_len);
+        errdefer rhs.release();
+
+        self.consumed += run_len;
+        return .{
+            .lhs = lhs,
+            .rhs = rhs,
+            .len = run_len,
+        };
+    }
+};
+
 pub fn hasArity(args: []const Datum, expected_arity: usize) bool {
     return args.len == expected_arity;
 }
@@ -895,6 +1151,21 @@ fn countLifecycleFinalize(ctx: *ExecContext, state_ptr: *anyopaque, options: Opt
 fn countLifecycleDeinit(ctx: *ExecContext, state_ptr: *anyopaque) void {
     const state: *CountAggState = @ptrCast(@alignCast(state_ptr));
     ctx.allocator.destroy(state);
+}
+
+fn makeInt32Array(allocator: std.mem.Allocator, values: []const ?i32) !ArrayRef {
+    const int32_builder = @import("../array/array.zig").Int32Builder;
+    var builder = try int32_builder.init(allocator, values.len);
+    defer builder.deinit();
+
+    for (values) |v| {
+        if (v) |value| {
+            try builder.append(value);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
 }
 
 test "compute registry registers and invokes scalar kernel" {
@@ -1400,4 +1671,151 @@ test "compute beginAggregate returns MissingLifecycle when not provided" {
         error.MissingLifecycle,
         ctx.beginAggregate("count_stateless_only", args[0..], Options.noneValue()),
     );
+}
+
+test "compute execution helpers align chunked chunks for binary kernels" {
+    const allocator = std.testing.allocator;
+    const int32_array = @import("../array/array.zig").Int32Array;
+
+    var l0 = try makeInt32Array(allocator, &[_]?i32{ 10, 11 });
+    defer l0.release();
+    var l1 = try makeInt32Array(allocator, &[_]?i32{ 20, 21, 22 });
+    defer l1.release();
+    var r0 = try makeInt32Array(allocator, &[_]?i32{100});
+    defer r0.release();
+    var r1 = try makeInt32Array(allocator, &[_]?i32{ 101, 102, 103, 104 });
+    defer r1.release();
+
+    var left_chunks = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ l0, l1 });
+    defer left_chunks.release();
+    var right_chunks = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ r0, r1 });
+    defer right_chunks.release();
+
+    var lhs = Datum.fromChunked(left_chunks.retain());
+    defer lhs.release();
+    var rhs = Datum.fromChunked(right_chunks.retain());
+    defer rhs.release();
+
+    var iter = try BinaryExecChunkIterator.init(lhs, rhs);
+    const expected_chunk_lengths = [_]usize{ 1, 1, 3 };
+    var idx: usize = 0;
+    while (try iter.next()) |chunk_value| : (idx += 1) {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        try std.testing.expect(idx < expected_chunk_lengths.len);
+        try std.testing.expectEqual(expected_chunk_lengths[idx], chunk.len);
+        try std.testing.expect(chunk.lhs == .array);
+        try std.testing.expect(chunk.rhs == .array);
+    }
+    try std.testing.expectEqual(expected_chunk_lengths.len, idx);
+
+    var iter_values = try BinaryExecChunkIterator.init(lhs, rhs);
+
+    var c0 = (try iter_values.next()).?;
+    defer c0.deinit();
+    const l0_arr = int32_array{ .data = c0.lhs.array.data() };
+    const r0_arr = int32_array{ .data = c0.rhs.array.data() };
+    try std.testing.expectEqual(@as(i32, 10), l0_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 100), r0_arr.value(0));
+
+    var c1 = (try iter_values.next()).?;
+    defer c1.deinit();
+    const l1_arr = int32_array{ .data = c1.lhs.array.data() };
+    const r1_arr = int32_array{ .data = c1.rhs.array.data() };
+    try std.testing.expectEqual(@as(i32, 11), l1_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 101), r1_arr.value(0));
+
+    var c2 = (try iter_values.next()).?;
+    defer c2.deinit();
+    const l2_arr = int32_array{ .data = c2.lhs.array.data() };
+    const r2_arr = int32_array{ .data = c2.rhs.array.data() };
+    try std.testing.expectEqual(@as(i32, 20), l2_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 22), l2_arr.value(2));
+    try std.testing.expectEqual(@as(i32, 102), r2_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 104), r2_arr.value(2));
+
+    try std.testing.expect((try iter_values.next()) == null);
+}
+
+test "compute execution helpers support scalar broadcast and null propagation" {
+    const allocator = std.testing.allocator;
+
+    var r0 = try makeInt32Array(allocator, &[_]?i32{ 1, null });
+    defer r0.release();
+    var r1 = try makeInt32Array(allocator, &[_]?i32{3});
+    defer r1.release();
+    var right_chunks = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ r0, r1 });
+    defer right_chunks.release();
+
+    const lhs = Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .null,
+    });
+    var rhs = Datum.fromChunked(right_chunks.retain());
+    defer rhs.release();
+
+    try std.testing.expectEqual(@as(usize, 3), try inferBinaryExecLen(lhs, rhs));
+    var iter = try BinaryExecChunkIterator.init(lhs, rhs);
+
+    var seen: usize = 0;
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            try std.testing.expect(binaryNullPropagates(chunk.lhs, chunk.rhs, i));
+            try std.testing.expect(chunk.binaryNullAt(i));
+            seen += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), seen);
+}
+
+test "compute unary execution helper propagates nulls over chunked input" {
+    const allocator = std.testing.allocator;
+
+    var c0 = try makeInt32Array(allocator, &[_]?i32{ 7, null });
+    defer c0.release();
+    var c1 = try makeInt32Array(allocator, &[_]?i32{ null, 9 });
+    defer c1.release();
+    var chunks = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ c0, c1 });
+    defer chunks.release();
+
+    var input = Datum.fromChunked(chunks.retain());
+    defer input.release();
+
+    var iter = UnaryExecChunkIterator.init(input);
+    var first = (try iter.next()).?;
+    defer first.deinit();
+    try std.testing.expect(!first.unaryNullAt(0));
+    try std.testing.expect(first.unaryNullAt(1));
+
+    var second = (try iter.next()).?;
+    defer second.deinit();
+    try std.testing.expect(unaryNullPropagates(second.values, 0));
+    try std.testing.expect(!unaryNullPropagates(second.values, 1));
+
+    try std.testing.expect((try iter.next()) == null);
+}
+
+test "compute inferBinaryExecLen rejects non-broadcast length mismatch" {
+    const allocator = std.testing.allocator;
+
+    var l = try makeInt32Array(allocator, &[_]?i32{ 1, 2 });
+    defer l.release();
+    var r = try makeInt32Array(allocator, &[_]?i32{ 1, 2, 3 });
+    defer r.release();
+
+    const lhs = Datum.fromArray(l.retain());
+    defer {
+        var d = lhs;
+        d.release();
+    }
+    const rhs = Datum.fromArray(r.retain());
+    defer {
+        var d = rhs;
+        d.release();
+    }
+
+    try std.testing.expectError(error.InvalidInput, inferBinaryExecLen(lhs, rhs));
 }

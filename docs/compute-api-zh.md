@@ -96,3 +96,22 @@
 
 - 示例：`examples/compute_lifecycle.zig`
 - 单测入口：`src/compute/core.zig`
+
+## 10. 数组执行工具层（新）
+
+为下游 `zarrow-compute` 提供了通用执行 helper：
+
+- null 传播：
+  - `unaryNullPropagates(...)`
+  - `binaryNullPropagates(...)`
+- scalar broadcast：
+  - `inferBinaryExecLen(lhs, rhs)`（支持 scalar 与 array/chunked 自动广播）
+- chunked 对齐迭代：
+  - `UnaryExecChunkIterator`
+  - `BinaryExecChunkIterator`
+
+典型流程：
+
+- 先用 `BinaryExecChunkIterator.init(...)` 创建迭代器
+- 每次 `next()` 得到对齐分块（`BinaryExecChunk`）
+- 在分块内用 `binaryNullAt` 或 `binaryNullPropagates` 处理 null 语义
