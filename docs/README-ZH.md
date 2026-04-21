@@ -4,12 +4,6 @@
 
 Apache Arrow 的 Zig 实现。
 
-## 状态
-
-- 开发状态：Active development（持续迭代中）
-- 稳定性：核心功能可用，但 API 与覆盖范围仍在完善
-- 测试基线：提交前应保证 `zig build test` 通过
-
 ## 元数据
 
 | 项目 | 值 |

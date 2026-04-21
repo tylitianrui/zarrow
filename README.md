@@ -4,12 +4,6 @@
 
 A Zig implementation of Apache Arrow.
 
-## Status
-
-- Development: Active development (continuously evolving)
-- Stability: Core functionality is usable; API and coverage are still being refined
-- Test baseline: `zig build test` must pass before committing
-
 ## Metadata
 
 | Field | Value |
