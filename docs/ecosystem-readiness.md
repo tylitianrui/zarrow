@@ -271,7 +271,7 @@ pub const KernelError = error{
 - 写入 Parquet 文件：接收 `Table` / `[]RecordBatch` → 编码 → 写出 RowGroup
 - 类型映射：Parquet physical type ↔ Arrow logical type
 
-> **注意**：zarrow-parquet **完全不依赖** IPC（flatbufferz），只依赖 zarrow 的 Array、Schema、RecordBatch 层。
+> **注意**：zarrow-parquet **完全不依赖** IPC（`ipc_schema`/`fbs_runtime`），只依赖 zarrow 的 Array、Schema、RecordBatch 层。
 
 ### 4.2 当前已满足的接口
 
@@ -384,18 +384,18 @@ pub fn project(self: SchemaRef, allocator: std.mem.Allocator, indices: []const u
 
 ### 当前问题
 
-zarrow 目前是**单一模块**，强制携带 `flatbufferz` / `arrow_fbs` 依赖：
+zarrow 目前是**单一模块**。虽然没有外部 `flatbufferz` 依赖，但仍会携带 IPC 相关模块（`ipc_schema` / `fbs_runtime`）：
 
 ```zig
 // 当前 build.zig（简化）
 const zarrow = b.addModule("zarrow", .{
     .root_source_file = b.path("src/root.zig"),
 });
-zarrow.addImport("flatbufferz", flatbufferz_mod);
-zarrow.addImport("arrow_fbs",   arrow_fbs_mod);
+zarrow.addImport("fbs_runtime", fbs_runtime_mod);
+zarrow.addImport("ipc_schema",  ipc_schema_mod);
 ```
 
-zarrow-parquet **不需要** IPC，但被迫引入 flatbufferz，徒增依赖和编译时间。
+zarrow-parquet **不需要** IPC，但在单模块形态下仍会被动携带 IPC 相关编译负担。
 
 ### 解决方案：增加 `zarrow-core` 模块
 
@@ -403,14 +403,14 @@ zarrow-parquet **不需要** IPC，但被迫引入 flatbufferz，徒增依赖和
 // 新增：无 IPC 依赖的纯核心模块
 const zarrow_core = b.addModule("zarrow-core", .{
     .root_source_file = b.path("src/core.zig"),
-    // 不 addImport flatbufferz / arrow_fbs
+    // 不 addImport fbs_runtime / ipc_schema
 });
 ```
 
 新建 `src/core.zig`，只导出非 IPC 部分：
 
 ```zig
-// src/core.zig — 无 flatbufferz 依赖
+// src/core.zig — 无 IPC 相关依赖（fbs_runtime/ipc_schema）
 pub const SharedBuffer  = @import("buffer.zig").SharedBuffer;
 pub const OwnedBuffer   = @import("buffer.zig").OwnedBuffer;
 pub const ValidityBitmap = @import("bitmap.zig").ValidityBitmap;
@@ -434,7 +434,7 @@ pub const ComputeFunctionKind  = @import("compute/mod.zig").FunctionKind;
 ```zig
 // zarrow-parquet/build.zig
 const zarrow_dep = b.dependency("zarrow", .{});
-// 只引入核心，无 flatbufferz 负担
+// 只引入核心，无 IPC 模块负担
 my_module.addImport("zarrow", zarrow_dep.module("zarrow-core"));
 
 // zarrow-compute/build.zig（同上）
@@ -456,7 +456,7 @@ my_module.addImport("zarrow", zarrow_dep.module("zarrow"));
 | 新增 `Table` | `src/table.zig` | parquet 核心输出格式 |
 | `DataType` 工具谓词 | `src/datatype.zig` | `isInteger/isFloating/isNumeric/isDecimal/isStringLike/isTemporal/isNested/bitWidth/physicalType` |
 | `Datum` 增加 `chunked` 变体 | `src/compute/core.zig` | compute 聚合 kernel 输入 |
-| 新建 `zarrow-core` 模块 | `build.zig` + `src/core.zig` | parquet 不依赖 flatbufferz |
+| 新建 `zarrow-core` 模块 | `build.zig` + `src/core.zig` | parquet 不携带 IPC 模块 |
 
 ### P1 — 第一个 kernel / 第一个 RowGroup 完成前需要
 

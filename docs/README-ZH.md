@@ -13,7 +13,7 @@ Apache Arrow 的 Zig 实现。
 | 最低 Zig 版本 | `0.15.1` |
 | 最高 Zig 版本 | `0.15.x`（暂不支持 Zig 0.16+） |
 | 依赖是否清晰 | 是（`build.zig.zon` 中声明） |
-| 当前直接依赖 | `flatbufferz` |
+| 当前直接依赖 | 无 |
 
 说明：版本、最低 Zig 版本与依赖来源于 [build.zig.zon](../build.zig.zon)。
 
@@ -38,7 +38,7 @@ zig fetch --save "git+https://github.com/tylitianrui/zarrow#master"
 
 ### 2. 配置 `build.zig`
 
-`zarrow` 现在采用“`arrow_fbs` 预生成并提交仓库 + 保留 `flatbufferz` 运行时依赖”的模式。使用方只需正常引入模块，不需要再做 flatc 预生成步骤：
+`zarrow` 现在采用“`arrow_fbs` 预生成并提交仓库 + 内置本地 `fbs_runtime` 运行时模块”的模式。使用方只需正常引入模块，不需要再做 flatc 预生成步骤：
 
 ```zig
 const zarrow_dep = b.dependency("zarrow", .{

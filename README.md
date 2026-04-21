@@ -13,7 +13,7 @@ A Zig implementation of Apache Arrow.
 | Minimum Zig version | `0.15.1` |
 | Maximum Zig version | `0.15.x` (Zig 0.16+ not yet supported) |
 | Dependencies declared | Yes (`build.zig.zon`) |
-| Direct dependencies | `flatbufferz` |
+| Direct dependencies | none |
 
 Note: version, minimum Zig version, and dependencies are sourced from [build.zig.zon](build.zig.zon).
 
@@ -38,7 +38,7 @@ zig fetch --save "git+https://github.com/tylitianrui/zarrow#master"
 
 ### 2. Configure `build.zig`
 
-`zarrow` now uses pre-generated `arrow_fbs` sources committed in the repository, while keeping `flatbufferz` as the FlatBuffers runtime dependency. Consumers only need to add the module import:
+`zarrow` now uses pre-generated `arrow_fbs` sources committed in the repository and a vendored local FlatBuffers runtime module (`fbs_runtime`), so consumers only need to add the module import:
 
 ```zig
 const zarrow_dep = b.dependency("zarrow", .{
