@@ -2,43 +2,48 @@
 
 [English](../README.md) | [中文](README-ZH.md)
 
-Apache Arrow 的 Zig 实现。
+一个面向零拷贝列式数据交换的 Apache Arrow Zig 实现。
 
-## 元数据
+`zarrow` 将 Arrow 的内存格式和 IPC 工作流带到 Zig，支持核心内存布局、数组构建、布局校验和高效切片。
 
-| 项目 | 值 |
-|---|---|
-| 名称 | `zarrow` |
-| 当前版本 | `0.0.1` |
-| 最低 Zig 版本 | `0.15.1` |
-| 最高 Zig 版本 | `0.15.x`（暂不支持 Zig 0.16+） |
-| 依赖是否清晰 | 是（`build.zig.zon` 中声明） |
-| 当前直接依赖 | 无 |
+它面向希望在系统语言中使用 Arrow 的开发者，强调显式控制、可预测性能和清晰的互操作边界。
 
-说明：版本、最低 Zig 版本与依赖来源于 [build.zig.zon](../build.zig.zon)。
+## 亮点
 
-## 已支持
+- Zig 实现的 Apache Arrow 核心内存模型
+- 用于构建 Arrow 数组的 Builders
+- 布局校验，提升数据处理安全性
+- 零拷贝切片
+- Arrow IPC stream 读写
+- 面向与其他 Arrow 实现互操作而设计
 
-- Arrow 核心内存模型与数组构建（Builders）
-- 布局校验（ArrayData validate）
-- 零拷贝切片与共享只读 buffer
-- IPC Stream Reader：Schema / RecordBatch / DictionaryBatch
-- IPC Stream Writer：Schema / RecordBatch / DictionaryBatch（含 REE、dictionary delta 场景）
-- 互操作矩阵：PyArrow、arrow-rs、Arrow C++（双向读写验证）
+## 项目缘起
 
-## 使用方法
+Apache Arrow 是现代分析与数据基础设施中最重要的基础组件之一，但 Zig 生态仍缺少成熟的原生实现。
+
+`zarrow` 的目标是补齐这个空白：不是包装其他生态，而是直接在 Zig 中实现 Arrow。
+
+## 项目状态
+
+`zarrow` 正在积极开发中，已可用于实验、互操作测试以及构建基于 Arrow 的 Zig 工具。
+
+项目希望让 Zig 在系统、分析与数据基础设施场景中，成为处理 Arrow 数据的可靠选项。
+
+项目仍在持续演进，面向探索 Arrow 工具链、互操作和系统集成的开发者。
+
+欢迎提交贡献、问题反馈与互操作测试结果。
+
+## 使用
 
 ### 1. 添加依赖
 
-在项目根目录下运行：
+在项目根目录运行：
 
 ```sh
 zig fetch --save "git+https://github.com/tylitianrui/zarrow#master"
 ```
 
 ### 2. 配置 `build.zig`
-
-`zarrow` 现在采用“`arrow_fbs` 预生成并提交仓库 + 内置本地 `fbs_runtime` 运行时模块”的模式。使用方只需正常引入模块，不需要再做 flatc 预生成步骤：
 
 ```zig
 const zarrow_dep = b.dependency("zarrow", .{
@@ -76,7 +81,7 @@ pub fn main() !void {
 }
 ```
 
-执行 `zig build run` 即可看到输出：
+运行 `zig build run` 可看到输出：
 
 ```
 len=3, v0=10, isNull1=true, v2=30
@@ -87,7 +92,7 @@ len=3, v0=10, isNull1=true, v2=30
 如果你要开发 `zarrow-compute`，请看：
 
 - [Compute API（zarrow-core）使用说明](compute-api-zh.md)
-- 示例：`examples/compute_lifecycle.zig`
+- 示例：`../examples/compute_lifecycle.zig`
 
 ## 分库扩展
 
