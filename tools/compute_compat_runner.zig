@@ -119,11 +119,12 @@ fn readI64(value: compute.ExecChunkValue, logical_index: usize) compute.KernelEr
             const dt = arr.data().data_type;
             if (dt.eql(.{ .int64 = {} })) {
                 const view = zcore.Int64Array{ .data = arr.data() };
-                break :blk view.value(logical_index);
+                break :blk view.value(logical_index) catch return error.InvalidInput;
             }
             if (dt.eql(.{ .int32 = {} })) {
                 const view = zcore.Int32Array{ .data = arr.data() };
-                break :blk @as(i64, view.value(logical_index));
+                const v = view.value(logical_index) catch return error.InvalidInput;
+                break :blk @as(i64, v);
             }
             break :blk error.UnsupportedType;
         },
@@ -346,7 +347,10 @@ fn datumToMaybeI64List(allocator: std.mem.Allocator, datum: compute.Datum) compu
                 const view = zcore.Int64Array{ .data = arr.data() };
                 var i: usize = 0;
                 while (i < view.len()) : (i += 1) {
-                    out[i] = if (view.isNull(i)) null else view.value(i);
+                    out[i] = if (view.isNull(i))
+                        null
+                    else
+                        (view.value(i) catch return error.InvalidInput);
                 }
                 break :blk out;
             }
@@ -354,7 +358,10 @@ fn datumToMaybeI64List(allocator: std.mem.Allocator, datum: compute.Datum) compu
                 const view = zcore.Int32Array{ .data = arr.data() };
                 var i: usize = 0;
                 while (i < view.len()) : (i += 1) {
-                    out[i] = if (view.isNull(i)) null else @as(i64, view.value(i));
+                    out[i] = if (view.isNull(i))
+                        null
+                    else
+                        @as(i64, view.value(i) catch return error.InvalidInput);
                 }
                 break :blk out;
             }
@@ -371,7 +378,10 @@ fn datumToMaybeI64List(allocator: std.mem.Allocator, datum: compute.Datum) compu
                     const view = zcore.Int64Array{ .data = chunk.data() };
                     var i: usize = 0;
                     while (i < view.len()) : (i += 1) {
-                        out[cursor] = if (view.isNull(i)) null else view.value(i);
+                        out[cursor] = if (view.isNull(i))
+                            null
+                        else
+                            (view.value(i) catch return error.InvalidInput);
                         cursor += 1;
                     }
                     continue;
@@ -380,7 +390,10 @@ fn datumToMaybeI64List(allocator: std.mem.Allocator, datum: compute.Datum) compu
                     const view = zcore.Int32Array{ .data = chunk.data() };
                     var i: usize = 0;
                     while (i < view.len()) : (i += 1) {
-                        out[cursor] = if (view.isNull(i)) null else @as(i64, view.value(i));
+                        out[cursor] = if (view.isNull(i))
+                            null
+                        else
+                            @as(i64, view.value(i) catch return error.InvalidInput);
                         cursor += 1;
                     }
                     continue;

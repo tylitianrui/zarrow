@@ -207,9 +207,9 @@ fn checkExtension(reader: anytype) !void {
 
     if (batch.columns[0].data().data_type != .extension) return error.InvalidBatch;
     const values = zarrow.PrimitiveArray(i32){ .data = batch.columns[0].data() };
-    if (values.value(0) != 7) return error.InvalidBatch;
+    if ((values.value(0) catch return error.InvalidBatch) != 7) return error.InvalidBatch;
     if (!values.isNull(1)) return error.InvalidBatch;
-    if (values.value(2) != 11) return error.InvalidBatch;
+    if ((values.value(2) catch return error.InvalidBatch) != 11) return error.InvalidBatch;
 
     const done = try reader.nextRecordBatch();
     if (done != null) return error.UnexpectedExtraBatch;
@@ -239,7 +239,7 @@ fn checkRee(reader: anytype) !void {
         var one = try ree.value(i);
         defer one.release();
         const ints = zarrow.Int32Array{ .data = one.data() };
-        if (ints.value(0) != want) return error.InvalidBatch;
+        if ((ints.value(0) catch return error.InvalidBatch) != want) return error.InvalidBatch;
     }
 
     const done = try reader.nextRecordBatch();
@@ -261,7 +261,7 @@ fn checkCanonical(reader: anytype) !void {
     if (batch.numRows() != 3) return error.InvalidBatch;
 
     const ids = zarrow.Int32Array{ .data = batch.columns[0].data() };
-    if (ids.value(0) != 1 or ids.value(1) != 2 or ids.value(2) != 3) return error.InvalidBatch;
+    if ((ids.value(0) catch return error.InvalidBatch) != 1 or (ids.value(1) catch return error.InvalidBatch) != 2 or (ids.value(2) catch return error.InvalidBatch) != 3) return error.InvalidBatch;
 
     const names = zarrow.StringArray{ .data = batch.columns[1].data() };
     if (!std.mem.eql(u8, names.value(0), "alice")) return error.InvalidBatch;
@@ -335,13 +335,13 @@ fn checkComplex(reader: anytype) !void {
     const l0_values = zarrow.Int32Array{ .data = l0.data() };
     const l2_values = zarrow.Int32Array{ .data = l2.data() };
     if (l0.data().length != 2 or l2.data().length != 1) return error.InvalidBatch;
-    if (l0_values.value(0) != 1 or l0_values.value(1) != 2 or l2_values.value(0) != 3) return error.InvalidBatch;
+    if ((l0_values.value(0) catch return error.InvalidBatch) != 1 or (l0_values.value(1) catch return error.InvalidBatch) != 2 or (l2_values.value(0) catch return error.InvalidBatch) != 3) return error.InvalidBatch;
 
     const struct_col = zarrow.StructArray{ .data = batch.columns[1].data() };
     if (!struct_col.isNull(1)) return error.InvalidBatch;
     const struct_ids = zarrow.Int32Array{ .data = batch.columns[1].data().children[0].data() };
     const struct_names = zarrow.StringArray{ .data = batch.columns[1].data().children[1].data() };
-    if (struct_ids.value(0) != 10 or struct_ids.value(2) != 30) return error.InvalidBatch;
+    if ((struct_ids.value(0) catch return error.InvalidBatch) != 10 or (struct_ids.value(2) catch return error.InvalidBatch) != 30) return error.InvalidBatch;
     if (!std.mem.eql(u8, struct_names.value(0), "aa")) return error.InvalidBatch;
     if (!std.mem.eql(u8, struct_names.value(2), "cc")) return error.InvalidBatch;
 
@@ -356,9 +356,9 @@ fn checkComplex(reader: anytype) !void {
     const m2_keys = zarrow.Int32Array{ .data = m2.data().children[0].data() };
     const m2_vals = zarrow.Int32Array{ .data = m2.data().children[1].data() };
     if (m0.data().length != 2 or m2.data().length != 1) return error.InvalidBatch;
-    if (m0_keys.value(0) != 1 or m0_keys.value(1) != 2) return error.InvalidBatch;
-    if (m0_vals.value(0) != 10 or m0_vals.value(1) != 20) return error.InvalidBatch;
-    if (m2_keys.value(0) != 3 or m2_vals.value(0) != 30) return error.InvalidBatch;
+    if ((m0_keys.value(0) catch return error.InvalidBatch) != 1 or (m0_keys.value(1) catch return error.InvalidBatch) != 2) return error.InvalidBatch;
+    if ((m0_vals.value(0) catch return error.InvalidBatch) != 10 or (m0_vals.value(1) catch return error.InvalidBatch) != 20) return error.InvalidBatch;
+    if ((m2_keys.value(0) catch return error.InvalidBatch) != 3 or (m2_vals.value(0) catch return error.InvalidBatch) != 30) return error.InvalidBatch;
 
     const union_col = zarrow.DenseUnionArray{ .data = batch.columns[3].data() };
     const t0 = union_col.typeId(0);
@@ -377,15 +377,15 @@ fn checkComplex(reader: anytype) !void {
     const union_i_first = zarrow.Int32Array{ .data = uv0.data() };
     const union_b_middle = zarrow.BooleanArray{ .data = uv1.data() };
     const union_i_last = zarrow.Int32Array{ .data = uv2.data() };
-    if (union_i_first.value(0) != 100 or !union_b_middle.value(0) or union_i_last.value(0) != 200) {
+    if ((union_i_first.value(0) catch return error.InvalidBatch) != 100 or !union_b_middle.value(0) or (union_i_last.value(0) catch return error.InvalidBatch) != 200) {
         return error.InvalidBatch;
     }
 
     const dec = zarrow.PrimitiveArray(i128){ .data = batch.columns[4].data() };
-    if (dec.value(0) != 12345 or dec.value(1) != -42 or dec.value(2) != 0) return error.InvalidBatch;
+    if ((dec.value(0) catch return error.InvalidBatch) != 12345 or (dec.value(1) catch return error.InvalidBatch) != -42 or (dec.value(2) catch return error.InvalidBatch) != 0) return error.InvalidBatch;
 
     const ts = zarrow.PrimitiveArray(i64){ .data = batch.columns[5].data() };
-    if (ts.value(0) != 1700000000000 or ts.value(1) != 1700000001000 or ts.value(2) != 1700000002000) {
+    if ((ts.value(0) catch return error.InvalidBatch) != 1700000000000 or (ts.value(1) catch return error.InvalidBatch) != 1700000001000 or (ts.value(2) catch return error.InvalidBatch) != 1700000002000) {
         return error.InvalidBatch;
     }
 
