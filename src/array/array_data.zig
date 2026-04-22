@@ -86,7 +86,7 @@ pub const ArrayData = struct {
             if (count == self.length) return true;
         }
         const validity_bitmap = self.validity() orelse return false;
-        return !(validity_bitmap.tryIsValid(self.offset + i) catch unreachable);
+        return !(validity_bitmap.isValid(self.offset + i) catch unreachable);
     }
 
     /// Check whether the element at index is valid.
@@ -138,7 +138,7 @@ pub const ArrayData = struct {
         var count: usize = 0;
         var i: usize = 0;
         while (i < self.length) : (i += 1) {
-            if (!(validity_bitmap.tryIsValid(self.offset + i) catch unreachable)) count += 1;
+            if (!(validity_bitmap.isValid(self.offset + i) catch unreachable)) count += 1;
         }
         self.null_count = count;
         return count;
@@ -547,7 +547,7 @@ pub const ArrayData = struct {
                 var actual_count: usize = 0;
                 var i: usize = 0;
                 while (i < self.length) : (i += 1) {
-                    if (!(validity_bitmap.tryIsValid(self.offset + i) catch unreachable)) actual_count += 1;
+                    if (!(validity_bitmap.isValid(self.offset + i) catch unreachable)) actual_count += 1;
                 }
                 if (actual_count != expected_count) return error.InvalidNullCount;
             }

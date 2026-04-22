@@ -114,18 +114,14 @@ pub const ValidityBitmap = struct {
         return .{ .data = buf.data, .bit_len = bit_len };
     }
     // Read the validity bit for an index.
-    pub inline fn isValid(self: ValidityBitmap, i: usize) bool {
-        if (i >= self.bit_len) @panic("ValidityBitmap.isValid: index out of bounds");
-        return bitIsSet(self.data, i);
-    }
-    pub inline fn tryIsValid(self: ValidityBitmap, i: usize) !bool {
+    pub inline fn isValid(self: ValidityBitmap, i: usize) Error!bool {
         if (i >= self.bit_len) return Error.IndexOutOfBounds;
         return bitIsSet(self.data, i);
     }
 
     // Invert the validity bit for convenience.
-    pub inline fn isNull(self: ValidityBitmap, i: usize) bool {
-        return !self.isValid(i);
+    pub inline fn isNull(self: ValidityBitmap, i: usize) Error!bool {
+        return !(try self.isValid(i));
     }
     // Count valid bits in the logical range.
     pub fn countValid(self: ValidityBitmap) usize {
@@ -184,8 +180,8 @@ pub const MutableValidityBitmap = struct {
     }
 
     // Read the indexed validity bit from the mutable bitmap.
-    pub inline fn isValid(self: MutableValidityBitmap, index: usize) bool {
-        return ValidityBitmap.fromBuffer(self.toBuffer(), self.bit_len).isValid(index);
+    pub inline fn isValid(self: MutableValidityBitmap, index: usize) ValidityBitmap.Error!bool {
+        return try ValidityBitmap.fromBuffer(self.toBuffer(), self.bit_len).isValid(index);
     }
 
     // Mark the indexed value as null.
@@ -198,8 +194,8 @@ pub const MutableValidityBitmap = struct {
     }
 
     // Invert the validity bit for convenience.
-    pub inline fn isNull(self: MutableValidityBitmap, index: usize) bool {
-        return !self.isValid(index);
+    pub inline fn isNull(self: MutableValidityBitmap, index: usize) ValidityBitmap.Error!bool {
+        return !(try self.isValid(index));
     }
 
     // Set the validity bit to a desired value.
@@ -265,11 +261,11 @@ test "validity bitmap reads values" {
     const data = [_]u8{0b0000_0101};
     const bitmap = ValidityBitmap{ .data = data[0..], .bit_len = 5 };
 
-    try std.testing.expect(bitmap.isValid(0));
-    try std.testing.expect(bitmap.isNull(1));
-    try std.testing.expect(bitmap.isValid(2));
-    try std.testing.expect(bitmap.isNull(3));
-    try std.testing.expect(bitmap.isNull(4));
+    try std.testing.expect(try bitmap.isValid(0));
+    try std.testing.expect(try bitmap.isNull(1));
+    try std.testing.expect(try bitmap.isValid(2));
+    try std.testing.expect(try bitmap.isNull(3));
+    try std.testing.expect(try bitmap.isNull(4));
     try std.testing.expectEqual(@as(usize, 2), bitmap.countValid());
     try std.testing.expectEqual(@as(usize, 3), bitmap.countNulls());
 }
@@ -285,14 +281,14 @@ test "mutable validity bitmap init and mutate" {
 
     bitmap.setValid(0);
     bitmap.setValid(9);
-    try std.testing.expect(bitmap.isValid(0));
-    try std.testing.expect(bitmap.isNull(1));
-    try std.testing.expect(bitmap.isValid(9));
+    try std.testing.expect(try bitmap.isValid(0));
+    try std.testing.expect(try bitmap.isNull(1));
+    try std.testing.expect(try bitmap.isValid(9));
 
     bitmap.setNull(0);
     bitmap.set(1, true);
-    try std.testing.expect(bitmap.isNull(0));
-    try std.testing.expect(bitmap.isValid(1));
+    try std.testing.expect(try bitmap.isNull(0));
+    try std.testing.expect(try bitmap.isValid(1));
 
     const buf = bitmap.toBuffer();
     try std.testing.expectEqual(@as(usize, 2), buf.len());
