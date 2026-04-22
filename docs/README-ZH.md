@@ -15,6 +15,7 @@
 - 布局校验，提升数据处理安全性
 - 零拷贝切片
 - Arrow IPC stream 读写
+- 支持 Arrow C Data / C Stream ABI 导入导出
 - 面向与其他 Arrow 实现互操作而设计
 
 ## 项目缘起

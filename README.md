@@ -15,6 +15,7 @@ Built for people who want Arrow in a systems language with explicit control, pre
 - Layout validation for safer data handling
 - Zero-copy slicing
 - Arrow IPC stream read/write
+- Arrow C Data/C Stream ABI import/export
 - Designed for interoperability with other Arrow implementations
 
 ## Why this project exists

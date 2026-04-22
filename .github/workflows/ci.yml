@@ -474,51 +474,51 @@ jobs:
 
       - name: Arrow-RS roundtrip checks
         run: |
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs.arrow canonical stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs.arrow canonical stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs.arrow canonical stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow.arrow canonical stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow.arrow canonical stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_dict_delta.arrow dict-delta stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree.arrow ree stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_dict_delta.arrow dict-delta stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_ree.arrow ree stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree.arrow ree stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree.arrow ree stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_int16.arrow ree-int16 stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_ree.arrow ree stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_ree_int16.arrow ree-int16 stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_int16.arrow ree-int16 stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_int16.arrow ree-int16 stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_int64.arrow ree-int64 stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_ree_int16.arrow ree-int16 stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_ree_int64.arrow ree-int64 stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_int64.arrow ree-int64 stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_int64.arrow ree-int64 stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_complex.arrow complex stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_ree_int64.arrow ree-int64 stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_complex.arrow complex stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_complex.arrow complex stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_complex.arrow complex stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_extension.arrow extension stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_complex.arrow complex stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_extension.arrow extension stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_extension.arrow extension stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_extension.arrow extension stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_view.arrow view stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_extension.arrow extension stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_view.arrow view stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_view.arrow view stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_view.arrow view stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_file.arrow canonical file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_view.arrow view stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_file.arrow canonical file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_file.arrow canonical file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_file.arrow canonical file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_file.arrow ree file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_file.arrow canonical file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_ree_file.arrow ree file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_file.arrow ree file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_file.arrow ree file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_int16_file.arrow ree-int16 file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_ree_file.arrow ree file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_ree_int16_file.arrow ree-int16 file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_int16_file.arrow ree-int16 file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_ree_int64_file.arrow ree-int64 file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_ree_int16_file.arrow ree-int16 file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_ree_int64_file.arrow ree-int64 file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_ree_int64_file.arrow ree-int64 file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_ree_int64_file.arrow ree-int64 file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_complex_file.arrow complex file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_ree_int64_file.arrow ree-int64 file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_complex_file.arrow complex file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_complex_file.arrow complex file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_complex_file.arrow complex file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_extension_file.arrow extension file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_complex_file.arrow complex file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_extension_file.arrow extension file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_extension_file.arrow extension file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_extension_file.arrow extension file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs_view_file.arrow view file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_extension_file.arrow extension file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs_view_file.arrow view file
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs_view_file.arrow view file
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow_view_file.arrow view file
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow_view_file.arrow view file
 
   interop-arrow-rs-version-smoke:
     name: IPC Interop Smoke (arrow-rs, Rust ${{ matrix.rust_toolchain }})
@@ -545,9 +545,9 @@ jobs:
         run: |
           mkdir -p .interop-fixtures
           zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs.arrow canonical stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs.arrow canonical stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs.arrow canonical stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow.arrow canonical stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow.arrow canonical stream
 
   interop-arrow-rs-cross-platform-smoke:
     name: IPC Interop Smoke (${{ matrix.os }} arrow-rs)
@@ -579,9 +579,9 @@ jobs:
           set -euo pipefail
           python -c "from pathlib import Path; Path('.interop-fixtures').mkdir(exist_ok=True)"
           zig build interop-fixture-writer -- .interop-fixtures/zarrow.arrow canonical stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- generate .interop-fixtures/arrow_rs.arrow canonical stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- generate .interop-fixtures/arrow_rs.arrow canonical stream
           zig build interop-fixture-check -- .interop-fixtures/arrow_rs.arrow canonical stream
-          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml -- validate .interop-fixtures/zarrow.arrow canonical stream
+          cargo run --manifest-path tools/interop/arrow-rs/Cargo.toml --bin zarrow-interop-arrow-rs -- validate .interop-fixtures/zarrow.arrow canonical stream
 
   interop-arrow-go:
     name: IPC Interop (zarrow <-> Arrow Go)

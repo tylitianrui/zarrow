@@ -2,6 +2,7 @@
 name = "zarrow-interop-arrow-rs"
 version = "0.1.0"
 edition = "2021"
+default-run = "zarrow-interop-arrow-rs"
 
 [dependencies]
 arrow-array = { version = "56", features = ["ffi"] }
