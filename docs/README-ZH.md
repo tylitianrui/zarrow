@@ -94,15 +94,16 @@ len=3, v0=10, isNull1=true, v2=30
 - [Compute API（zarrow-core）使用说明](compute-api-zh.md)
 - 示例：`../examples/compute_lifecycle.zig`
 
-## 分库扩展
+## 互操作
 
-如果你要把 `zarrow-compute`、`zarrow-flight`、`zarrow-parquet` 拆成独立仓库并依赖 `zarrow`，请看：
+关于 Arrow Go IPC 互操作覆盖范围与本地验证命令，请看：
 
-- [分库方案与依赖规范](multi-repo-split-zh.md)
-- 脚手架：`tools/scaffold_downstream_repo.sh`
+- [Arrow Go IPC 互操作指南](interop-arrow-go-zh.md)
 
 ## 贡献与发布
 
 - [贡献指南](../CONTRIBUTING.md)
+- [变更日志](../CHANGELOG.md)
 - [API 稳定性策略](api-stability.md)
 - [发布检查清单](release-checklist.md)
+- [发布说明草案](release-notes-next.md)

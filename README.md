@@ -96,15 +96,16 @@ For compute framework APIs used by downstream `zarrow-compute`, see:
 - [docs/compute-api-zh.md](docs/compute-api-zh.md)
 - Example: `examples/compute_lifecycle.zig`
 
-## Downstream Repos
+## Interop
 
-For splitting `zarrow-compute`, `zarrow-flight`, and `zarrow-parquet` into separate repos while depending on `zarrow`, see:
+For Arrow Go IPC interop coverage and local verification commands, see:
 
-- [docs/multi-repo-split-zh.md](docs/multi-repo-split-zh.md)
-- Scaffold script: `tools/scaffold_downstream_repo.sh`
+- [docs/interop-arrow-go.md](docs/interop-arrow-go.md)
 
 ## Contributing
 
 - [CONTRIBUTING.md](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
 - [API Stability Policy](docs/api-stability.md)
 - [Release Checklist](docs/release-checklist.md)
+- [Release Notes Draft](docs/release-notes-next.md)

@@ -50,3 +50,9 @@ See [docs/api-stability.md](docs/api-stability.md).
 ## Release Process
 
 See [docs/release-checklist.md](docs/release-checklist.md).
+
+## Interop Verification
+
+For Arrow Go IPC interop coverage and local full-matrix commands, see:
+
+- [docs/interop-arrow-go.md](docs/interop-arrow-go.md)
