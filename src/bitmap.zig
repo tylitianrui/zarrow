@@ -3,31 +3,65 @@ const SharedBuffer = @import("buffer.zig").SharedBuffer;
 const OwnedBuffer = @import("buffer.zig").OwnedBuffer;
 
 // Return the number of bytes required to store the requested bit count.
+//
+// Cases:
+// - byteLength(0) == 0
+// - byteLength(1) == 1
+// - byteLength(7) == 1
+// - byteLength(8) == 1
+// - byteLength(9) == 2
+// - byteLength(63) == 8
+// - byteLength(64) == 8
+// - byteLength(65) == 9
 pub fn byteLength(bit_length: usize) usize {
     return (bit_length + 7) >> 3;
 }
 
 fn bitMask(bit_index: usize) u8 {
+    // Cases (LSB-first, index wraps every 8 bits):
+    // - bitMask(0) == 0b0000_0001
+    // - bitMask(1) == 0b0000_0010
+    // - bitMask(7) == 0b1000_0000
+    // - bitMask(8) == 0b0000_0001
+    // - bitMask(9) == 0b0000_0010
     return @as(u8, 1) << @as(u3, @intCast(bit_index & 7));
 }
 
 // Read a single bit using Arrow's least-significant-bit-first order.
 pub fn bitIsSet(data: []const u8, bit_index: usize) bool {
+    // Cases:
+    // - data = { 0b0000_0101 }, bitIsSet(data, 0) == true
+    // - data = { 0b0000_0101 }, bitIsSet(data, 1) == false
+    // - data = { 0b0000_0101 }, bitIsSet(data, 2) == true
+    // - data = { 0b0000_0101, 0b0000_0010 }, bitIsSet(data, 9) == true
+    // - data = { 0b0000_0101, 0b0000_0010 }, bitIsSet(data, 8) == false
     const byte = data[bit_index >> 3];
     return (byte & bitMask(bit_index)) != 0;
 }
 
 // Set a single bit in-place using Arrow's least-significant-bit-first bit order.
+// Cases:
+// - data = { 0b0000_0000 }, setBit(data, 0) => { 0b0000_0001 }
+// - data = { 0b0000_0000 }, setBit(data, 7) => { 0b1000_0000 }
+// - data = { 0b0000_0000, 0b0000_0000 }, setBit(data, 9) => { 0b0000_0000, 0b0000_0010 }
 pub fn setBit(data: []u8, bit_index: usize) void {
     data[bit_index >> 3] |= bitMask(bit_index);
 }
 
 // Clear a single bit in-place using Arrow's least-significant-bit-first bit order.
+// Cases:
+// - data = { 0b1111_1111 }, clearBit(data, 0) => { 0b1111_1110 }
+// - data = { 0b1111_1111 }, clearBit(data, 7) => { 0b0111_1111 }
+// - data = { 0b1111_1111, 0b1111_1111 }, clearBit(data, 9) => { 0b1111_1111, 0b1111_1101 }
 pub fn clearBit(data: []u8, bit_index: usize) void {
     data[bit_index >> 3] &= ~bitMask(bit_index);
 }
 
 // Write a single bit in-place with a boolean value.
+// Cases:
+// - data = { 0b0000_0000 }, writeBit(data, 1, true) => { 0b0000_0010 }
+// - data = { 0b0000_0010 }, writeBit(data, 1, false) => { 0b0000_0000 }
+// - data = { 0b0000_0000, 0b0000_0000 }, writeBit(data, 9, true) => { 0b0000_0000, 0b0000_0010 }
 pub fn writeBit(data: []u8, bit_index: usize, value: bool) void {
     if (value) setBit(data, bit_index) else clearBit(data, bit_index);
 }
