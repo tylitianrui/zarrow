@@ -39,7 +39,7 @@ int zarrow_c_export_array(const zarrow_c_array_handle* handle, struct ArrowArray
 void zarrow_c_release_array(zarrow_c_array_handle* handle);
 
 int zarrow_c_import_stream(struct ArrowArrayStream* c_stream, zarrow_c_stream_handle** out_handle);
-int zarrow_c_export_stream(const zarrow_c_stream_handle* handle, struct ArrowArrayStream* out_stream);
+int zarrow_c_export_stream(zarrow_c_stream_handle* handle, struct ArrowArrayStream* out_stream);
 void zarrow_c_release_stream(zarrow_c_stream_handle* handle);
 
 #ifdef __cplusplus

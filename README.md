@@ -99,9 +99,11 @@ For compute framework APIs used by downstream `zarrow-compute`, see:
 
 ## Interop
 
-For Arrow Go IPC interop coverage and local verification commands, see:
+For Arrow IPC and C ABI interop coverage and local verification commands, see:
 
 - [docs/interop-arrow-go.md](docs/interop-arrow-go.md)
+- [docs/interop-c-abi.md](docs/interop-c-abi.md)
+- C ABI Zig example: `zig build example-c_abi_roundtrip`
 
 ## Contributing
 

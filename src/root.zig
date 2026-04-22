@@ -10,6 +10,7 @@ const array = @import("array/array.zig");
 const record_batch = @import("record_batch.zig");
 const ipc = @import("ipc/mod.zig");
 const ffi = @import("ffi/mod.zig");
+pub const c_api = @import("c_api.zig");
 const compute_mod = @import("compute/mod.zig");
 
 pub const compute = compute_mod;

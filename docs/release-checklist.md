@@ -19,6 +19,7 @@
 zig build test
 zig build examples
 zig build fuzz-corpus
+zig build c-api-lib
 ```
 
 5. For perf-sensitive changes, run:
@@ -28,6 +29,7 @@ zig build benchmark-smoke
 ```
 
 6. Verify interop checks are not regressed (PyArrow/arrow-rs/Arrow Go/Arrow C++ lanes in CI).
+   - C ABI smoke lanes: `interop-c-abi-cpp-smoke`, `interop-c-abi-rs-smoke`.
 7. Confirm docs for user-facing changes are updated.
 
 ## Release Notes Minimum

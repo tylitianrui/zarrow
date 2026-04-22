@@ -45,7 +45,7 @@ unsafe extern "C" {
         c_stream: *mut FFI_ArrowArrayStream,
         out_handle: *mut *mut zarrow_c_stream_handle,
     ) -> i32;
-    fn zarrow_c_export_stream(handle: *const zarrow_c_stream_handle, out_stream: *mut FFI_ArrowArrayStream) -> i32;
+    fn zarrow_c_export_stream(handle: *mut zarrow_c_stream_handle, out_stream: *mut FFI_ArrowArrayStream) -> i32;
     fn zarrow_c_release_stream(handle: *mut zarrow_c_stream_handle);
 }
 
@@ -162,7 +162,7 @@ fn stream_roundtrip() -> Result<(), Box<dyn Error>> {
     let mut out_stream = FFI_ArrowArrayStream::empty();
     unsafe {
         zstatus(
-            zarrow_c_export_stream(stream_handle as *const _, &mut out_stream as *mut _),
+            zarrow_c_export_stream(stream_handle, &mut out_stream as *mut _),
             "zarrow_c_export_stream",
         )?;
         zarrow_c_release_stream(stream_handle);

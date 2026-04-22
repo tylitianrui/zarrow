@@ -97,9 +97,11 @@ len=3, v0=10, isNull1=true, v2=30
 
 ## 互操作
 
-关于 Arrow Go IPC 互操作覆盖范围与本地验证命令，请看：
+关于 Arrow IPC 与 C ABI 互操作覆盖范围和本地验证命令，请看：
 
 - [Arrow Go IPC 互操作指南](interop-arrow-go-zh.md)
+- [Arrow C ABI 互操作指南](interop-c-abi-zh.md)
+- C ABI Zig 示例：`zig build example-c_abi_roundtrip`
 
 ## 贡献与发布
 
