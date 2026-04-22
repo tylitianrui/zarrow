@@ -1385,7 +1385,7 @@ fn validateV4UnionValidityBuffer(validity: array_data.SharedBuffer, length: usiz
     const validity_bitmap = bitmap.ValidityBitmap.fromBuffer(validity, length);
     var i: usize = 0;
     while (i < length) : (i += 1) {
-        const is_valid = validity_bitmap.isValid(i) catch return StreamError.InvalidMetadata;
+        const is_valid = validity_bitmap.tryIsValid(i) catch return StreamError.InvalidMetadata;
         if (!is_valid) return StreamError.UnsupportedType;
     }
 }
@@ -2331,7 +2331,7 @@ fn isValidAt(data: *const ArrayData, index: usize) bool {
         if (count == data.length) return false;
     }
     const validity = data.validity() orelse return true;
-    return validity.isValid(data.offset + index) catch false;
+    return validity.tryIsValid(data.offset + index) catch false;
 }
 
 fn bitAt(buf: array_data.SharedBuffer, bit_index: usize) bool {
