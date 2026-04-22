@@ -107,15 +107,22 @@ pub const ValidityBitmap = struct {
     data: []const u8,
     bit_len: usize,
 
+    const Error = error{IndexOutOfBounds};
+
     // Build a validity bitmap view from a buffer and logical length.
     pub fn fromBuffer(buf: SharedBuffer, bit_len: usize) ValidityBitmap {
         return .{ .data = buf.data, .bit_len = bit_len };
     }
     // Read the validity bit for an index.
     pub inline fn isValid(self: ValidityBitmap, i: usize) bool {
-        std.debug.assert(i < self.bit_len);
+        if (i >= self.bit_len) @panic("ValidityBitmap.isValid: index out of bounds");
         return bitIsSet(self.data, i);
     }
+    pub inline fn tryIsValid(self: ValidityBitmap, i: usize) !bool {
+        if (i >= self.bit_len) return Error.IndexOutOfBounds;
+        return bitIsSet(self.data, i);
+    }
+
     // Invert the validity bit for convenience.
     pub inline fn isNull(self: ValidityBitmap, i: usize) bool {
         return !self.isValid(i);
