@@ -1,6 +1,6 @@
 .{
     .name = .zarrow,
-    .version = "0.0.1",
+    .version = "0.0.2",
     .dependencies = .{},
     .minimum_zig_version = "0.15.1",
     .paths = .{""},
