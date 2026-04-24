@@ -1,4 +1,5 @@
 pub const core = @import("core.zig");
+const concat_array_refs = @import("../concat_array_refs.zig");
 
 pub const FunctionKind = core.FunctionKind;
 pub const OptionsTag = core.OptionsTag;
@@ -19,7 +20,9 @@ pub const UnaryExecChunkIterator = core.UnaryExecChunkIterator;
 pub const BinaryExecChunkIterator = core.BinaryExecChunkIterator;
 pub const NaryExecChunkIterator = core.NaryExecChunkIterator;
 pub const DataType = core.DataType;
+pub const ArrayRef = core.ArrayRef;
 pub const KernelError = core.KernelError;
+pub const ConcatArrayError = concat_array_refs.ConcatArrayError;
 pub const Function = core.Function;
 pub const TypeCheckFn = core.TypeCheckFn;
 pub const OptionsCheckFn = core.OptionsCheckFn;
@@ -53,3 +56,4 @@ pub const inferBinaryExecLen = core.inferBinaryExecLen;
 pub const inferNaryExecLen = core.inferNaryExecLen;
 pub const intCastOrInvalidCast = core.intCastOrInvalidCast;
 pub const arithmeticDivI64 = core.arithmeticDivI64;
+pub const concatArrayRefs = concat_array_refs.concatArrayRefs;
