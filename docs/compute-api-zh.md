@@ -10,7 +10,7 @@
 ## 2. 核心类型
 
 - `FunctionRegistry`：函数注册表（按 `FunctionKind` + 名称索引 kernel）。
-- `KernelSignature`：输入 arity/type/options 检查 + 结果类型推导。
+- `KernelSignature`：输入 arity/type/options 检查 + 结果类型推导（arity 支持 `exact` / `at_least` / `range`）。
 - `Kernel`：执行函数 +（可选）聚合生命周期。
 - `ExecContext`：执行上下文（allocator/registry/config）。
 - `Datum`：`array` / `chunked` / `scalar` 三种输入输出封装。
@@ -117,15 +117,18 @@
   - `binaryNullPropagates(...)`
 - scalar broadcast：
   - `inferBinaryExecLen(lhs, rhs)`（支持 scalar 与 array/chunked 自动广播）
+  - `inferNaryExecLen(args)`（N 元输入的统一 broadcast 长度推导）
 - chunked 对齐迭代：
   - `UnaryExecChunkIterator`
   - `BinaryExecChunkIterator`
+  - `NaryExecChunkIterator`
 
 典型流程：
 
-- 先用 `BinaryExecChunkIterator.init(...)` 创建迭代器
-- 每次 `next()` 得到对齐分块（`BinaryExecChunk`）
-- 在分块内用 `binaryNullAt` 或 `binaryNullPropagates` 处理 null 语义
+- 二元 kernel：先用 `BinaryExecChunkIterator.init(...)` 创建迭代器
+- N 元 kernel：先用 `NaryExecChunkIterator.init(...)` 创建迭代器
+- 每次 `next()` 得到对齐分块（`BinaryExecChunk` / `NaryExecChunk`）
+- 在分块内用 `binaryNullAt` / `binaryNullPropagates` 或 `naryNullAt` / `naryNullPropagates` 处理 null 语义
 
 ## 11. Compute 兼容矩阵（CI）
 

@@ -231,8 +231,12 @@ pub const AggregateLifecycle = struct {
 
 /// Kernel signature metadata used for dispatch and type inference.
 pub const KernelSignature = struct {
-    /// Required argument count.
+    /// Required argument count (exact arity or minimum arity for variadic kernels).
     arity: usize,
+    /// Whether the signature accepts variadic arguments.
+    variadic: bool = false,
+    /// Optional maximum arity for bounded variadic signatures.
+    max_arity: ?usize = null,
     /// Optional argument validator for logical type matching.
     type_check: ?TypeCheckFn = null,
     /// Optional options validator for type-safe options enforcement.
@@ -243,6 +247,31 @@ pub const KernelSignature = struct {
     pub fn any(arity: usize) KernelSignature {
         return .{
             .arity = arity,
+            .variadic = false,
+            .max_arity = null,
+            .type_check = null,
+            .options_check = null,
+            .result_type_fn = null,
+        };
+    }
+
+    pub fn atLeast(min_arity: usize) KernelSignature {
+        return .{
+            .arity = min_arity,
+            .variadic = true,
+            .max_arity = null,
+            .type_check = null,
+            .options_check = null,
+            .result_type_fn = null,
+        };
+    }
+
+    pub fn range(min_arity: usize, max_arity: usize) KernelSignature {
+        std.debug.assert(max_arity >= min_arity);
+        return .{
+            .arity = min_arity,
+            .variadic = true,
+            .max_arity = max_arity,
             .type_check = null,
             .options_check = null,
             .result_type_fn = null,
@@ -252,6 +281,8 @@ pub const KernelSignature = struct {
     pub fn unary(type_check: ?TypeCheckFn) KernelSignature {
         return .{
             .arity = 1,
+            .variadic = false,
+            .max_arity = null,
             .type_check = type_check,
             .options_check = null,
             .result_type_fn = null,
@@ -261,6 +292,8 @@ pub const KernelSignature = struct {
     pub fn binary(type_check: ?TypeCheckFn) KernelSignature {
         return .{
             .arity = 2,
+            .variadic = false,
+            .max_arity = null,
             .type_check = type_check,
             .options_check = null,
             .result_type_fn = null,
@@ -270,6 +303,8 @@ pub const KernelSignature = struct {
     pub fn unaryWithResult(type_check: ?TypeCheckFn, result_type_fn: ResultTypeFn) KernelSignature {
         return .{
             .arity = 1,
+            .variadic = false,
+            .max_arity = null,
             .type_check = type_check,
             .options_check = null,
             .result_type_fn = result_type_fn,
@@ -279,14 +314,62 @@ pub const KernelSignature = struct {
     pub fn binaryWithResult(type_check: ?TypeCheckFn, result_type_fn: ResultTypeFn) KernelSignature {
         return .{
             .arity = 2,
+            .variadic = false,
+            .max_arity = null,
             .type_check = type_check,
             .options_check = null,
             .result_type_fn = result_type_fn,
         };
     }
 
+    pub fn variadicWithResult(min_arity: usize, type_check: ?TypeCheckFn, result_type_fn: ResultTypeFn) KernelSignature {
+        return .{
+            .arity = min_arity,
+            .variadic = true,
+            .max_arity = null,
+            .type_check = type_check,
+            .options_check = null,
+            .result_type_fn = result_type_fn,
+        };
+    }
+
+    const ArityModel = enum {
+        exact,
+        at_least,
+        range,
+    };
+
+    fn arityModel(self: KernelSignature) ArityModel {
+        if (!self.variadic) return .exact;
+        if (self.max_arity != null) return .range;
+        return .at_least;
+    }
+
+    fn aritySpecificityRank(self: KernelSignature) u8 {
+        return switch (self.arityModel()) {
+            .exact => 3,
+            .range => 2,
+            .at_least => 1,
+        };
+    }
+
+    fn hasValidArityModel(self: KernelSignature) bool {
+        if (!self.variadic) return self.max_arity == null;
+        if (self.max_arity) |max| return max >= self.arity;
+        return true;
+    }
+
+    pub fn matchesArity(self: KernelSignature, arg_count: usize) bool {
+        if (!self.hasValidArityModel()) return false;
+        return switch (self.arityModel()) {
+            .exact => arg_count == self.arity,
+            .at_least => arg_count >= self.arity,
+            .range => arg_count >= self.arity and arg_count <= self.max_arity.?,
+        };
+    }
+
     pub fn matches(self: KernelSignature, args: []const Datum) bool {
-        if (args.len != self.arity) return false;
+        if (!self.matchesArity(args.len)) return false;
         if (self.type_check) |check| return check(args);
         return true;
     }
@@ -302,7 +385,13 @@ pub const KernelSignature = struct {
 
     /// Human-readable mismatch reason for diagnostics and debugging.
     pub fn explainMismatch(self: KernelSignature, args: []const Datum, options: Options) []const u8 {
-        if (args.len != self.arity) return "arity mismatch: argument count does not match kernel signature";
+        if (!self.matchesArity(args.len)) {
+            return switch (self.arityModel()) {
+                .exact => "arity mismatch: argument count does not match exact kernel arity",
+                .at_least => "arity mismatch: argument count is below minimum kernel arity",
+                .range => "arity mismatch: argument count is outside kernel arity range",
+            };
+        }
         if (self.type_check) |check| {
             if (!check(args)) return "type mismatch: arguments did not satisfy kernel type_check";
         }
@@ -313,7 +402,7 @@ pub const KernelSignature = struct {
     }
 
     pub fn inferResultType(self: KernelSignature, args: []const Datum, options: Options) KernelError!DataType {
-        if (args.len != self.arity) return error.InvalidArity;
+        if (!self.matchesArity(args.len)) return error.InvalidArity;
         if (self.type_check) |check| {
             if (!check(args)) return error.NoMatchingKernel;
         }
@@ -329,7 +418,7 @@ pub const KernelSignature = struct {
 
     /// Human-readable reason for result-type inference failure.
     pub fn explainInferResultTypeFailure(self: KernelSignature, args: []const Datum, options: Options) []const u8 {
-        if (args.len != self.arity) return "cannot infer result type: invalid arity";
+        if (!self.matchesArity(args.len)) return "cannot infer result type: invalid arity";
         if (self.type_check) |check| {
             if (!check(args)) return "cannot infer result type: argument type_check failed";
         }
@@ -501,13 +590,22 @@ pub const FunctionRegistry = struct {
 
         var saw_matching_arity = false;
         var saw_matching_type = false;
+        var best_kernel: ?*const Kernel = null;
+        var best_specificity: u8 = 0;
         for (function.kernels.items) |*kernel| {
-            if (kernel.signature.arity != args.len) continue;
+            if (!kernel.signature.matchesArity(args.len)) continue;
             saw_matching_arity = true;
             if (!kernel.signature.matches(args)) continue;
             saw_matching_type = true;
-            if (kernel.signature.matchesOptions(options)) return kernel;
+            if (!kernel.signature.matchesOptions(options)) continue;
+
+            const specificity = kernel.signature.aritySpecificityRank();
+            if (best_kernel == null or specificity > best_specificity) {
+                best_kernel = kernel;
+                best_specificity = specificity;
+            }
         }
+        if (best_kernel) |kernel| return kernel;
         if (!saw_matching_arity) return error.InvalidArity;
         if (saw_matching_type) return error.InvalidOptions;
         return error.NoMatchingKernel;
@@ -526,14 +624,35 @@ pub const FunctionRegistry = struct {
 
         var saw_matching_arity = false;
         var saw_matching_type = false;
+        var best_specificity: u8 = 0;
+        var saw_matching_kernel = false;
         for (function.kernels.items) |*kernel| {
-            if (kernel.signature.arity != args.len) continue;
+            if (!kernel.signature.matchesArity(args.len)) continue;
             saw_matching_arity = true;
             if (!kernel.signature.matches(args)) continue;
             saw_matching_type = true;
-            if (kernel.signature.matchesOptions(options)) return "kernel resolution should succeed";
+            if (!kernel.signature.matchesOptions(options)) continue;
+            const specificity = kernel.signature.aritySpecificityRank();
+            if (!saw_matching_kernel or specificity > best_specificity) {
+                best_specificity = specificity;
+                saw_matching_kernel = true;
+            }
         }
-        if (!saw_matching_arity) return "no kernel matched arity";
+        if (saw_matching_kernel) return "kernel resolution should succeed";
+        if (!saw_matching_arity) {
+            var has_range = false;
+            var has_at_least = false;
+            for (function.kernels.items) |*kernel| {
+                switch (kernel.signature.arityModel()) {
+                    .exact => {},
+                    .range => has_range = true,
+                    .at_least => has_at_least = true,
+                }
+            }
+            if (has_range) return "no kernel matched arity range";
+            if (has_at_least) return "no kernel matched minimum arity";
+            return "no kernel matched exact arity";
+        }
         if (saw_matching_type) return "kernel matched args but options were invalid";
         return "no kernel matched argument types";
     }
@@ -807,6 +926,14 @@ pub fn binaryNullPropagates(lhs: ExecChunkValue, rhs: ExecChunkValue, logical_in
     return lhs.isNullAt(logical_index) or rhs.isNullAt(logical_index);
 }
 
+/// Common null propagation helper for n-ary kernels.
+pub fn naryNullPropagates(values: []const ExecChunkValue, logical_index: usize) bool {
+    for (values) |value| {
+        if (value.isNullAt(logical_index)) return true;
+    }
+    return false;
+}
+
 pub const UnaryExecChunk = struct {
     values: ExecChunkValue,
     len: usize,
@@ -839,6 +966,25 @@ pub const BinaryExecChunk = struct {
     }
 };
 
+pub const NaryExecChunk = struct {
+    allocator: std.mem.Allocator,
+    values: []ExecChunkValue,
+    len: usize,
+
+    pub fn naryNullAt(self: NaryExecChunk, logical_index: usize) bool {
+        std.debug.assert(logical_index < self.len);
+        return naryNullPropagates(self.values, logical_index);
+    }
+
+    pub fn deinit(self: *NaryExecChunk) void {
+        for (self.values) |*value| {
+            value.release();
+        }
+        self.allocator.free(self.values);
+        self.* = undefined;
+    }
+};
+
 fn datumArrayLikeLen(datum: Datum) ?usize {
     return switch (datum) {
         .array => |arr| arr.data().length,
@@ -857,6 +1003,23 @@ pub fn inferBinaryExecLen(lhs: Datum, rhs: Datum) KernelError!usize {
     if (rhs_len == null) return lhs_len.?;
     if (lhs_len.? != rhs_len.?) return error.InvalidInput;
     return lhs_len.?;
+}
+
+/// Infer n-ary execution length with scalar-broadcast semantics.
+pub fn inferNaryExecLen(args: []const Datum) KernelError!usize {
+    if (args.len == 0) return error.InvalidArity;
+
+    var array_like_len: ?usize = null;
+    for (args) |arg| {
+        const current_len = datumArrayLikeLen(arg);
+        if (current_len == null) continue;
+        if (array_like_len == null) {
+            array_like_len = current_len.?;
+            continue;
+        }
+        if (array_like_len.? != current_len.?) return error.InvalidInput;
+    }
+    return array_like_len orelse 1;
 }
 
 const ExecDatumCursor = union(enum) {
@@ -1019,6 +1182,67 @@ pub const BinaryExecChunkIterator = struct {
     }
 };
 
+pub const NaryExecChunkIterator = struct {
+    allocator: std.mem.Allocator,
+    cursors: []ExecDatumCursor,
+    total_len: usize,
+    consumed: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator, args: []const Datum) KernelError!NaryExecChunkIterator {
+        if (args.len == 0) return error.InvalidArity;
+
+        var cursors = allocator.alloc(ExecDatumCursor, args.len) catch return error.OutOfMemory;
+        errdefer allocator.free(cursors);
+        for (args, 0..) |arg, idx| {
+            cursors[idx] = ExecDatumCursor.init(arg);
+        }
+        return .{
+            .allocator = allocator,
+            .cursors = cursors,
+            .total_len = try inferNaryExecLen(args),
+        };
+    }
+
+    pub fn deinit(self: *NaryExecChunkIterator) void {
+        self.allocator.free(self.cursors);
+        self.* = undefined;
+    }
+
+    pub fn next(self: *NaryExecChunkIterator) KernelError!?NaryExecChunk {
+        if (self.consumed >= self.total_len) return null;
+        const remaining_total = self.total_len - self.consumed;
+
+        var run_len = remaining_total;
+        for (self.cursors) |*cursor| {
+            const remaining = cursor.remainingCurrent();
+            if (remaining == 0) return error.InvalidInput;
+            run_len = @min(run_len, remaining);
+        }
+        if (run_len == 0) return error.InvalidInput;
+
+        var values = self.allocator.alloc(ExecChunkValue, self.cursors.len) catch return error.OutOfMemory;
+        var taken: usize = 0;
+        errdefer {
+            while (taken > 0) {
+                taken -= 1;
+                values[taken].release();
+            }
+            self.allocator.free(values);
+        }
+        for (self.cursors, 0..) |*cursor, idx| {
+            values[idx] = try cursor.take(run_len);
+            taken += 1;
+        }
+
+        self.consumed += run_len;
+        return .{
+            .allocator = self.allocator,
+            .values = values,
+            .len = run_len,
+        };
+    }
+};
+
 /// Convert integer-like values using a standardized InvalidCast error path.
 pub fn intCastOrInvalidCast(comptime T: type, value: anytype) KernelError!T {
     return std.math.cast(T, value) orelse error.InvalidCast;
@@ -1092,10 +1316,47 @@ fn isTwoInt64Scalars(args: []const Datum) bool {
     return args.len == 2 and args[0].isScalar() and args[1].isScalar() and args[0].scalar.data_type == .int64 and args[1].scalar.data_type == .int64;
 }
 
+fn allInt32Datums(args: []const Datum) bool {
+    for (args) |arg| {
+        if (!arg.dataType().eql(.{ .int32 = {} })) return false;
+    }
+    return true;
+}
+
 fn passthroughInt32Kernel(ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum {
     _ = ctx;
     _ = options;
     return args[0].retain();
+}
+
+fn exactArityMarkerKernel(ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum {
+    _ = ctx;
+    _ = args;
+    _ = options;
+    return Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .{ .i32 = 303 },
+    });
+}
+
+fn rangeArityMarkerKernel(ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum {
+    _ = ctx;
+    _ = args;
+    _ = options;
+    return Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .{ .i32 = 202 },
+    });
+}
+
+fn atLeastArityMarkerKernel(ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum {
+    _ = ctx;
+    _ = args;
+    _ = options;
+    return Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .{ .i32 = 101 },
+    });
 }
 
 fn countLenAggregateKernel(ctx: *ExecContext, args: []const Datum, options: Options) KernelError!Datum {
@@ -1527,6 +1788,157 @@ test "compute registry functionAt out of range returns null" {
     try std.testing.expect(registry.functionAt(99) == null);
 }
 
+test "compute kernel signature supports exact at_least and range arity" {
+    const scalar_i32 = Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .{ .i32 = 1 },
+    });
+    const one = [_]Datum{scalar_i32};
+    const two = [_]Datum{ scalar_i32, scalar_i32 };
+    const three = [_]Datum{ scalar_i32, scalar_i32, scalar_i32 };
+    const four = [_]Datum{ scalar_i32, scalar_i32, scalar_i32, scalar_i32 };
+    const five = [_]Datum{ scalar_i32, scalar_i32, scalar_i32, scalar_i32, scalar_i32 };
+
+    const sig_exact = KernelSignature.any(2);
+    const sig_at_least = KernelSignature.atLeast(2);
+    const sig_range = KernelSignature.range(2, 4);
+
+    try std.testing.expect(!sig_exact.matches(one[0..]));
+    try std.testing.expect(sig_exact.matches(two[0..]));
+    try std.testing.expect(!sig_exact.matches(three[0..]));
+
+    try std.testing.expect(!sig_at_least.matches(one[0..]));
+    try std.testing.expect(sig_at_least.matches(two[0..]));
+    try std.testing.expect(sig_at_least.matches(five[0..]));
+
+    try std.testing.expect(!sig_range.matches(one[0..]));
+    try std.testing.expect(sig_range.matches(two[0..]));
+    try std.testing.expect(sig_range.matches(three[0..]));
+    try std.testing.expect(sig_range.matches(four[0..]));
+    try std.testing.expect(!sig_range.matches(five[0..]));
+}
+
+test "compute resolveKernel prefers exact then range then at_least arity" {
+    const allocator = std.testing.allocator;
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.registerScalarKernel("pick_by_arity", .{
+        .signature = .{
+            .arity = 2,
+            .variadic = true,
+            .type_check = allInt32Datums,
+        },
+        .exec = atLeastArityMarkerKernel,
+    });
+    try registry.registerScalarKernel("pick_by_arity", .{
+        .signature = .{
+            .arity = 2,
+            .variadic = true,
+            .max_arity = 4,
+            .type_check = allInt32Datums,
+        },
+        .exec = rangeArityMarkerKernel,
+    });
+    try registry.registerScalarKernel("pick_by_arity", .{
+        .signature = .{
+            .arity = 3,
+            .type_check = allInt32Datums,
+        },
+        .exec = exactArityMarkerKernel,
+    });
+
+    var ctx = ExecContext.init(allocator, &registry);
+    const scalar_i32 = Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .{ .i32 = 1 },
+    });
+
+    const args3 = [_]Datum{ scalar_i32, scalar_i32, scalar_i32 };
+    var out3 = try ctx.invokeScalar("pick_by_arity", args3[0..], Options.noneValue());
+    defer out3.release();
+    try std.testing.expect(out3.isScalar());
+    try std.testing.expectEqual(@as(i32, 303), out3.scalar.value.i32);
+
+    const args4 = [_]Datum{ scalar_i32, scalar_i32, scalar_i32, scalar_i32 };
+    var out4 = try ctx.invokeScalar("pick_by_arity", args4[0..], Options.noneValue());
+    defer out4.release();
+    try std.testing.expect(out4.isScalar());
+    try std.testing.expectEqual(@as(i32, 202), out4.scalar.value.i32);
+
+    const args5 = [_]Datum{ scalar_i32, scalar_i32, scalar_i32, scalar_i32, scalar_i32 };
+    var out5 = try ctx.invokeScalar("pick_by_arity", args5[0..], Options.noneValue());
+    defer out5.release();
+    try std.testing.expect(out5.isScalar());
+    try std.testing.expectEqual(@as(i32, 101), out5.scalar.value.i32);
+}
+
+test "compute kernel resolution keeps InvalidArity InvalidOptions NoMatchingKernel precedence" {
+    const allocator = std.testing.allocator;
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.registerScalarKernel("priority", .{
+        .signature = .{
+            .arity = 2,
+            .variadic = true,
+            .type_check = allInt32Datums,
+            .options_check = onlyCastOptions,
+        },
+        .exec = atLeastArityMarkerKernel,
+    });
+    try registry.registerScalarKernel("priority_range", .{
+        .signature = .{
+            .arity = 2,
+            .variadic = true,
+            .max_arity = 3,
+            .type_check = allInt32Datums,
+        },
+        .exec = rangeArityMarkerKernel,
+    });
+
+    const one_i32 = [_]Datum{
+        Datum.fromScalar(.{ .data_type = .{ .int32 = {} }, .value = .{ .i32 = 1 } }),
+    };
+    try std.testing.expectError(
+        error.InvalidArity,
+        registry.resolveKernel("priority", .scalar, one_i32[0..], Options.noneValue()),
+    );
+    const min_reason = registry.explainResolveKernelFailure("priority", .scalar, one_i32[0..], Options.noneValue());
+    try std.testing.expect(std.mem.eql(u8, min_reason, "no kernel matched minimum arity"));
+
+    const two_i64 = [_]Datum{
+        Datum.fromScalar(.{ .data_type = .{ .int64 = {} }, .value = .{ .i64 = 1 } }),
+        Datum.fromScalar(.{ .data_type = .{ .int64 = {} }, .value = .{ .i64 = 2 } }),
+    };
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        registry.resolveKernel("priority", .scalar, two_i64[0..], Options.noneValue()),
+    );
+
+    const two_i32 = [_]Datum{
+        Datum.fromScalar(.{ .data_type = .{ .int32 = {} }, .value = .{ .i32 = 1 } }),
+        Datum.fromScalar(.{ .data_type = .{ .int32 = {} }, .value = .{ .i32 = 2 } }),
+    };
+    try std.testing.expectError(
+        error.InvalidOptions,
+        registry.resolveKernel("priority", .scalar, two_i32[0..], .{ .filter = .{ .drop_nulls = true } }),
+    );
+
+    const four_i32 = [_]Datum{
+        Datum.fromScalar(.{ .data_type = .{ .int32 = {} }, .value = .{ .i32 = 1 } }),
+        Datum.fromScalar(.{ .data_type = .{ .int32 = {} }, .value = .{ .i32 = 2 } }),
+        Datum.fromScalar(.{ .data_type = .{ .int32 = {} }, .value = .{ .i32 = 3 } }),
+        Datum.fromScalar(.{ .data_type = .{ .int32 = {} }, .value = .{ .i32 = 4 } }),
+    };
+    try std.testing.expectError(
+        error.InvalidArity,
+        registry.resolveKernel("priority_range", .scalar, four_i32[0..], Options.noneValue()),
+    );
+    const range_reason = registry.explainResolveKernelFailure("priority_range", .scalar, four_i32[0..], Options.noneValue());
+    try std.testing.expect(std.mem.eql(u8, range_reason, "no kernel matched arity range"));
+}
+
 test "compute kernel signature result type inference and typed options" {
     const allocator = std.testing.allocator;
     const int32_builder = @import("../array/array.zig").Int32Builder;
@@ -1893,6 +2305,196 @@ test "compute unary execution helper propagates nulls over chunked input" {
     try std.testing.expect(!unaryNullPropagates(second.values, 1));
 
     try std.testing.expect((try iter.next()) == null);
+}
+
+test "compute nary execution helper supports array scalar chunked mixed broadcast" {
+    const allocator = std.testing.allocator;
+    const int32_array = @import("../array/array.zig").Int32Array;
+
+    var base = try makeInt32Array(allocator, &[_]?i32{ 1, 2, 3 });
+    defer base.release();
+    var c0 = try makeInt32Array(allocator, &[_]?i32{ 10, 11 });
+    defer c0.release();
+    var c1 = try makeInt32Array(allocator, &[_]?i32{12});
+    defer c1.release();
+    var chunks = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ c0, c1 });
+    defer chunks.release();
+
+    const array_input = Datum.fromArray(base.retain());
+    defer {
+        var d = array_input;
+        d.release();
+    }
+    const scalar_input = Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .{ .i32 = 9 },
+    });
+    const chunked_input = Datum.fromChunked(chunks.retain());
+    defer {
+        var d = chunked_input;
+        d.release();
+    }
+
+    const args = [_]Datum{ array_input, scalar_input, chunked_input };
+    try std.testing.expectEqual(@as(usize, 3), try inferNaryExecLen(args[0..]));
+
+    var iter = try NaryExecChunkIterator.init(allocator, args[0..]);
+    defer iter.deinit();
+
+    const expected_chunk_lengths = [_]usize{ 2, 1 };
+    var idx: usize = 0;
+    while (try iter.next()) |chunk_value| : (idx += 1) {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        try std.testing.expect(idx < expected_chunk_lengths.len);
+        try std.testing.expectEqual(expected_chunk_lengths[idx], chunk.len);
+        try std.testing.expectEqual(@as(usize, 3), chunk.values.len);
+        try std.testing.expect(chunk.values[0] == .array);
+        try std.testing.expect(chunk.values[1] == .scalar);
+        try std.testing.expect(chunk.values[2] == .array);
+
+        const left = int32_array{ .data = chunk.values[0].array.data() };
+        const right = int32_array{ .data = chunk.values[2].array.data() };
+        if (idx == 0) {
+            try std.testing.expectEqual(@as(i32, 1), left.value(0));
+            try std.testing.expectEqual(@as(i32, 2), left.value(1));
+            try std.testing.expectEqual(@as(i32, 10), right.value(0));
+            try std.testing.expectEqual(@as(i32, 11), right.value(1));
+        } else {
+            try std.testing.expectEqual(@as(i32, 3), left.value(0));
+            try std.testing.expectEqual(@as(i32, 12), right.value(0));
+        }
+        try std.testing.expectEqual(@as(i32, 9), chunk.values[1].scalar.value.i32);
+    }
+    try std.testing.expectEqual(expected_chunk_lengths.len, idx);
+}
+
+test "compute nary execution helper aligns misaligned chunk boundaries" {
+    const allocator = std.testing.allocator;
+
+    var a0 = try makeInt32Array(allocator, &[_]?i32{ 1, 2 });
+    defer a0.release();
+    var a1 = try makeInt32Array(allocator, &[_]?i32{ 3, 4, 5 });
+    defer a1.release();
+    var b0 = try makeInt32Array(allocator, &[_]?i32{11});
+    defer b0.release();
+    var b1 = try makeInt32Array(allocator, &[_]?i32{ 12, 13, 14, 15 });
+    defer b1.release();
+    var c0 = try makeInt32Array(allocator, &[_]?i32{ 21, 22, 23 });
+    defer c0.release();
+    var c1 = try makeInt32Array(allocator, &[_]?i32{ 24, 25 });
+    defer c1.release();
+
+    var chunks_a = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ a0, a1 });
+    defer chunks_a.release();
+    var chunks_b = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ b0, b1 });
+    defer chunks_b.release();
+    var chunks_c = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ c0, c1 });
+    defer chunks_c.release();
+
+    const d_a = Datum.fromChunked(chunks_a.retain());
+    defer {
+        var d = d_a;
+        d.release();
+    }
+    const d_b = Datum.fromChunked(chunks_b.retain());
+    defer {
+        var d = d_b;
+        d.release();
+    }
+    const d_c = Datum.fromChunked(chunks_c.retain());
+    defer {
+        var d = d_c;
+        d.release();
+    }
+    const args = [_]Datum{ d_a, d_b, d_c };
+
+    var iter = try NaryExecChunkIterator.init(allocator, args[0..]);
+    defer iter.deinit();
+
+    const expected = [_]usize{ 1, 1, 1, 2 };
+    var idx: usize = 0;
+    while (try iter.next()) |chunk_value| : (idx += 1) {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        try std.testing.expect(idx < expected.len);
+        try std.testing.expectEqual(expected[idx], chunk.len);
+        for (chunk.values) |value| {
+            try std.testing.expect(value == .array);
+        }
+    }
+    try std.testing.expectEqual(expected.len, idx);
+}
+
+test "compute nary execution helper propagates nulls across all inputs" {
+    const allocator = std.testing.allocator;
+
+    var arr = try makeInt32Array(allocator, &[_]?i32{ 1, null, 3 });
+    defer arr.release();
+    var c0 = try makeInt32Array(allocator, &[_]?i32{4});
+    defer c0.release();
+    var c1 = try makeInt32Array(allocator, &[_]?i32{ null, 6 });
+    defer c1.release();
+    var chunks = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ c0, c1 });
+    defer chunks.release();
+
+    const array_input = Datum.fromArray(arr.retain());
+    defer {
+        var d = array_input;
+        d.release();
+    }
+    const scalar_null = Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .null,
+    });
+    const chunked_input = Datum.fromChunked(chunks.retain());
+    defer {
+        var d = chunked_input;
+        d.release();
+    }
+
+    const args = [_]Datum{ array_input, scalar_null, chunked_input };
+    var iter = try NaryExecChunkIterator.init(allocator, args[0..]);
+    defer iter.deinit();
+
+    var seen: usize = 0;
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            try std.testing.expect(naryNullPropagates(chunk.values, i));
+            try std.testing.expect(chunk.naryNullAt(i));
+            seen += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), seen);
+}
+
+test "compute inferNaryExecLen rejects non-broadcast length mismatch" {
+    const allocator = std.testing.allocator;
+
+    var a = try makeInt32Array(allocator, &[_]?i32{ 1, 2 });
+    defer a.release();
+    var b = try makeInt32Array(allocator, &[_]?i32{ 10, 11, 12 });
+    defer b.release();
+
+    const d_a = Datum.fromArray(a.retain());
+    defer {
+        var d = d_a;
+        d.release();
+    }
+    const d_b = Datum.fromArray(b.retain());
+    defer {
+        var d = d_b;
+        d.release();
+    }
+    const d_scalar = Datum.fromScalar(.{
+        .data_type = .{ .int32 = {} },
+        .value = .{ .i32 = 7 },
+    });
+    const args = [_]Datum{ d_a, d_b, d_scalar };
+    try std.testing.expectError(error.InvalidInput, inferNaryExecLen(args[0..]));
 }
 
 test "compute inferBinaryExecLen rejects non-broadcast length mismatch" {

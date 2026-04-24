@@ -104,8 +104,8 @@ pub fn build(b: *std.Build) !void {
     configureIpcCompression(b, tests, &run_compression_deps_check.step);
 
     // Discover example files in the `examples` directory and wire them into the build.
-    const examples_dir = b.path("examples");
-    var dir = std.fs.openDirAbsolute(examples_dir.getPath(b), .{ .iterate = true }) catch |err| {
+    const examples_dir = b.pathFromRoot("examples");
+    var dir = std.fs.openDirAbsolute(examples_dir, .{ .iterate = true }) catch |err| {
         std.debug.print("warning: failed to open examples directory: {s}\n", .{@errorName(err)});
         return;
     };
@@ -150,7 +150,7 @@ pub fn build(b: *std.Build) !void {
     fuzz_ipc_step.dependOn(&run_fuzz_ipc.step);
 
     const fuzz_corpus_step = b.step("fuzz-corpus", "Replay built-in fuzz seed corpus");
-    const fuzz_corpus_root = b.path("fuzz/corpus").getPath(b);
+    const fuzz_corpus_root = b.pathFromRoot("fuzz/corpus");
 
     var corpus_layout_dir = std.fs.openDirAbsolute(
         b.pathJoin(&.{ fuzz_corpus_root, "array-validate-layout" }),
@@ -270,8 +270,8 @@ pub fn build(b: *std.Build) !void {
     compute_compat_step.dependOn(&run_compute_compat.step);
 
     // Discover benchmark files in `benchmarks` and wire dedicated run steps.
-    const benches_dir = b.path("benchmarks");
-    var benches = std.fs.openDirAbsolute(benches_dir.getPath(b), .{ .iterate = true }) catch |err| {
+    const benches_dir = b.pathFromRoot("benchmarks");
+    var benches = std.fs.openDirAbsolute(benches_dir, .{ .iterate = true }) catch |err| {
         std.debug.print("warning: failed to open benchmarks directory: {s}\n", .{@errorName(err)});
         return;
     };
