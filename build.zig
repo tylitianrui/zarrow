@@ -1,12 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// Enforce supported Zig version range at compile time.
-// Zig 0.16+ is not yet supported; update this check when compatibility is confirmed.
+// Enforce supported Zig version at compile time.
+// master is pinned to Zig 0.15.x.
 comptime {
     const ver = builtin.zig_version;
-    if (ver.major == 0 and ver.minor >= 16) {
-        @compileError("zarrow requires Zig 0.15.x. Zig 0.16+ is not yet supported.");
+    if (ver.major != 0 or ver.minor != 15) {
+        @compileError("zarrow master requires Zig 0.15.x. For Zig 0.14.x use branch release/zig-0.14");
     }
 }
 
