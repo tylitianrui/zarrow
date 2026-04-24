@@ -8,6 +8,7 @@ const array_data = @import("../array/array_data.zig");
 const format = @import("format.zig");
 const compression_dynlib = @import("compression_dynlib.zig");
 const bitmap = @import("../bitmap.zig");
+const concat_array_refs = @import("../concat_array_refs.zig");
 const stream_writer = @import("stream_writer.zig");
 const tensor_types = @import("tensor_types.zig");
 const fbs_lite_verify = @import("fbs_lite/verify.zig");
@@ -1725,36 +1726,15 @@ fn mergeDictionaryValues(
     base: ArrayRef,
     delta: ArrayRef,
 ) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
-    if (!datatype.dataTypeEql(base.data().data_type, delta.data().data_type)) return StreamError.InvalidMetadata;
-
-    const dt = base.data().data_type;
-    const layout_dt = storageDataType(dt);
-    var merged_storage = try switch (layout_dt) {
-        .null => try concatNullArray(allocator, layout_dt, base.data(), delta.data()),
-        .bool => try concatBooleanArray(allocator, layout_dt, base.data(), delta.data()),
-        .uint8, .int8 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 1),
-        .uint16, .int16, .half_float => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 2),
-        .uint32, .int32, .float, .date32, .time32, .interval_months, .decimal32 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 4),
-        .uint64, .int64, .double, .date64, .time64, .timestamp, .duration, .interval_day_time, .decimal64 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 8),
-        .decimal128, .interval_month_day_nano => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 16),
-        .decimal256 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 32),
-        .fixed_size_binary => |fsb| blk: {
-            const byte_width = std.math.cast(usize, fsb.byte_width) orelse return StreamError.InvalidMetadata;
-            break :blk try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), byte_width);
-        },
-        .string, .binary => try concatVariableBinaryArrayI32(allocator, layout_dt, base.data(), delta.data()),
-        .large_string, .large_binary => try concatVariableBinaryArrayI64(allocator, layout_dt, base.data(), delta.data()),
-        .list, .map => try concatListLikeArrayI32(allocator, layout_dt, base.data(), delta.data()),
-        .large_list => try concatListLikeArrayI64(allocator, layout_dt, base.data(), delta.data()),
-        .fixed_size_list => try concatFixedSizeListArray(allocator, layout_dt, base.data(), delta.data()),
-        .struct_ => try concatStructArray(allocator, layout_dt, base.data(), delta.data()),
-        else => StreamError.UnsupportedType,
+    return concat_array_refs.concatArrayRefs(
+        allocator,
+        base.data().data_type,
+        &[_]ArrayRef{ base, delta },
+    ) catch |err| switch (err) {
+        error.InvalidInput => return StreamError.InvalidMetadata,
+        error.UnsupportedType => return StreamError.UnsupportedType,
+        else => return err,
     };
-
-    if (datatype.dataTypeEql(dt, layout_dt)) return merged_storage;
-    const retagged = try retagArrayRefDataType(allocator, merged_storage, dt);
-    merged_storage.release();
-    return retagged;
 }
 
 fn retagArrayRefDataType(allocator: std.mem.Allocator, src: ArrayRef, out_dt: DataType) error{OutOfMemory}!ArrayRef {

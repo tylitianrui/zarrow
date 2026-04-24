@@ -7,6 +7,7 @@ const chunked_array = @import("chunked_array.zig");
 const table = @import("table.zig");
 const record_batch_reader = @import("record_batch_reader.zig");
 const array = @import("array/array.zig");
+const concat_array_refs = @import("concat_array_refs.zig");
 const record_batch = @import("record_batch.zig");
 const compute_mod = @import("compute/mod.zig");
 
@@ -53,6 +54,8 @@ pub const RecordBatchBuilder = record_batch.RecordBatchBuilder;
 pub const RecordBatchBuilderError = record_batch.RecordBatchBuilderError;
 pub const ArrayData = array.ArrayData;
 pub const ArrayRef = array.ArrayRef;
+pub const ConcatArrayError = concat_array_refs.ConcatArrayError;
+pub const concatArrayRefs = concat_array_refs.concatArrayRefs;
 pub const NullArray = array.NullArray;
 pub const NullBuilder = array.NullBuilder;
 pub const ExtensionArray = array.ExtensionArray;
@@ -194,6 +197,7 @@ test {
     _ = @import("table.zig");
     _ = @import("record_batch_reader.zig");
     _ = @import("record_batch.zig");
+    _ = @import("concat_array_refs.zig");
     _ = @import("compute/core.zig");
     _ = @import("array/array.zig");
     _ = @import("array/array_data.zig");
