@@ -2,6 +2,7 @@ const std = @import("std");
 const datatype = @import("datatype.zig");
 const array_ref_mod = @import("array/array_ref.zig");
 const array_data = @import("array/array_data.zig");
+const array_mod = @import("array/array.zig");
 const buffer = @import("buffer.zig");
 const bitmap = @import("bitmap.zig");
 
@@ -59,6 +60,8 @@ fn concatTwoArrayRefs(
         },
         .string, .binary => try concatVariableBinaryArrayI32(allocator, layout_dt, left.data(), right.data()),
         .large_string, .large_binary => try concatVariableBinaryArrayI64(allocator, layout_dt, left.data(), right.data()),
+        .string_view => try concatStringViewArray(allocator, left.data(), right.data()),
+        .binary_view => try concatBinaryViewArray(allocator, left.data(), right.data()),
         .list, .map => try concatListLikeArrayI32(allocator, layout_dt, left.data(), right.data()),
         .large_list => try concatListLikeArrayI64(allocator, layout_dt, left.data(), right.data()),
         .fixed_size_list => try concatFixedSizeListArray(allocator, layout_dt, left.data(), right.data()),
@@ -96,7 +99,7 @@ fn concatListLikeArrayI32(
     if (left.children.len != 1 or right.children.len != 1) return error.InvalidInput;
 
     const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
-    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return error.InvalidInput;
+    const null_count = std.math.add(usize, try nullCountForArray(left), try nullCountForArray(right)) catch return error.InvalidInput;
     const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
     errdefer if (!validity.isEmpty()) {
         var owned = validity;
@@ -180,7 +183,7 @@ fn concatListLikeArrayI64(
     if (left.children.len != 1 or right.children.len != 1) return error.InvalidInput;
 
     const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
-    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return error.InvalidInput;
+    const null_count = std.math.add(usize, try nullCountForArray(left), try nullCountForArray(right)) catch return error.InvalidInput;
     const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
     errdefer if (!validity.isEmpty()) {
         var owned = validity;
@@ -266,7 +269,7 @@ fn concatFixedSizeListArray(
     if (list_size == 0) return error.InvalidInput;
 
     const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
-    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return error.InvalidInput;
+    const null_count = std.math.add(usize, try nullCountForArray(left), try nullCountForArray(right)) catch return error.InvalidInput;
     const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
     errdefer if (!validity.isEmpty()) {
         var owned = validity;
@@ -315,7 +318,7 @@ fn concatStructArray(
     if (left.children.len != dt.struct_.fields.len or right.children.len != dt.struct_.fields.len) return error.InvalidInput;
 
     const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
-    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return error.InvalidInput;
+    const null_count = std.math.add(usize, try nullCountForArray(left), try nullCountForArray(right)) catch return error.InvalidInput;
     const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
     errdefer if (!validity.isEmpty()) {
         var owned = validity;
@@ -355,6 +358,96 @@ fn concatStructArray(
     };
     try data.validateLayout();
     return ArrayRef.fromOwnedUnsafe(allocator, data);
+}
+
+fn viewDataCapacityHint(data: *const ArrayData) usize {
+    if (data.buffers.len >= 3) return data.buffers[2].len();
+    return 0;
+}
+
+fn concatStringViewArray(
+    allocator: std.mem.Allocator,
+    left: *const ArrayData,
+    right: *const ArrayData,
+) Error!ArrayRef {
+    try left.validateLayout();
+    try right.validateLayout();
+    const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
+    const data_capacity = std.math.add(usize, viewDataCapacityHint(left), viewDataCapacityHint(right)) catch return error.InvalidInput;
+
+    var builder = try array_mod.StringViewBuilder.init(allocator, total_len, data_capacity);
+    defer builder.deinit();
+
+    const left_view = array_mod.StringViewArray{ .data = left };
+    var i: usize = 0;
+    while (i < left.length) : (i += 1) {
+        if (left_view.isNull(i)) {
+            builder.appendNull() catch |err| return mapViewBuilderError(err);
+        } else {
+            builder.append(left_view.value(i)) catch |err| return mapViewBuilderError(err);
+        }
+    }
+
+    const right_view = array_mod.StringViewArray{ .data = right };
+    i = 0;
+    while (i < right.length) : (i += 1) {
+        if (right_view.isNull(i)) {
+            builder.appendNull() catch |err| return mapViewBuilderError(err);
+        } else {
+            builder.append(right_view.value(i)) catch |err| return mapViewBuilderError(err);
+        }
+    }
+
+    var out = builder.finish() catch |err| return mapViewBuilderError(err);
+    errdefer out.release();
+    try out.data().validateLayout();
+    return out;
+}
+
+fn concatBinaryViewArray(
+    allocator: std.mem.Allocator,
+    left: *const ArrayData,
+    right: *const ArrayData,
+) Error!ArrayRef {
+    try left.validateLayout();
+    try right.validateLayout();
+    const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
+    const data_capacity = std.math.add(usize, viewDataCapacityHint(left), viewDataCapacityHint(right)) catch return error.InvalidInput;
+
+    var builder = try array_mod.BinaryViewBuilder.init(allocator, total_len, data_capacity);
+    defer builder.deinit();
+
+    const left_view = array_mod.BinaryViewArray{ .data = left };
+    var i: usize = 0;
+    while (i < left.length) : (i += 1) {
+        if (left_view.isNull(i)) {
+            builder.appendNull() catch |err| return mapViewBuilderError(err);
+        } else {
+            builder.append(left_view.value(i)) catch |err| return mapViewBuilderError(err);
+        }
+    }
+
+    const right_view = array_mod.BinaryViewArray{ .data = right };
+    i = 0;
+    while (i < right.length) : (i += 1) {
+        if (right_view.isNull(i)) {
+            builder.appendNull() catch |err| return mapViewBuilderError(err);
+        } else {
+            builder.append(right_view.value(i)) catch |err| return mapViewBuilderError(err);
+        }
+    }
+
+    var out = builder.finish() catch |err| return mapViewBuilderError(err);
+    errdefer out.release();
+    try out.data().validateLayout();
+    return out;
+}
+
+fn mapViewBuilderError(err: anyerror) ConcatArrayError {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.InvalidInput,
+    };
 }
 
 fn sliceStructChildRef(child_ref: ArrayRef, parent: *const ArrayData) Error!ArrayRef {
@@ -404,7 +497,7 @@ fn concatBooleanArray(
     try requireBitmapBits(right.buffers[1], right.offset + right.length);
 
     const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
-    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return error.InvalidInput;
+    const null_count = std.math.add(usize, try nullCountForArray(left), try nullCountForArray(right)) catch return error.InvalidInput;
     const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
     errdefer if (!validity.isEmpty()) {
         var owned = validity;
@@ -455,7 +548,7 @@ fn concatFixedWidthArray(
     try requireBufferCount(right, 2);
 
     const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
-    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return error.InvalidInput;
+    const null_count = std.math.add(usize, try nullCountForArray(left), try nullCountForArray(right)) catch return error.InvalidInput;
     const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
     errdefer if (!validity.isEmpty()) {
         var owned = validity;
@@ -500,7 +593,7 @@ fn concatVariableBinaryArrayI32(
     try requireBufferCount(right, 3);
 
     const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
-    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return error.InvalidInput;
+    const null_count = std.math.add(usize, try nullCountForArray(left), try nullCountForArray(right)) catch return error.InvalidInput;
     const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
     errdefer if (!validity.isEmpty()) {
         var owned = validity;
@@ -582,7 +675,7 @@ fn concatVariableBinaryArrayI64(
     try requireBufferCount(right, 3);
 
     const total_len = std.math.add(usize, left.length, right.length) catch return error.InvalidInput;
-    const null_count = std.math.add(usize, nullCountForArray(left), nullCountForArray(right)) catch return error.InvalidInput;
+    const null_count = std.math.add(usize, try nullCountForArray(left), try nullCountForArray(right)) catch return error.InvalidInput;
     const validity = try concatValidityBuffer(allocator, left, right, total_len, null_count);
     errdefer if (!validity.isEmpty()) {
         var owned = validity;
@@ -654,9 +747,17 @@ fn concatVariableBinaryArrayI64(
     return ArrayRef.fromOwnedUnsafe(allocator, data);
 }
 
-fn nullCountForArray(data: *const ArrayData) usize {
+fn nullCountForArray(data: *const ArrayData) ConcatArrayError!usize {
     if (data.null_count) |count| return count;
-    if (data.validity()) |v| return v.countNulls();
+    if (data.validity()) |v| {
+        var nulls: usize = 0;
+        var i: usize = 0;
+        while (i < data.length) : (i += 1) {
+            const is_valid = v.isValid(data.offset + i) catch return error.InvalidInput;
+            if (!is_valid) nulls += 1;
+        }
+        return nulls;
+    }
     return 0;
 }
 
@@ -912,6 +1013,60 @@ test "concatArrayRefs supports string and binary families" {
     try std.testing.expectEqualStrings("ab", lbin_view.value(0));
     try std.testing.expectEqualStrings("c", lbin_view.value(1));
     try std.testing.expectEqualStrings("de", lbin_view.value(2));
+
+    var sv_left_builder = try arr.StringViewBuilder.init(allocator, 3, 32);
+    defer sv_left_builder.deinit();
+    try sv_left_builder.append("small");
+    try sv_left_builder.appendNull();
+    try sv_left_builder.append("this string is longer than twelve");
+    var sv_left = try sv_left_builder.finish();
+    defer sv_left.release();
+
+    var sv_right_builder = try arr.StringViewBuilder.init(allocator, 2, 32);
+    defer sv_right_builder.deinit();
+    try sv_right_builder.append("tail");
+    try sv_right_builder.appendNull();
+    var sv_right = try sv_right_builder.finish();
+    defer sv_right.release();
+
+    var sv_left_slice = try sv_left.slice(1, 2);
+    defer sv_left_slice.release();
+    var sv_right_slice = try sv_right.slice(0, 1);
+    defer sv_right_slice.release();
+
+    var merged_sv = try concatArrayRefs(allocator, .{ .string_view = {} }, &[_]ArrayRef{ sv_left_slice, sv_right_slice });
+    defer merged_sv.release();
+    try merged_sv.data().validateLayout();
+    const sv_view = arr.StringViewArray{ .data = merged_sv.data() };
+    try std.testing.expectEqual(@as(usize, 3), sv_view.len());
+    try std.testing.expect(sv_view.isNull(0));
+    try std.testing.expectEqualStrings("this string is longer than twelve", sv_view.value(1));
+    try std.testing.expectEqualStrings("tail", sv_view.value(2));
+
+    var bv_left_builder = try arr.BinaryViewBuilder.init(allocator, 3, 32);
+    defer bv_left_builder.deinit();
+    try bv_left_builder.append("aa");
+    try bv_left_builder.appendNull();
+    try bv_left_builder.append("this-binary-view-is-long");
+    var bv_left = try bv_left_builder.finish();
+    defer bv_left.release();
+
+    var bv_right_builder = try arr.BinaryViewBuilder.init(allocator, 1, 8);
+    defer bv_right_builder.deinit();
+    try bv_right_builder.append("zz");
+    var bv_right = try bv_right_builder.finish();
+    defer bv_right.release();
+
+    var bv_left_slice = try bv_left.slice(1, 2);
+    defer bv_left_slice.release();
+    var merged_bv = try concatArrayRefs(allocator, .{ .binary_view = {} }, &[_]ArrayRef{ bv_left_slice, bv_right });
+    defer merged_bv.release();
+    try merged_bv.data().validateLayout();
+    const bv_view = arr.BinaryViewArray{ .data = merged_bv.data() };
+    try std.testing.expectEqual(@as(usize, 3), bv_view.len());
+    try std.testing.expect(bv_view.isNull(0));
+    try std.testing.expectEqualStrings("this-binary-view-is-long", bv_view.value(1));
+    try std.testing.expectEqualStrings("zz", bv_view.value(2));
 }
 
 test "concatArrayRefs supports list large_list and fixed_size_list" {
@@ -1070,6 +1225,53 @@ test "concatArrayRefs supports list large_list and fixed_size_list" {
     try std.testing.expectEqual(@as(i32, 4), fsl_child.value(1));
     try std.testing.expectEqual(@as(i32, 5), fsl_child.value(2));
     try std.testing.expectEqual(@as(i32, 6), fsl_child.value(3));
+
+    var fsl_null_left_values_builder = try arr.Int32Builder.init(allocator, 6);
+    defer fsl_null_left_values_builder.deinit();
+    try fsl_null_left_values_builder.append(101);
+    try fsl_null_left_values_builder.append(102);
+    try fsl_null_left_values_builder.append(103);
+    try fsl_null_left_values_builder.append(104);
+    try fsl_null_left_values_builder.append(105);
+    try fsl_null_left_values_builder.append(106);
+    var fsl_null_left_values = try fsl_null_left_values_builder.finish();
+    defer fsl_null_left_values.release();
+
+    var fsl_null_left_builder = try arr.FixedSizeListBuilder.init(allocator, value_field, 2);
+    defer fsl_null_left_builder.deinit();
+    try fsl_null_left_builder.appendNull();
+    try fsl_null_left_builder.appendValid();
+    try fsl_null_left_builder.appendValid();
+    var fsl_null_left = try fsl_null_left_builder.finish(fsl_null_left_values);
+    defer fsl_null_left.release();
+
+    var fsl_null_right_values_builder = try arr.Int32Builder.init(allocator, 2);
+    defer fsl_null_right_values_builder.deinit();
+    try fsl_null_right_values_builder.append(201);
+    try fsl_null_right_values_builder.append(202);
+    var fsl_null_right_values = try fsl_null_right_values_builder.finish();
+    defer fsl_null_right_values.release();
+
+    var fsl_null_right_builder = try arr.FixedSizeListBuilder.init(allocator, value_field, 2);
+    defer fsl_null_right_builder.deinit();
+    try fsl_null_right_builder.appendValid();
+    var fsl_null_right = try fsl_null_right_builder.finish(fsl_null_right_values);
+    defer fsl_null_right.release();
+
+    var fsl_null_left_slice = try fsl_null_left.slice(1, 1);
+    defer fsl_null_left_slice.release();
+    var fsl_null_merged = try concatArrayRefs(
+        allocator,
+        .{ .fixed_size_list = .{ .list_size = 2, .value_field = value_field } },
+        &[_]ArrayRef{ fsl_null_left_slice, fsl_null_right },
+    );
+    defer fsl_null_merged.release();
+    try fsl_null_merged.data().validateLayout();
+    const fsl_null_view = arr.FixedSizeListArray{ .data = fsl_null_merged.data() };
+    try std.testing.expectEqual(@as(usize, 2), fsl_null_view.len());
+    try std.testing.expect(!fsl_null_view.isNull(0));
+    try std.testing.expect(!fsl_null_view.isNull(1));
+    try std.testing.expectEqual(@as(usize, 0), fsl_null_merged.data().null_count.?);
 }
 
 test "concatArrayRefs supports recursive struct" {
