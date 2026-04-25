@@ -3,6 +3,7 @@ const datatype = @import("../datatype.zig");
 const array_ref_mod = @import("../array/array_ref.zig");
 const array_mod = @import("../array/array.zig");
 const chunked_array_mod = @import("../chunked_array.zig");
+const concat_array_refs = @import("../concat_array_refs.zig");
 
 pub const DataType = datatype.DataType;
 pub const ArrayRef = array_ref_mod.ArrayRef;
@@ -1353,6 +1354,458 @@ pub fn datumStructField(datum: Datum, field_index: usize) KernelError!Datum {
             break :blk Datum.fromScalar(field_scalar);
         },
     };
+}
+
+fn mapConcatError(err: anyerror) KernelError {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.UnsupportedType => error.UnsupportedType,
+        else => error.InvalidInput,
+    };
+}
+
+fn inferDatumAllocator(datum: Datum) ?std.mem.Allocator {
+    return switch (datum) {
+        .array => |arr| arr.node.allocator,
+        .chunked => |chunks| chunks.node.allocator,
+        .scalar => |s| if (s.payload) |payload| payload.node.allocator else null,
+    };
+}
+
+fn inferDatumsAllocator(datums: []const Datum) std.mem.Allocator {
+    for (datums) |datum| {
+        if (inferDatumAllocator(datum)) |allocator| return allocator;
+    }
+    return std.heap.page_allocator;
+}
+
+fn makeNullArray(allocator: std.mem.Allocator, len: usize) KernelError!ArrayRef {
+    var builder = try array_mod.NullBuilder.init(allocator, len);
+    defer builder.deinit();
+    builder.appendNulls(len) catch |err| return mapArrayReadError(err);
+    return builder.finish() catch |err| return mapArrayReadError(err);
+}
+
+fn makeBoolArrayFilled(allocator: std.mem.Allocator, len: usize, value: ?bool) KernelError!ArrayRef {
+    var builder = try array_mod.BooleanBuilder.init(allocator, len);
+    defer builder.deinit();
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (value) |v| {
+            builder.append(v) catch |err| return mapArrayReadError(err);
+        } else {
+            builder.appendNull() catch |err| return mapArrayReadError(err);
+        }
+    }
+    return builder.finish() catch |err| return mapArrayReadError(err);
+}
+
+fn makeInt32ArrayFilled(allocator: std.mem.Allocator, len: usize, value: ?i32) KernelError!ArrayRef {
+    var builder = try array_mod.Int32Builder.init(allocator, len);
+    defer builder.deinit();
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (value) |v| {
+            builder.append(v) catch |err| return mapArrayReadError(err);
+        } else {
+            builder.appendNull() catch |err| return mapArrayReadError(err);
+        }
+    }
+    return builder.finish() catch |err| return mapArrayReadError(err);
+}
+
+fn makeInt64ArrayFilled(allocator: std.mem.Allocator, len: usize, value: ?i64) KernelError!ArrayRef {
+    var builder = try array_mod.Int64Builder.init(allocator, len);
+    defer builder.deinit();
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (value) |v| {
+            builder.append(v) catch |err| return mapArrayReadError(err);
+        } else {
+            builder.appendNull() catch |err| return mapArrayReadError(err);
+        }
+    }
+    return builder.finish() catch |err| return mapArrayReadError(err);
+}
+
+fn makeStringArrayFilled(allocator: std.mem.Allocator, len: usize, value: ?[]const u8) KernelError!ArrayRef {
+    const bytes_len = if (value) |v| v.len * len else 0;
+    var builder = try array_mod.StringBuilder.init(allocator, len, bytes_len);
+    defer builder.deinit();
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (value) |v| {
+            builder.append(v) catch |err| return mapArrayReadError(err);
+        } else {
+            builder.appendNull() catch |err| return mapArrayReadError(err);
+        }
+    }
+    return builder.finish() catch |err| return mapArrayReadError(err);
+}
+
+fn makeLargeStringArrayFilled(allocator: std.mem.Allocator, len: usize, value: ?[]const u8) KernelError!ArrayRef {
+    const bytes_len = if (value) |v| v.len * len else 0;
+    var builder = try array_mod.LargeStringBuilder.init(allocator, len, bytes_len);
+    defer builder.deinit();
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (value) |v| {
+            builder.append(v) catch |err| return mapArrayReadError(err);
+        } else {
+            builder.appendNull() catch |err| return mapArrayReadError(err);
+        }
+    }
+    return builder.finish() catch |err| return mapArrayReadError(err);
+}
+
+fn makeBinaryArrayFilled(allocator: std.mem.Allocator, len: usize, value: ?[]const u8) KernelError!ArrayRef {
+    const bytes_len = if (value) |v| v.len * len else 0;
+    var builder = try array_mod.BinaryBuilder.init(allocator, len, bytes_len);
+    defer builder.deinit();
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (value) |v| {
+            builder.append(v) catch |err| return mapArrayReadError(err);
+        } else {
+            builder.appendNull() catch |err| return mapArrayReadError(err);
+        }
+    }
+    return builder.finish() catch |err| return mapArrayReadError(err);
+}
+
+fn makeLargeBinaryArrayFilled(allocator: std.mem.Allocator, len: usize, value: ?[]const u8) KernelError!ArrayRef {
+    const bytes_len = if (value) |v| v.len * len else 0;
+    var builder = try array_mod.LargeBinaryBuilder.init(allocator, len, bytes_len);
+    defer builder.deinit();
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (value) |v| {
+            builder.append(v) catch |err| return mapArrayReadError(err);
+        } else {
+            builder.appendNull() catch |err| return mapArrayReadError(err);
+        }
+    }
+    return builder.finish() catch |err| return mapArrayReadError(err);
+}
+
+fn repeatSingleArray(allocator: std.mem.Allocator, single: ArrayRef, count: usize) KernelError!ArrayRef {
+    if (single.data().length != 1) return error.InvalidInput;
+    if (count == 0) {
+        return single.slice(0, 0) catch |err| mapArrayReadError(err);
+    }
+    if (count == 1) return single.retain();
+
+    var parts = allocator.alloc(ArrayRef, count) catch return error.OutOfMemory;
+    defer allocator.free(parts);
+
+    var parts_count: usize = 0;
+    errdefer {
+        var i: usize = 0;
+        while (i < parts_count) : (i += 1) parts[i].release();
+    }
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        parts[i] = single.retain();
+        parts_count += 1;
+    }
+
+    const out = concat_array_refs.concatArrayRefs(allocator, single.data().data_type, parts) catch |err| return mapConcatError(err);
+    return out;
+}
+
+fn buildNullLikeArray(allocator: std.mem.Allocator, data_type: DataType, len: usize) KernelError!ArrayRef {
+    return switch (data_type) {
+        .null => makeNullArray(allocator, len),
+        .bool => makeBoolArrayFilled(allocator, len, null),
+        .int32 => makeInt32ArrayFilled(allocator, len, null),
+        .int64 => makeInt64ArrayFilled(allocator, len, null),
+        .string => makeStringArrayFilled(allocator, len, null),
+        .large_string => makeLargeStringArrayFilled(allocator, len, null),
+        .binary => makeBinaryArrayFilled(allocator, len, null),
+        .large_binary => makeLargeBinaryArrayFilled(allocator, len, null),
+        .list => |list_ty| blk: {
+            var values = try datumBuildEmptyLikeWithAllocator(allocator, list_ty.value_field.data_type.*);
+            defer values.release();
+            std.debug.assert(values == .array);
+
+            var builder = try array_mod.ListBuilder.init(allocator, len, list_ty.value_field);
+            defer builder.deinit();
+
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                builder.appendNull() catch |err| return mapArrayReadError(err);
+            }
+            break :blk builder.finish(values.array) catch |err| mapArrayReadError(err);
+        },
+        .large_list => |list_ty| blk: {
+            var values = try datumBuildEmptyLikeWithAllocator(allocator, list_ty.value_field.data_type.*);
+            defer values.release();
+            std.debug.assert(values == .array);
+
+            var builder = try array_mod.LargeListBuilder.init(allocator, len, list_ty.value_field);
+            defer builder.deinit();
+
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                builder.appendNull() catch |err| return mapArrayReadError(err);
+            }
+            break :blk builder.finish(values.array) catch |err| mapArrayReadError(err);
+        },
+        .fixed_size_list => |list_ty| blk: {
+            var values = try datumBuildEmptyLikeWithAllocator(allocator, list_ty.value_field.data_type.*);
+            defer values.release();
+            std.debug.assert(values == .array);
+
+            const list_size = std.math.cast(usize, list_ty.list_size) orelse return error.InvalidInput;
+            var builder = array_mod.FixedSizeListBuilder.init(allocator, list_ty.value_field, list_size) catch |err| return mapArrayReadError(err);
+            defer builder.deinit();
+
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                builder.appendNull() catch |err| return mapArrayReadError(err);
+            }
+            break :blk builder.finish(values.array) catch |err| mapArrayReadError(err);
+        },
+        .struct_ => |struct_ty| blk: {
+            var children = allocator.alloc(ArrayRef, struct_ty.fields.len) catch return error.OutOfMemory;
+            var child_count: usize = 0;
+            errdefer {
+                var i: usize = 0;
+                while (i < child_count) : (i += 1) children[i].release();
+                allocator.free(children);
+            }
+
+            for (struct_ty.fields, 0..) |field, i| {
+                children[i] = try buildNullLikeArray(allocator, field.data_type.*, len);
+                child_count += 1;
+            }
+
+            var builder = array_mod.StructBuilder.init(allocator, struct_ty.fields);
+            defer builder.deinit();
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                builder.appendNull() catch |err| return mapArrayReadError(err);
+            }
+
+            const out = builder.finish(children[0..child_count]) catch |err| return mapArrayReadError(err);
+            var i_release: usize = 0;
+            while (i_release < child_count) : (i_release += 1) children[i_release].release();
+            allocator.free(children);
+            break :blk out;
+        },
+        else => error.UnsupportedType,
+    };
+}
+
+fn scalarToSingleArrayRef(allocator: std.mem.Allocator, scalar: Scalar) KernelError!ArrayRef {
+    if (scalar.payload) |payload| {
+        if (payload.data().length != 1) return error.InvalidInput;
+        return payload.retain();
+    }
+
+    return switch (scalar.data_type) {
+        .null => makeNullArray(allocator, 1),
+        .bool => makeBoolArrayFilled(allocator, 1, if (scalar.isNull()) null else scalar.value.bool),
+        .int32 => makeInt32ArrayFilled(allocator, 1, if (scalar.isNull()) null else scalar.value.i32),
+        .int64 => makeInt64ArrayFilled(allocator, 1, if (scalar.isNull()) null else scalar.value.i64),
+        .string => makeStringArrayFilled(allocator, 1, if (scalar.isNull()) null else scalar.value.string),
+        .large_string => makeLargeStringArrayFilled(allocator, 1, if (scalar.isNull()) null else scalar.value.string),
+        .binary => makeBinaryArrayFilled(allocator, 1, if (scalar.isNull()) null else scalar.value.binary),
+        .large_binary => makeLargeBinaryArrayFilled(allocator, 1, if (scalar.isNull()) null else scalar.value.binary),
+        .list, .large_list, .fixed_size_list, .struct_ => {
+            if (!scalar.isNull()) return error.InvalidInput;
+            return buildNullLikeArray(allocator, scalar.data_type, 1);
+        },
+        else => error.UnsupportedType,
+    };
+}
+
+fn datumElementArrayAt(allocator: std.mem.Allocator, datum: Datum, logical_index: usize) KernelError!ArrayRef {
+    return switch (datum) {
+        .array => |arr| blk: {
+            if (logical_index >= arr.data().length) break :blk error.InvalidInput;
+            break :blk arr.slice(logical_index, 1) catch |err| mapArrayReadError(err);
+        },
+        .chunked => |chunks| blk: {
+            const located = lookupChunkAt(chunks, logical_index) orelse break :blk error.InvalidInput;
+            break :blk located.chunk.slice(located.local_index, 1) catch |err| mapArrayReadError(err);
+        },
+        .scalar => |scalar| scalarToSingleArrayRef(allocator, scalar),
+    };
+}
+
+fn predicateKeepAt(predicate: Datum, logical_index: usize, options: FilterOptions) KernelError!bool {
+    return switch (predicate) {
+        .scalar => |s| blk: {
+            if (s.data_type != .bool) break :blk error.InvalidInput;
+            if (s.isNull()) break :blk !options.drop_nulls;
+            break :blk s.value.bool;
+        },
+        .array => |arr| blk: {
+            if (arr.data().data_type != .bool) break :blk error.InvalidInput;
+            if (logical_index >= arr.data().length) break :blk error.InvalidInput;
+            if (arr.data().isNull(logical_index)) break :blk !options.drop_nulls;
+            const bool_array = array_mod.BooleanArray{ .data = arr.data() };
+            break :blk bool_array.value(logical_index);
+        },
+        .chunked => |chunks| blk: {
+            if (chunks.dataType() != .bool) break :blk error.InvalidInput;
+            const located = lookupChunkAt(chunks, logical_index) orelse break :blk error.InvalidInput;
+            if (located.chunk.data().isNull(located.local_index)) break :blk !options.drop_nulls;
+            const bool_array = array_mod.BooleanArray{ .data = located.chunk.data() };
+            break :blk bool_array.value(located.local_index);
+        },
+    };
+}
+
+/// Build an empty datum preserving the requested logical type and nested layout.
+pub fn datumBuildEmptyLike(data_type: DataType) KernelError!Datum {
+    return datumBuildEmptyLikeWithAllocator(std.heap.page_allocator, data_type);
+}
+
+/// Build an empty datum preserving the requested logical type and nested layout.
+pub fn datumBuildEmptyLikeWithAllocator(allocator: std.mem.Allocator, data_type: DataType) KernelError!Datum {
+    const out = switch (data_type) {
+        .null => try makeNullArray(allocator, 0),
+        .bool => try makeBoolArrayFilled(allocator, 0, null),
+        .int32 => try makeInt32ArrayFilled(allocator, 0, null),
+        .int64 => try makeInt64ArrayFilled(allocator, 0, null),
+        .string => try makeStringArrayFilled(allocator, 0, null),
+        .large_string => try makeLargeStringArrayFilled(allocator, 0, null),
+        .binary => try makeBinaryArrayFilled(allocator, 0, null),
+        .large_binary => try makeLargeBinaryArrayFilled(allocator, 0, null),
+        .list => |list_ty| blk: {
+            var values = try datumBuildEmptyLikeWithAllocator(allocator, list_ty.value_field.data_type.*);
+            defer values.release();
+            std.debug.assert(values == .array);
+
+            var builder = try array_mod.ListBuilder.init(allocator, 0, list_ty.value_field);
+            defer builder.deinit();
+            break :blk builder.finish(values.array) catch |err| return mapArrayReadError(err);
+        },
+        .large_list => |list_ty| blk: {
+            var values = try datumBuildEmptyLikeWithAllocator(allocator, list_ty.value_field.data_type.*);
+            defer values.release();
+            std.debug.assert(values == .array);
+
+            var builder = try array_mod.LargeListBuilder.init(allocator, 0, list_ty.value_field);
+            defer builder.deinit();
+            break :blk builder.finish(values.array) catch |err| return mapArrayReadError(err);
+        },
+        .fixed_size_list => |list_ty| blk: {
+            var values = try datumBuildEmptyLikeWithAllocator(allocator, list_ty.value_field.data_type.*);
+            defer values.release();
+            std.debug.assert(values == .array);
+
+            const list_size = std.math.cast(usize, list_ty.list_size) orelse return error.InvalidInput;
+            var builder = array_mod.FixedSizeListBuilder.init(allocator, list_ty.value_field, list_size) catch |err| return mapArrayReadError(err);
+            defer builder.deinit();
+            break :blk builder.finish(values.array) catch |err| return mapArrayReadError(err);
+        },
+        .struct_ => |struct_ty| blk: {
+            var children = allocator.alloc(ArrayRef, struct_ty.fields.len) catch return error.OutOfMemory;
+            var child_count: usize = 0;
+            errdefer {
+                var i: usize = 0;
+                while (i < child_count) : (i += 1) children[i].release();
+                allocator.free(children);
+            }
+
+            for (struct_ty.fields, 0..) |field, i| {
+                const child_empty = try datumBuildEmptyLikeWithAllocator(allocator, field.data_type.*);
+                if (child_empty != .array) return error.InvalidInput;
+                children[i] = child_empty.array;
+                child_count += 1;
+            }
+
+            var builder = array_mod.StructBuilder.init(allocator, struct_ty.fields);
+            defer builder.deinit();
+            const out = builder.finish(children[0..child_count]) catch |err| return mapArrayReadError(err);
+
+            var i_release: usize = 0;
+            while (i_release < child_count) : (i_release += 1) children[i_release].release();
+            allocator.free(children);
+            break :blk out;
+        },
+        else => return error.UnsupportedType,
+    };
+
+    return Datum.fromArray(out);
+}
+
+/// Create an empty datum preserving the input datum's logical type.
+pub fn datumSliceEmpty(datum: Datum) KernelError!Datum {
+    return switch (datum) {
+        .array => |arr| Datum.fromArray(arr.slice(0, 0) catch |err| return mapArrayReadError(err)),
+        .chunked => |chunks| Datum.fromChunked(chunks.slice(chunks.node.allocator, 0, 0) catch |err| return mapChunkedError(err)),
+        .scalar => |s| datumBuildEmptyLikeWithAllocator(inferDatumAllocator(datum) orelse std.heap.page_allocator, s.data_type),
+    };
+}
+
+/// Row-wise selection primitive shared by choose/case_when/filter style operators.
+///
+/// `indices[i]` selects which entry in `values` contributes output row `i`.
+/// Each candidate value may be array/chunked/scalar (scalar broadcasts).
+pub fn datumSelect(indices: []const usize, values: []const Datum) KernelError!Datum {
+    if (values.len == 0) return error.InvalidArity;
+    if (!sameDataTypes(values)) return error.InvalidInput;
+
+    const output_len = try inferNaryExecLen(values);
+    if (indices.len != output_len) return error.InvalidInput;
+
+    const allocator = inferDatumsAllocator(values);
+    const out_type = values[0].dataType();
+    if (indices.len == 0) return datumBuildEmptyLikeWithAllocator(allocator, out_type);
+
+    var pieces: std.ArrayList(ArrayRef) = .{};
+    defer {
+        for (pieces.items) |*piece| piece.release();
+        pieces.deinit(allocator);
+    }
+    try pieces.ensureTotalCapacity(allocator, indices.len);
+
+    for (indices, 0..) |choice, logical_index| {
+        if (choice >= values.len) return error.InvalidInput;
+        const piece = try datumElementArrayAt(allocator, values[choice], logical_index);
+        pieces.appendAssumeCapacity(piece);
+    }
+
+    const out = concat_array_refs.concatArrayRefs(allocator, out_type, pieces.items) catch |err| return mapConcatError(err);
+    return Datum.fromArray(out);
+}
+
+/// Generic filter primitive for array/chunked/scalar datums with bool predicates.
+pub fn datumFilter(datum: Datum, predicate: Datum, options: FilterOptions) KernelError!Datum {
+    const output_len = try inferBinaryExecLen(datum, predicate);
+    const allocator = inferDatumsAllocator(&[_]Datum{ datum, predicate });
+    const out_type = datum.dataType();
+
+    if (output_len == 0) return datumBuildEmptyLikeWithAllocator(allocator, out_type);
+
+    var pieces: std.ArrayList(ArrayRef) = .{};
+    defer {
+        for (pieces.items) |*piece| piece.release();
+        pieces.deinit(allocator);
+    }
+
+    var i: usize = 0;
+    while (i < output_len) : (i += 1) {
+        const keep = try predicateKeepAt(predicate, i, options);
+        if (!keep) continue;
+
+        const piece = try datumElementArrayAt(allocator, datum, i);
+        pieces.append(allocator, piece) catch {
+            var owned = piece;
+            owned.release();
+            return error.OutOfMemory;
+        };
+    }
+
+    if (pieces.items.len == 0) return datumBuildEmptyLikeWithAllocator(allocator, out_type);
+
+    const out = concat_array_refs.concatArrayRefs(allocator, out_type, pieces.items) catch |err| return mapConcatError(err);
+    return Datum.fromArray(out);
 }
 
 const ExecDatumCursor = union(enum) {
@@ -3227,4 +3680,197 @@ test "compute datumStructField supports scalar struct bool fields" {
     defer null_field.release();
     try std.testing.expect(null_field.isScalar());
     try std.testing.expect(null_field.scalar.isNull());
+}
+
+test "compute datumBuildEmptyLike and datumSliceEmpty preserve nested layout" {
+    const allocator = std.testing.allocator;
+
+    const int32_type = DataType{ .int32 = {} };
+    const bool_type = DataType{ .bool = {} };
+    const list_field = datatype.Field{
+        .name = "item",
+        .data_type = &int32_type,
+        .nullable = true,
+    };
+    const struct_fields = [_]datatype.Field{
+        .{ .name = "x", .data_type = &int32_type, .nullable = true },
+        .{ .name = "flag", .data_type = &bool_type, .nullable = true },
+    };
+
+    const list_type = DataType{ .list = .{ .value_field = list_field } };
+    const fixed_size_list_type = DataType{ .fixed_size_list = .{ .list_size = 2, .value_field = list_field } };
+    const struct_type = DataType{ .struct_ = .{ .fields = struct_fields[0..] } };
+
+    var empty_list = try datumBuildEmptyLike(list_type);
+    defer empty_list.release();
+    try std.testing.expect(empty_list.isArray());
+    try std.testing.expectEqual(@as(usize, 0), empty_list.array.data().length);
+    try std.testing.expect(empty_list.array.data().data_type.eql(list_type));
+    try empty_list.array.data().validateLayout();
+
+    var empty_fsl = try datumBuildEmptyLike(fixed_size_list_type);
+    defer empty_fsl.release();
+    try std.testing.expect(empty_fsl.isArray());
+    try std.testing.expectEqual(@as(usize, 0), empty_fsl.array.data().length);
+    try std.testing.expect(empty_fsl.array.data().data_type.eql(fixed_size_list_type));
+    try empty_fsl.array.data().validateLayout();
+
+    var empty_struct = try datumBuildEmptyLike(struct_type);
+    defer empty_struct.release();
+    try std.testing.expect(empty_struct.isArray());
+    try std.testing.expectEqual(@as(usize, 0), empty_struct.array.data().length);
+    try std.testing.expect(empty_struct.array.data().data_type.eql(struct_type));
+    try empty_struct.array.data().validateLayout();
+
+    var values = try makeInt32Array(allocator, &[_]?i32{ 1, 2 });
+    defer values.release();
+    var list_builder = try array_mod.ListBuilder.init(allocator, 1, list_field);
+    defer list_builder.deinit();
+    try list_builder.appendLen(2);
+    var list_one = try list_builder.finish(values);
+    defer list_one.release();
+
+    var scalar_list = Datum.fromScalar(try Scalar.initNested(list_type, list_one));
+    defer scalar_list.release();
+    var sliced_empty = try datumSliceEmpty(scalar_list);
+    defer sliced_empty.release();
+    try std.testing.expect(sliced_empty.isArray());
+    try std.testing.expectEqual(@as(usize, 0), sliced_empty.array.data().length);
+    try std.testing.expect(sliced_empty.array.data().data_type.eql(list_type));
+    try sliced_empty.array.data().validateLayout();
+}
+
+test "compute datumFilter supports scalar array chunked and fixed_size_list null alignment" {
+    const allocator = std.testing.allocator;
+    const int32_array = array_mod.Int32Array;
+
+    const int32_type = DataType{ .int32 = {} };
+    const list_field = datatype.Field{
+        .name = "item",
+        .data_type = &int32_type,
+        .nullable = true,
+    };
+    const list_type = DataType{ .list = .{ .value_field = list_field } };
+
+    var scalar_values_child = try makeInt32Array(allocator, &[_]?i32{ 7, 8 });
+    defer scalar_values_child.release();
+    var scalar_list_builder = try array_mod.ListBuilder.init(allocator, 1, list_field);
+    defer scalar_list_builder.deinit();
+    try scalar_list_builder.appendLen(2);
+    var scalar_list_payload = try scalar_list_builder.finish(scalar_values_child);
+    defer scalar_list_payload.release();
+
+    var scalar_datum = Datum.fromScalar(try Scalar.initNested(list_type, scalar_list_payload));
+    defer scalar_datum.release();
+
+    var pred_array = try makeBoolArray(allocator, &[_]?bool{ true, false, true });
+    defer pred_array.release();
+    var pred_datum = Datum.fromArray(pred_array.retain());
+    defer pred_datum.release();
+
+    var filtered_scalar = try datumFilter(scalar_datum, pred_datum, .{ .drop_nulls = true });
+    defer filtered_scalar.release();
+    try std.testing.expect(filtered_scalar.isArray());
+    try std.testing.expectEqual(@as(usize, 2), filtered_scalar.array.data().length);
+    try filtered_scalar.array.data().validateLayout();
+    const filtered_scalar_list = array_mod.ListArray{ .data = filtered_scalar.array.data() };
+    var fs0 = try filtered_scalar_list.value(0);
+    defer fs0.release();
+    const fs0_values = int32_array{ .data = fs0.data() };
+    try std.testing.expectEqual(@as(i32, 7), fs0_values.value(0));
+    try std.testing.expectEqual(@as(i32, 8), fs0_values.value(1));
+
+    var list_values = try makeInt32Array(allocator, &[_]?i32{ 1, 2, 3 });
+    defer list_values.release();
+    var list_builder = try array_mod.ListBuilder.init(allocator, 3, list_field);
+    defer list_builder.deinit();
+    try list_builder.appendLen(1);
+    try list_builder.appendLen(1);
+    try list_builder.appendLen(1);
+    var list_array = try list_builder.finish(list_values);
+    defer list_array.release();
+
+    var pred_chunk0 = try makeBoolArray(allocator, &[_]?bool{ true, null });
+    defer pred_chunk0.release();
+    var pred_chunk1 = try makeBoolArray(allocator, &[_]?bool{false});
+    defer pred_chunk1.release();
+    var pred_chunked = try ChunkedArray.init(allocator, .{ .bool = {} }, &[_]ArrayRef{ pred_chunk0, pred_chunk1 });
+    defer pred_chunked.release();
+
+    var list_datum = Datum.fromArray(list_array.retain());
+    defer list_datum.release();
+    var pred_chunked_datum = Datum.fromChunked(pred_chunked.retain());
+    defer pred_chunked_datum.release();
+
+    var filtered_drop_nulls = try datumFilter(list_datum, pred_chunked_datum, .{ .drop_nulls = true });
+    defer filtered_drop_nulls.release();
+    try std.testing.expectEqual(@as(usize, 1), filtered_drop_nulls.array.data().length);
+
+    var filtered_keep_nulls = try datumFilter(list_datum, pred_chunked_datum, .{ .drop_nulls = false });
+    defer filtered_keep_nulls.release();
+    try std.testing.expectEqual(@as(usize, 2), filtered_keep_nulls.array.data().length);
+    try filtered_keep_nulls.array.data().validateLayout();
+
+    var fsl_values = try makeInt32Array(allocator, &[_]?i32{ 10, 11, 20, 21, 30, 31 });
+    defer fsl_values.release();
+    var fsl_builder = try array_mod.FixedSizeListBuilder.init(allocator, list_field, 2);
+    defer fsl_builder.deinit();
+    try fsl_builder.appendValid();
+    try fsl_builder.appendNull();
+    try fsl_builder.appendValid();
+    var fsl_array = try fsl_builder.finish(fsl_values);
+    defer fsl_array.release();
+
+    var fsl_pred = try makeBoolArray(allocator, &[_]?bool{ false, true, true });
+    defer fsl_pred.release();
+    var fsl_datum = Datum.fromArray(fsl_array.retain());
+    defer fsl_datum.release();
+    var fsl_pred_datum = Datum.fromArray(fsl_pred.retain());
+    defer fsl_pred_datum.release();
+
+    var filtered_fsl = try datumFilter(fsl_datum, fsl_pred_datum, .{ .drop_nulls = true });
+    defer filtered_fsl.release();
+    try std.testing.expect(filtered_fsl.isArray());
+    try std.testing.expectEqual(@as(usize, 2), filtered_fsl.array.data().length);
+    try filtered_fsl.array.data().validateLayout();
+
+    const fsl_view = array_mod.FixedSizeListArray{ .data = filtered_fsl.array.data() };
+    try std.testing.expect(fsl_view.isNull(0));
+    try std.testing.expectEqual(@as(usize, 4), fsl_view.valuesRef().data().length);
+}
+
+test "compute datumSelect supports mixed candidate datum forms" {
+    const allocator = std.testing.allocator;
+    const int32_array = array_mod.Int32Array;
+
+    var a = try makeInt32Array(allocator, &[_]?i32{ 10, 20, 30 });
+    defer a.release();
+    var c0 = try makeInt32Array(allocator, &[_]?i32{100});
+    defer c0.release();
+    var c1 = try makeInt32Array(allocator, &[_]?i32{ 200, 300 });
+    defer c1.release();
+    var chunked = try ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]ArrayRef{ c0, c1 });
+    defer chunked.release();
+
+    const values = [_]Datum{
+        Datum.fromArray(a.retain()),
+        Datum.fromScalar(Scalar.init(.{ .int32 = {} }, .{ .i32 = 99 })),
+        Datum.fromChunked(chunked.retain()),
+    };
+    defer {
+        var i: usize = 0;
+        while (i < values.len) : (i += 1) {
+            var d = values[i];
+            d.release();
+        }
+    }
+
+    var out = try datumSelect(&[_]usize{ 0, 1, 2 }, values[0..]);
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expectEqual(@as(usize, 3), out.array.data().length);
+    const view = int32_array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(i32, 10), view.value(0));
+    try std.testing.expectEqual(@as(i32, 99), view.value(1));
+    try std.testing.expectEqual(@as(i32, 300), view.value(2));
 }

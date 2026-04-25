@@ -228,6 +228,11 @@ pub const computeDatumListValueAt = compute_mod.datumListValueAt;
 pub const computeDatumLargeListValueAt = compute_mod.datumLargeListValueAt;
 pub const computeDatumFixedSizeListValueAt = compute_mod.datumFixedSizeListValueAt;
 pub const computeDatumStructField = compute_mod.datumStructField;
+pub const computeDatumBuildEmptyLike = compute_mod.datumBuildEmptyLike;
+pub const computeDatumBuildEmptyLikeWithAllocator = compute_mod.datumBuildEmptyLikeWithAllocator;
+pub const computeDatumSliceEmpty = compute_mod.datumSliceEmpty;
+pub const computeDatumSelect = compute_mod.datumSelect;
+pub const computeDatumFilter = compute_mod.datumFilter;
 pub const computeIntCastOrInvalidCast = compute_mod.intCastOrInvalidCast;
 pub const computeArithmeticDivI64 = compute_mod.arithmeticDivI64;
 
