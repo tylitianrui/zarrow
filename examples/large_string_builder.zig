@@ -9,6 +9,7 @@ pub fn main() !void {
     try builder.appendNull();
     try builder.append("large-utf8");
 
+    // `finishReset` returns an array and keeps builder reusable for the next batch.
     var array_ref = try builder.finishReset();
     defer array_ref.release();
     const array = zarrow.LargeStringArray{ .data = array_ref.data() };
@@ -18,6 +19,7 @@ pub fn main() !void {
     std.debug.assert(array.isNull(1));
     std.debug.assert(std.mem.eql(u8, array.value(2), "large-utf8"));
 
+    // Build a second batch from the same builder instance.
     try builder.append("hello");
     try builder.append("world");
 

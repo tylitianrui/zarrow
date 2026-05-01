@@ -9,6 +9,7 @@ pub fn main() !void {
     try builder.appendNull();
     try builder.append("rrow");
 
+    // `finishReset` yields one array and resets internal cursors for reuse.
     var array_ref = try builder.finishReset();
     defer array_ref.release();
     const array = zarrow.LargeBinaryArray{ .data = array_ref.data() };
@@ -18,6 +19,7 @@ pub fn main() !void {
     std.debug.assert(array.isNull(1));
     std.debug.assert(std.mem.eql(u8, array.value(2), "rrow"));
 
+    // Reuse the same builder for another chunk to demonstrate lifecycle behavior.
     try builder.append("again");
     try builder.appendNull();
 

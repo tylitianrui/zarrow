@@ -2,6 +2,7 @@ const std = @import("std");
 const zarrow = @import("zarrow");
 
 pub fn main() !void {
+    // UInt8: show `finishReset` then append a second batch and `finish`.
     var b8 = try zarrow.UInt8Builder.init(std.heap.page_allocator, 3);
     defer b8.deinit();
     try b8.append(1);
@@ -23,6 +24,7 @@ pub fn main() !void {
     std.debug.assert((try a8b.value(0)) == 7);
     std.debug.assert((try a8b.value(1)) == 8);
 
+    // UInt16: same nullable build pattern.
     var b16 = try zarrow.UInt16Builder.init(std.heap.page_allocator, 3);
     defer b16.deinit();
     try b16.append(10);
@@ -36,6 +38,7 @@ pub fn main() !void {
     std.debug.assert(a16.isNull(1));
     std.debug.assert((try a16.value(2)) == 30);
 
+    // UInt32: same API surface for wider unsigned type.
     var b32 = try zarrow.UInt32Builder.init(std.heap.page_allocator, 3);
     defer b32.deinit();
     try b32.append(100);
@@ -49,6 +52,7 @@ pub fn main() !void {
     std.debug.assert(a32.isNull(1));
     std.debug.assert((try a32.value(2)) == 300);
 
+    // UInt64: complete with `finish` for final materialization.
     var b64 = try zarrow.UInt64Builder.init(std.heap.page_allocator, 3);
     defer b64.deinit();
     try b64.append(1000);
