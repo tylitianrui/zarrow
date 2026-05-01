@@ -227,6 +227,8 @@ pub const OptionsTag = enum {
     arithmetic,
     /// Filter behavior.
     filter,
+    /// Sort behavior (order, null placement, NaN handling, stability).
+    sort,
     /// Escape hatch for downstream custom kernels.
     custom,
 };
@@ -253,6 +255,36 @@ pub const FilterOptions = struct {
     drop_nulls: bool = true,
 };
 
+/// Sort direction for sort-like kernels.
+pub const SortOrder = enum {
+    ascending,
+    descending,
+};
+
+/// Null placement strategy for sort-like kernels.
+pub const SortNullPlacement = enum {
+    at_start,
+    at_end,
+};
+
+/// NaN placement strategy for floating-point sort-like kernels.
+pub const SortNaNPlacement = enum {
+    at_start,
+    at_end,
+};
+
+/// Common options for sort-like kernels.
+pub const SortOptions = struct {
+    /// Ordering direction.
+    order: SortOrder = .ascending,
+    /// Null placement behavior.
+    null_placement: SortNullPlacement = .at_end,
+    /// Optional NaN placement policy for floating-point inputs.
+    nan_placement: ?SortNaNPlacement = null,
+    /// If true, equal-key ordering should be stable.
+    stable: bool = false,
+};
+
 /// Custom untyped options hook for downstream extension kernels.
 pub const CustomOptions = struct {
     /// Caller-defined discriminator.
@@ -267,6 +299,7 @@ pub const Options = union(OptionsTag) {
     cast: CastOptions,
     arithmetic: ArithmeticOptions,
     filter: FilterOptions,
+    sort: SortOptions,
     custom: CustomOptions,
 
     pub fn noneValue() Options {
@@ -2258,6 +2291,13 @@ fn onlyArithmeticOptions(options: Options) bool {
     };
 }
 
+fn onlySortOptions(options: Options) bool {
+    return switch (options) {
+        .sort => true,
+        else => false,
+    };
+}
+
 fn firstArgResultType(args: []const Datum, options: Options) KernelError!DataType {
     _ = options;
     if (args.len == 0) return error.InvalidInput;
@@ -2986,6 +3026,70 @@ test "compute explain helpers provide readable diagnostics" {
 
     const result_type_reason = registry.explainResolveResultTypeFailure("cast_identity", .scalar, args[0..], bad_options);
     try std.testing.expect(std.mem.eql(u8, result_type_reason, "kernel matched args but options were invalid"));
+}
+
+test "compute sort options defaults and tag dispatch" {
+    const defaults = SortOptions{};
+    try std.testing.expectEqual(SortOrder.ascending, defaults.order);
+    try std.testing.expectEqual(SortNullPlacement.at_end, defaults.null_placement);
+    try std.testing.expect(defaults.nan_placement == null);
+    try std.testing.expect(!defaults.stable);
+
+    const sort_options = Options{ .sort = .{} };
+    try std.testing.expectEqual(OptionsTag.sort, sort_options.tag());
+    try std.testing.expect(switch (sort_options) {
+        .sort => |opts| opts.order == .ascending and opts.null_placement == .at_end and opts.nan_placement == null and !opts.stable,
+        else => false,
+    });
+}
+
+test "compute kernel signature options_check validates sort options" {
+    const sig = KernelSignature{
+        .arity = 1,
+        .type_check = isInt32Datum,
+        .options_check = onlySortOptions,
+    };
+
+    try std.testing.expect(sig.matchesOptions(.{ .sort = .{} }));
+    try std.testing.expect(!sig.matchesOptions(.{ .cast = .{} }));
+}
+
+test "compute sort options mismatch path reports InvalidOptions" {
+    const allocator = std.testing.allocator;
+    const int32_builder = @import("../array/array.zig").Int32Builder;
+
+    var registry = FunctionRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.registerScalarKernel("sort_options_gate", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = isInt32Datum,
+            .options_check = onlySortOptions,
+        },
+        .exec = passthroughInt32Kernel,
+    });
+
+    var builder = try int32_builder.init(allocator, 1);
+    defer builder.deinit();
+    try builder.append(42);
+    var arr = try builder.finish();
+    defer arr.release();
+
+    const args = [_]Datum{Datum.fromArray(arr.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var ctx = ExecContext.init(allocator, &registry);
+    try std.testing.expectError(
+        error.InvalidOptions,
+        ctx.invokeScalar("sort_options_gate", args[0..], .{ .filter = .{ .drop_nulls = true } }),
+    );
+
+    const reason = registry.explainResolveKernelFailure("sort_options_gate", .scalar, args[0..], .{ .filter = .{ .drop_nulls = true } });
+    try std.testing.expect(std.mem.eql(u8, reason, "kernel matched args but options were invalid"));
 }
 
 test "compute scalar value temporal and decimal coverage" {
