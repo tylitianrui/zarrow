@@ -24,9 +24,9 @@ Legend:
 | Type group | Declared | Implemented | Tested | Example | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | UTF-8 (`Utf8`) | Yes (`string`) | Yes (`StringBuilder`) | Yes | Yes | `src/array/string_array.zig`, `examples/string_builder.zig` |
-| Large UTF-8 (`LargeUtf8`) | Yes (`large_string`) | Yes (`LargeStringBuilder`) | Yes | No dedicated example | `src/array/string_array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig` |
+| Large UTF-8 (`LargeUtf8`) | Yes (`large_string`) | Yes (`LargeStringBuilder`) | Yes | Yes | `src/array/string_array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig`, `examples/large_string_builder.zig` |
 | Binary (`Binary`) | Yes (`binary`) | Yes (`BinaryBuilder`) | Yes | Yes | `src/array/binary_array.zig`, `examples/binary_builder.zig` |
-| Large Binary (`LargeBinary`) | Yes (`large_binary`) | Yes (`LargeBinaryBuilder`) | Yes | No dedicated example | `src/array/binary_array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig` |
+| Large Binary (`LargeBinary`) | Yes (`large_binary`) | Yes (`LargeBinaryBuilder`) | Yes | Yes | `src/array/binary_array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig`, `examples/large_binary_builder.zig` |
 
 ## 3. Nested types
 
@@ -48,5 +48,4 @@ Legend:
 ## Notes and current gaps
 
 - Primitive aliases share one generic implementation (`PrimitiveBuilder` / `PrimitiveArray`), so not every alias has a dedicated standalone example.
-- `LargeUtf8` / `LargeBinary` are implemented and unit-tested, but currently do not have dedicated example programs under `examples/`.
 - Coverage here reflects source-level implementation and tests; it does not claim full production-hardening across all interop ecosystems for every type combination.

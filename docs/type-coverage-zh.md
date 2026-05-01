@@ -24,9 +24,9 @@
 | 类型组 | 已声明 | 已实现 | 已测试 | 有示例 | 证据 |
 | --- | --- | --- | --- | --- | --- |
 | UTF-8 (`Utf8`) | 是（`string`） | 是（`StringBuilder`） | 是 | 是 | `src/array/string_array.zig`, `examples/string_builder.zig` |
-| Large UTF-8 (`LargeUtf8`) | 是（`large_string`） | 是（`LargeStringBuilder`） | 是 | 暂无单独示例 | `src/array/string_array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig` |
+| Large UTF-8 (`LargeUtf8`) | 是（`large_string`） | 是（`LargeStringBuilder`） | 是 | 是 | `src/array/string_array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig`, `examples/large_string_builder.zig` |
 | Binary (`Binary`) | 是（`binary`） | 是（`BinaryBuilder`） | 是 | 是 | `src/array/binary_array.zig`, `examples/binary_builder.zig` |
-| Large Binary (`LargeBinary`) | 是（`large_binary`） | 是（`LargeBinaryBuilder`） | 是 | 暂无单独示例 | `src/array/binary_array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig` |
+| Large Binary (`LargeBinary`) | 是（`large_binary`） | 是（`LargeBinaryBuilder`） | 是 | 是 | `src/array/binary_array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig`, `examples/large_binary_builder.zig` |
 
 ## 3. 嵌套类型
 
@@ -48,5 +48,4 @@
 ## 说明与当前缺口
 
 - `Int8/Int16/Int64/UInt*` 等别名复用同一套 `PrimitiveBuilder`/`PrimitiveArray` 泛型实现，所以不是每个别名都有单独示例。
-- `LargeUtf8` / `LargeBinary` 已实现且有单测，但 `examples/` 里目前没有单独 demo。
 - 本矩阵反映的是“源码实现 + 单测覆盖”层面的结论，不等同于“所有生态组合都已生产级验证”。
