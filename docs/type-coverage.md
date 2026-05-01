@@ -14,7 +14,7 @@ Legend:
 | Type group | Declared | Implemented | Tested | Example | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | Signed integers (`Int8/16/32/64`) | Yes | Yes (`Int8Builder`...`Int64Builder`) | Generic primitive path tested | `Int32` example | `src/datatype.zig`, `src/array/array.zig`, `src/array/primitive_array.zig`, `examples/primitive_builder.zig` |
-| Unsigned integers (`UInt8/16/32/64`) | Yes | Yes (`UInt8Builder`...`UInt64Builder`) | Generic primitive path tested | No dedicated example | `src/datatype.zig`, `src/array/array.zig`, `src/array/primitive_array.zig` |
+| Unsigned integers (`UInt8/16/32/64`) | Yes | Yes (`UInt8Builder`...`UInt64Builder`) | Generic primitive path tested | Yes | `src/datatype.zig`, `src/array/array.zig`, `src/array/primitive_array.zig`, `examples/uint_builder.zig` |
 | Floating point (`Half/Float32/Float64`) | Yes | Yes (`HalfFloatBuilder`, `Float32Builder`, `Float64Builder`) | Alias tests include half float | `Float32` appears in union example | `src/array/array.zig`, `examples/union_builder.zig` |
 | Boolean | Yes | Yes (`BooleanBuilder`) | Yes | Yes | `src/array/boolean_array.zig`, `examples/boolean_builder.zig` |
 | Decimal (`32/64/128/256`) | Yes | Yes (`Decimal32Builder`...`Decimal256Builder`) | Yes | Yes | `src/array/array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig`, `examples/decimal_builder.zig` |
@@ -47,5 +47,5 @@ Legend:
 
 ## Notes and current gaps
 
-- Primitive aliases share one generic implementation (`PrimitiveBuilder` / `PrimitiveArray`), so not every alias has a dedicated standalone example.
+- Primitive aliases share one generic implementation (`PrimitiveBuilder` / `PrimitiveArray`), so not every alias has a dedicated standalone example (for example some signed integer aliases).
 - Coverage here reflects source-level implementation and tests; it does not claim full production-hardening across all interop ecosystems for every type combination.

@@ -14,7 +14,7 @@
 | 类型组 | 已声明 | 已实现 | 已测试 | 有示例 | 证据 |
 | --- | --- | --- | --- | --- | --- |
 | 有符号整数 (`Int8/16/32/64`) | 是 | 是（`Int8Builder`...`Int64Builder`） | 走同一套 primitive 泛型路径并有测试 | `Int32` 示例 | `src/datatype.zig`, `src/array/array.zig`, `src/array/primitive_array.zig`, `examples/primitive_builder.zig` |
-| 无符号整数 (`UInt8/16/32/64`) | 是 | 是（`UInt8Builder`...`UInt64Builder`） | 走同一套 primitive 泛型路径并有测试 | 暂无单独示例 | `src/datatype.zig`, `src/array/array.zig`, `src/array/primitive_array.zig` |
+| 无符号整数 (`UInt8/16/32/64`) | 是 | 是（`UInt8Builder`...`UInt64Builder`） | 走同一套 primitive 泛型路径并有测试 | 是 | `src/datatype.zig`, `src/array/array.zig`, `src/array/primitive_array.zig`, `examples/uint_builder.zig` |
 | 浮点 (`Half/Float32/Float64`) | 是 | 是（`HalfFloatBuilder`, `Float32Builder`, `Float64Builder`） | 有 half-float alias 测试 | `Float32` 在 union 示例中使用 | `src/array/array.zig`, `examples/union_builder.zig` |
 | 布尔 (`Bool`) | 是 | 是（`BooleanBuilder`） | 是 | 是 | `src/array/boolean_array.zig`, `examples/boolean_builder.zig` |
 | Decimal (`32/64/128/256`) | 是 | 是（`Decimal32Builder`...`Decimal256Builder`） | 是 | 是 | `src/array/array.zig`, `src/ipc/stream_writer.zig`, `src/ipc/stream_reader.zig`, `examples/decimal_builder.zig` |
@@ -47,5 +47,5 @@
 
 ## 说明与当前缺口
 
-- `Int8/Int16/Int64/UInt*` 等别名复用同一套 `PrimitiveBuilder`/`PrimitiveArray` 泛型实现，所以不是每个别名都有单独示例。
+- `Int8/Int16/Int64` 等别名复用同一套 `PrimitiveBuilder`/`PrimitiveArray` 泛型实现，所以不是每个别名都有单独示例。
 - 本矩阵反映的是“源码实现 + 单测覆盖”层面的结论，不等同于“所有生态组合都已生产级验证”。
