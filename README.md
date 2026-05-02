@@ -74,7 +74,25 @@ The project favors correctness, explicit ownership, interop testing, and spec-al
 
 `master` currently targets Zig `0.15.x`.
 
-For older Zig versions, use the appropriate release branch if available.
+Because Zig has frequent breaking changes between compiler versions, `zarrow` maintains versioned tags that encode both:
+
+- `v<zarrow-version>` = zarrow release version
+- `zig0.15` = Zig compiler major/minor compatibility target
+
+For example, `v0.0.2-zig0.15` means:
+
+- zarrow release version `0.0.2`
+- Zig compatibility target `0.15.x`
+
+Recommended tag mapping:
+
+| Zig version | Use tag |
+| --- | --- |
+| `0.15.x` | `v<zarrow-version>-zig0.15` |
+| `0.14.x` | `v<zarrow-version>-zig0.14` |
+| `0.13.x` | `v<zarrow-version>-zig0.13` |
+
+If you are using older Zig versions, use the matching `-zig0.xx` tag instead of `master`.
 
 ---
 
@@ -89,7 +107,7 @@ zig fetch --save "git+https://github.com/tylitianrui/zarrow#master"
 For release-pinned usage, prefer a release tag:
 
 ```sh
-zig fetch --save "git+https://github.com/tylitianrui/zarrow#v0.0.2-zig0.15.x"
+zig fetch --save "git+https://github.com/tylitianrui/zarrow#v<zarrow-version>-zig0.15"
 ```
 
 Then wire the module in your `build.zig`:
