@@ -103,7 +103,7 @@ fn datumTakeChunkedNullable(
     }
 
     var out_chunks: std.ArrayList(ArrayRef) = .{};
-    defer {
+    errdefer {
         for (out_chunks.items) |*chunk| chunk.release();
         out_chunks.deinit(allocator);
     }
@@ -189,6 +189,8 @@ fn datumTakeChunkedNullable(
     }
 
     const out = ChunkedArray.init(allocator, out_type, out_chunks.items) catch |err| return common.mapChunkedError(err);
+    for (out_chunks.items) |*chunk| chunk.release();
+    out_chunks.deinit(allocator);
     return Datum.fromChunked(out);
 }
 
