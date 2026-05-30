@@ -106,7 +106,8 @@ pub const RecordBatch = struct {
 
     /// Create a logical slice view over the current value.
     pub fn slice(self: *const Self, offset: usize, length: usize) !Self {
-        if (offset > self.num_rows or offset + length > self.num_rows) return RecordBatchError.SliceOutOfBounds;
+        const end = std.math.add(usize, offset, length) catch return RecordBatchError.SliceOutOfBounds;
+        if (offset > self.num_rows or end > self.num_rows) return RecordBatchError.SliceOutOfBounds;
 
         const sliced_columns = try self.allocator.alloc(ArrayRef, self.columns.len);
         var count: usize = 0;

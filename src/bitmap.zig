@@ -90,6 +90,53 @@ pub fn countUnsetBit(data: []const u8, bit_len: usize) usize {
     return bit_len - countSetBit(data, bit_len);
 }
 
+// Count set bits in the half-open range [start_bit, end_bit).
+// Correctly handles non-zero start offsets, avoiding O(n) element-by-element scanning.
+pub fn countSetBitsInRange(data: []const u8, start_bit: usize, end_bit: usize) usize {
+    if (start_bit >= end_bit) return 0;
+    // Fast path: zero-based range delegates to the existing full-scan helper.
+    if (start_bit == 0) return countSetBit(data, end_bit);
+
+    const first_byte = start_bit >> 3;
+    const last_byte = (end_bit - 1) >> 3;
+
+    var count: usize = 0;
+
+    if (first_byte == last_byte) {
+        // All bits are within a single byte.
+        const lo_bit = @as(u3, @intCast(start_bit & 7));
+        const hi_bit = @as(u3, @intCast((end_bit - 1) & 7));
+        const hi_shift = @as(u4, hi_bit) + 1; // range 1..8
+        const hi_mask: u8 = if (hi_shift >= 8) 0xFF else (@as(u8, 1) << @as(u3, @intCast(hi_shift))) - 1;
+        const lo_mask: u8 = ~((@as(u8, 1) << lo_bit) - 1);
+        return @popCount(data[first_byte] & lo_mask & hi_mask);
+    }
+
+    // First byte: bits from (start_bit & 7) through the high end of the byte.
+    const lo_bit = @as(u3, @intCast(start_bit & 7));
+    const first_mask: u8 = ~((@as(u8, 1) << lo_bit) - 1);
+    count += @popCount(data[first_byte] & first_mask);
+
+    // Full middle bytes.
+    for (data[first_byte + 1 .. last_byte]) |byte| {
+        count += @popCount(byte);
+    }
+
+    // Last byte: bits from 0 through (end_bit-1) & 7.
+    const hi_bit = @as(u3, @intCast((end_bit - 1) & 7));
+    const hi_shift = @as(u4, hi_bit) + 1;
+    const last_mask: u8 = if (hi_shift >= 8) 0xFF else (@as(u8, 1) << @as(u3, @intCast(hi_shift))) - 1;
+    count += @popCount(data[last_byte] & last_mask);
+
+    return count;
+}
+
+// Count unset bits in the half-open range [start_bit, end_bit).
+pub fn countUnsetBitsInRange(data: []const u8, start_bit: usize, end_bit: usize) usize {
+    if (start_bit >= end_bit) return 0;
+    return (end_bit - start_bit) - countSetBitsInRange(data, start_bit, end_bit);
+}
+
 fn clearTrailingBits(bytes: []u8, len: usize, valid: bool) void {
     if (len == 0 or bytes.len == 0) return;
 
