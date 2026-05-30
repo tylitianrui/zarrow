@@ -66,16 +66,43 @@ pub fn writeBit(data: []u8, bit_index: usize, value: bool) void {
     if (value) setBit(data, bit_index) else clearBit(data, bit_index);
 }
 
+// Number of bytes per SIMD lane group for the vectorised popcount path.
+// 32 bytes == 256 bits.  The compiler degrades gracefully to 128-bit (SSE2 /
+// NEON) or scalar when the target does not support AVX2.  On x86-64 with
+// AVX-512 VPOPCNTDQ the inner loop maps directly to VPOPCNTB ymm.
+const POPCOUNT_SIMD_LANES = 32;
+
 // Count set bits across the logical length, ignoring padding bits.
+//
+// Uses a @Vector SIMD loop for the bulk of the work so that the compiler can
+// emit vectorised popcount instructions (VPOPCNTB / NEON VCNT).  A scalar
+// tail handles the remaining bytes and the final partial byte.
 pub fn countSetBit(data: []const u8, bit_len: usize) usize {
     if (bit_len == 0) return 0;
-    var count: usize = 0;
+
     const full_bytes = bit_len >> 3;
     const remainder = bit_len & 7;
-    for (data[0..full_bytes]) |byte| {
-        count += @popCount(byte);
+
+    var count: usize = 0;
+    var offset: usize = 0;
+
+    // SIMD bulk: POPCOUNT_SIMD_LANES bytes per iteration.
+    // @popCount on a @Vector yields per-lane bit counts (each 0..8).
+    // Widen lane values to u32 before @reduce to avoid wrapping
+    // (max aggregate per chunk = 32 * 8 = 256 > u8::MAX).
+    const simd_end = (full_bytes / POPCOUNT_SIMD_LANES) * POPCOUNT_SIMD_LANES;
+    while (offset < simd_end) : (offset += POPCOUNT_SIMD_LANES) {
+        const vec: @Vector(POPCOUNT_SIMD_LANES, u8) = data[offset..][0..POPCOUNT_SIMD_LANES].*;
+        const lane_counts: @Vector(POPCOUNT_SIMD_LANES, u8) = @popCount(vec);
+        count += @reduce(.Add, @as(@Vector(POPCOUNT_SIMD_LANES, u32), lane_counts));
     }
 
+    // Scalar tail for remaining full bytes.
+    while (offset < full_bytes) : (offset += 1) {
+        count += @popCount(data[offset]);
+    }
+
+    // Partial final byte: mask off padding bits before counting.
     if (remainder > 0) {
         const last_byte = data[full_bytes];
         const mask = (@as(u8, 1) << @as(u3, @intCast(remainder))) - 1;
@@ -117,10 +144,10 @@ pub fn countSetBitsInRange(data: []const u8, start_bit: usize, end_bit: usize) u
     const first_mask: u8 = ~((@as(u8, 1) << lo_bit) - 1);
     count += @popCount(data[first_byte] & first_mask);
 
-    // Full middle bytes.
-    for (data[first_byte + 1 .. last_byte]) |byte| {
-        count += @popCount(byte);
-    }
+    // Full middle bytes: delegate to countSetBit so the SIMD loop is reused
+    // automatically when the middle region is large enough.
+    const mid = data[first_byte + 1 .. last_byte];
+    if (mid.len > 0) count += countSetBit(mid, mid.len * 8);
 
     // Last byte: bits from 0 through (end_bit-1) & 7.
     const hi_bit = @as(u3, @intCast((end_bit - 1) & 7));
