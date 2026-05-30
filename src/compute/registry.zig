@@ -134,6 +134,9 @@ pub const FunctionRegistry = struct {
         errdefer self.allocator.free(entry.name);
         try entry.kernels.append(self.allocator, kernel);
         try self.functions.append(self.allocator, entry);
+        // Ownership of entry.name was value-copied into functions.items above.
+        // Clear local so that the outer errdefer cannot double-free it if put() fails.
+        entry.name = &.{};
         errdefer {
             var popped = self.functions.pop().?;
             popped.deinit();

@@ -258,13 +258,48 @@ pub fn datumFilterSelectionIndices(
     var selections: std.ArrayList(?usize) = .{};
     defer selections.deinit(allocator);
 
-    var i: usize = 0;
-    while (i < logical_len) : (i += 1) {
-        switch (try predicateDecisionAt(predicate, i, options)) {
-            .drop => {},
-            .keep => try selections.append(allocator, i),
-            .emit_null => try selections.append(allocator, null),
-        }
+    switch (predicate) {
+        // Chunked predicate: use an incremental cursor so each element is O(1)
+        // amortized rather than O(n) via the lookupChunkAt linear scan.
+        .chunked => |chunks| {
+            if (chunks.dataType() != .bool) return error.InvalidInput;
+            var chunk_idx: usize = 0;
+            var local_idx: usize = 0;
+            var i: usize = 0;
+            while (i < logical_len) : (i += 1) {
+                // Advance past empty chunks.
+                while (chunk_idx < chunks.numChunks() and
+                    local_idx >= chunks.chunk(chunk_idx).data().length)
+                {
+                    chunk_idx += 1;
+                    local_idx = 0;
+                }
+                if (chunk_idx >= chunks.numChunks()) return error.InvalidInput;
+                const chunk = chunks.chunk(chunk_idx);
+                const decision: PredicateDecision = if (chunk.data().isNull(local_idx))
+                    (if (options.drop_nulls) .drop else .emit_null)
+                else blk: {
+                    const bool_array = array_mod.BooleanArray{ .data = chunk.data() };
+                    break :blk if (bool_array.value(local_idx)) .keep else .drop;
+                };
+                local_idx += 1;
+                switch (decision) {
+                    .drop => {},
+                    .keep => try selections.append(allocator, i),
+                    .emit_null => try selections.append(allocator, null),
+                }
+            }
+        },
+        else => {
+            var i: usize = 0;
+            while (i < logical_len) : (i += 1) {
+                switch (try predicateDecisionAt(predicate, i, options)) {
+                    .drop => {},
+                    .keep => try selections.append(allocator, i),
+                    .emit_null => try selections.append(allocator, null),
+                }
+            }
+        },
     }
     return selections.toOwnedSlice(allocator);
 }
@@ -406,15 +441,50 @@ pub fn datumFilter(datum: Datum, predicate: Datum, options: FilterOptions) Kerne
         pieces.deinit(allocator);
     }
 
-    var i: usize = 0;
-    while (i < output_len) : (i += 1) {
-        const decision = try predicateDecisionAt(predicate, i, options);
-        const piece = switch (decision) {
-            .drop => continue,
-            .keep => try accessors.datumElementArrayAt(allocator, datum, i),
-            .emit_null => try builders.buildNullLikeArray(allocator, out_type, 1),
-        };
-        try appendOwnedArrayRef(allocator, &pieces, piece);
+    switch (predicate) {
+        // Chunked predicate: use an incremental cursor (O(1) amortized per element)
+        // instead of calling lookupChunkAt (O(n) per element) inside the loop.
+        .chunked => |chunks| {
+            if (chunks.dataType() != .bool) return error.InvalidInput;
+            var chunk_idx: usize = 0;
+            var local_idx: usize = 0;
+            var i: usize = 0;
+            while (i < output_len) : (i += 1) {
+                while (chunk_idx < chunks.numChunks() and
+                    local_idx >= chunks.chunk(chunk_idx).data().length)
+                {
+                    chunk_idx += 1;
+                    local_idx = 0;
+                }
+                if (chunk_idx >= chunks.numChunks()) return error.InvalidInput;
+                const chunk = chunks.chunk(chunk_idx);
+                const decision: PredicateDecision = if (chunk.data().isNull(local_idx))
+                    (if (options.drop_nulls) .drop else .emit_null)
+                else blk: {
+                    const bool_array = array_mod.BooleanArray{ .data = chunk.data() };
+                    break :blk if (bool_array.value(local_idx)) .keep else .drop;
+                };
+                local_idx += 1;
+                const piece = switch (decision) {
+                    .drop => continue,
+                    .keep => try accessors.datumElementArrayAt(allocator, datum, i),
+                    .emit_null => try builders.buildNullLikeArray(allocator, out_type, 1),
+                };
+                try appendOwnedArrayRef(allocator, &pieces, piece);
+            }
+        },
+        else => {
+            var i: usize = 0;
+            while (i < output_len) : (i += 1) {
+                const decision = try predicateDecisionAt(predicate, i, options);
+                const piece = switch (decision) {
+                    .drop => continue,
+                    .keep => try accessors.datumElementArrayAt(allocator, datum, i),
+                    .emit_null => try builders.buildNullLikeArray(allocator, out_type, 1),
+                };
+                try appendOwnedArrayRef(allocator, &pieces, piece);
+            }
+        },
     }
 
     if (pieces.items.len == 0) return builders.datumBuildEmptyLikeWithAllocator(allocator, out_type);

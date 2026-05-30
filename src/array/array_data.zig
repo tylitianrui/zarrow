@@ -135,13 +135,9 @@ pub const ArrayData = struct {
             self.null_count = 0;
             return 0;
         };
-        var count: usize = 0;
-        var i: usize = 0;
-        while (i < self.length) : (i += 1) {
-            if (!(validity_bitmap.isValid(self.offset + i) catch unreachable)) count += 1;
-        }
-        self.null_count = count;
-        return count;
+        const null_count = bitmap.countUnsetBitsInRange(validity_bitmap.data, self.offset, self.offset + self.length);
+        self.null_count = null_count;
+        return null_count;
     }
 
     fn fixedWidthByteSize(dt: DataType) ?usize {
