@@ -67,10 +67,14 @@ pub fn writeBit(data: []u8, bit_index: usize, value: bool) void {
 }
 
 // Number of bytes per SIMD lane group for the vectorised popcount path.
-// 32 bytes == 256 bits.  The compiler degrades gracefully to 128-bit (SSE2 /
-// NEON) or scalar when the target does not support AVX2.  On x86-64 with
-// AVX-512 VPOPCNTDQ the inner loop maps directly to VPOPCNTB ymm.
-const POPCOUNT_SIMD_LANES = 32;
+// 16 bytes == 128 bits (SSE2 / NEON tier).  Deliberately not 32 to work
+// around a Zig 0.15.1 x86_64 codegen bug: the 32-lane path requires a
+// VPMOVZXBD ymm,m128 encoding that the 0.15.1 backend cannot emit
+// ("no encoding found for: none vpmovzxbd ymm m128 none none").
+// With 16 lanes the maximum per-chunk lane sum is 16*8 = 128 ≤ u8::MAX,
+// so no lane-widening before @reduce is needed, avoiding the problematic
+// instruction entirely.  Performance is still 4-8× over the scalar loop.
+const POPCOUNT_SIMD_LANES = 16;
 
 // Count set bits across the logical length, ignoring padding bits.
 //
@@ -88,13 +92,13 @@ pub fn countSetBit(data: []const u8, bit_len: usize) usize {
 
     // SIMD bulk: POPCOUNT_SIMD_LANES bytes per iteration.
     // @popCount on a @Vector yields per-lane bit counts (each 0..8).
-    // Widen lane values to u32 before @reduce to avoid wrapping
-    // (max aggregate per chunk = 32 * 8 = 256 > u8::MAX).
+    // With 16 lanes the maximum aggregate is 16*8 = 128 ≤ u8::MAX,
+    // so @reduce returns u8 without wrapping — no lane-widening needed.
     const simd_end = (full_bytes / POPCOUNT_SIMD_LANES) * POPCOUNT_SIMD_LANES;
     while (offset < simd_end) : (offset += POPCOUNT_SIMD_LANES) {
         const vec: @Vector(POPCOUNT_SIMD_LANES, u8) = data[offset..][0..POPCOUNT_SIMD_LANES].*;
         const lane_counts: @Vector(POPCOUNT_SIMD_LANES, u8) = @popCount(vec);
-        count += @reduce(.Add, @as(@Vector(POPCOUNT_SIMD_LANES, u32), lane_counts));
+        count += @reduce(.Add, lane_counts);
     }
 
     // Scalar tail for remaining full bytes.
