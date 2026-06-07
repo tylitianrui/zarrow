@@ -97,7 +97,8 @@ pub const ArrayData = struct {
     pub fn hasNulls(self: Self) bool {
         if (self.null_count) |count| return count != 0;
         const validity_bitmap = self.validity() orelse return false;
-        return validity_bitmap.countNulls() > 0;
+        const end = std.math.add(usize, self.offset, self.length) catch return true;
+        return bitmap.countUnsetBitsInRange(validity_bitmap.data, self.offset, end) > 0;
     }
 
     pub fn setNullCountUnknown(self: *Self) void {
@@ -1318,6 +1319,22 @@ test "array data slice preserves offset length and recomputes null_count when ne
     try std.testing.expect(!sliced.isNull(2));
     try std.testing.expectEqual(@as(usize, 1), sliced.nullCount());
     try std.testing.expectEqual(@as(?usize, 1), sliced.null_count);
+}
+
+test "array data hasNulls only checks logical slice range" {
+    const dtype = DataType{ .int32 = {} };
+    var validity: [1]u8 = .{0b0000_0110}; // valid: [1,2], null: [0]
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 3,
+        .offset = 0,
+        .null_count = null,
+        .buffers = &[_]SharedBuffer{SharedBuffer.fromSlice(validity[0..])},
+    };
+
+    var sliced = data.slice(1, 2);
+    try std.testing.expect(!sliced.hasNulls());
+    try std.testing.expectEqual(@as(usize, 0), sliced.nullCount());
 }
 
 test "array data validateLayout accepts string_view with inline and variadic data" {
