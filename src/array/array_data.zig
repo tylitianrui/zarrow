@@ -359,6 +359,8 @@ pub const ArrayData = struct {
         const dt = layoutDataType(self.data_type);
 
         if (self.null_count) |count| {
+            // null_count can never exceed the number of logical elements.
+            if (count > self.length) return error.InvalidNullCount;
             // Null arrays have no validity bitmap; all elements are implicitly null.
             if (dt == .null) {
                 if (count != self.length) return error.InvalidNullCount;
@@ -674,6 +676,24 @@ test "array data validateLayout rejects null count without validity" {
         .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(values_bytes[0..]) },
     };
 
+    try std.testing.expectError(error.InvalidNullCount, data.validateLayout());
+}
+
+test "array data validateLayout rejects null count exceeding length" {
+    const dtype = DataType{ .int32 = {} };
+    var validity_bytes: [1]u8 align(buffer.ALIGNMENT) = .{0b11111111};
+    var values_bytes: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memset(values_bytes[0..], 0);
+    // length=2 but null_count=3: impossible
+    const data = ArrayData{
+        .data_type = dtype,
+        .length = 2,
+        .null_count = 3,
+        .buffers = &[_]SharedBuffer{
+            SharedBuffer.fromSlice(validity_bytes[0..]),
+            SharedBuffer.fromSlice(values_bytes[0..]),
+        },
+    };
     try std.testing.expectError(error.InvalidNullCount, data.validateLayout());
 }
 
