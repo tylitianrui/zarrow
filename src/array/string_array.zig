@@ -378,6 +378,7 @@ test "string array reads slices" {
     const array = StringArray{ .data = &data };
     try std.testing.expectEqualStrings("zig", try array.value(0));
     try std.testing.expectEqualStrings("lang", try array.value(1));
+    try std.testing.expectError(error.IndexOutOfBounds, array.value(2));
 }
 
 test "string builder appends slices" {

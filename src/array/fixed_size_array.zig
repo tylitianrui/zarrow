@@ -41,7 +41,7 @@ pub const FixedSizeBinaryArray = struct {
     /// Return the logical value view at the requested index.
     pub fn value(self: FixedSizeBinaryArray, i: usize) AccessorError![]const u8 {
         const pos = try self.data.logicalIndex(i);
-        const width = self.byteWidth();
+        const width = std.math.cast(usize, self.data.data_type.fixed_size_binary.byte_width) orelse return error.InvalidOffsetBuffer;
         if (width == 0) return error.InvalidOffsetBuffer;
         const start = std.math.mul(usize, pos, width) catch return error.InvalidOffsets;
         const end = std.math.add(usize, start, width) catch return error.InvalidOffsets;
@@ -220,7 +220,7 @@ pub const FixedSizeListArray = struct {
     pub fn value(self: FixedSizeListArray, i: usize) AccessorError!ArrayRef {
         const pos = try self.data.logicalIndex(i);
         try self.data.expectChildCount(1);
-        const list_size = self.listSize();
+        const list_size = std.math.cast(usize, self.data.data_type.fixed_size_list.list_size) orelse return error.InvalidChildren;
         const start = std.math.mul(usize, pos, list_size) catch return error.InvalidOffsets;
         const end = std.math.add(usize, start, list_size) catch return error.InvalidOffsets;
         const child = self.data.children[0];

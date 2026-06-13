@@ -175,6 +175,7 @@ test "primitive builder appends values and nulls" {
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
     try std.testing.expectEqual(@as(i32, 30), try built.value(2));
+    try std.testing.expectError(error.IndexOutOfBounds, built.value(3));
 }
 
 test "primitive array values returns error for missing value buffer" {

@@ -185,4 +185,5 @@ test "boolean builder appends values" {
     try std.testing.expect(try built.value(0));
     try std.testing.expect(!(try built.value(1)));
     try std.testing.expect(built.isNull(2));
+    try std.testing.expectError(error.IndexOutOfBounds, built.value(3));
 }

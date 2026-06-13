@@ -452,6 +452,7 @@ test "struct array fieldRef returns child" {
     try std.testing.expectEqual(@as(usize, 2), child_view.len());
     try std.testing.expectEqual(@as(i32, 9), try child_view.value(0));
     try std.testing.expectEqual(@as(i32, 11), try child_view.value(1));
+    try std.testing.expectError(error.IndexOutOfBounds, struct_array.fieldRef(1));
 }
 
 test "struct builder builds arrays" {
