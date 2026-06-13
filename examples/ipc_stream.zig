@@ -67,7 +67,7 @@ pub fn main() !void {
             if (names.isNull(i)) {
                 std.debug.print("  id={d} name=null\n", .{id});
             } else {
-                std.debug.print("  id={d} name={s}\n", .{ id, names.value(i) });
+                std.debug.print("  id={d} name={s}\n", .{ id, try names.value(i) });
             }
         }
     }

@@ -92,6 +92,7 @@ pub const importArrayFromC = ffi.importArray;
 pub const exportRecordBatchStreamToC = ffi.exportRecordBatchStream;
 pub const importRecordBatchStreamFromC = ffi.importRecordBatchStreamOwned;
 pub const ArrayData = array.ArrayData;
+pub const AccessorError = array.AccessorError;
 pub const ArrayRef = array.ArrayRef;
 pub const ConcatArrayError = concat_array_refs.ConcatArrayError;
 pub const concatArrayRefs = concat_array_refs.concatArrayRefs;

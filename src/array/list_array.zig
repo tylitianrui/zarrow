@@ -12,6 +12,7 @@ const array_data = @import("array_data.zig");
 const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const DataType = datatype.DataType;
 pub const Field = datatype.Field;
 const ArrayRef = array_ref.ArrayRef;
@@ -19,6 +20,26 @@ const BuilderState = builder_state.BuilderState;
 
 const initValidityAllValid = array_utils.initValidityAllValid;
 const ensureBitmapCapacity = array_utils.ensureBitmapCapacity;
+
+fn listValue(data: *const ArrayData, comptime T: type, i: usize) AccessorError!ArrayRef {
+    const base = try data.logicalIndex(i);
+    const next = std.math.add(usize, base, 1) catch return error.InvalidOffsets;
+    const offsets = try data.typedBufferAt(1, T);
+    if (next >= offsets.len) return error.BufferTooSmall;
+    try data.expectChildCount(1);
+
+    const start_raw = offsets[base];
+    const end_raw = offsets[next];
+    if (start_raw < 0 or end_raw < start_raw) return error.InvalidOffsets;
+    const start = std.math.cast(usize, start_raw) orelse return error.InvalidOffsets;
+    const end = std.math.cast(usize, end_raw) orelse return error.InvalidOffsets;
+
+    const child = data.children[0];
+    if (end > child.data().length) return error.InvalidOffsets;
+    return child.slice(start, end - start) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+    };
+}
 
 pub const ListArray = struct {
     data: *const ArrayData,
@@ -33,22 +54,14 @@ pub const ListArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn valuesRef(self: ListArray) *const ArrayRef {
-        std.debug.assert(self.data.children.len == 1);
+    pub fn valuesRef(self: ListArray) AccessorError!*const ArrayRef {
+        try self.data.expectChildCount(1);
         return &self.data.children[0];
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: ListArray, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 2);
-        std.debug.assert(self.data.children.len == 1);
-
-        const offsets = try self.data.buffers[1].typedSlice(i32);
-        const base = self.data.offset + i;
-        const start: usize = @intCast(offsets[base]);
-        const end: usize = @intCast(offsets[base + 1]);
-        return self.data.children[0].slice(start, end - start);
+    pub fn value(self: ListArray, i: usize) AccessorError!ArrayRef {
+        return listValue(self.data, i32, i);
     }
 };
 
@@ -65,22 +78,14 @@ pub const LargeListArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn valuesRef(self: LargeListArray) *const ArrayRef {
-        std.debug.assert(self.data.children.len == 1);
+    pub fn valuesRef(self: LargeListArray) AccessorError!*const ArrayRef {
+        try self.data.expectChildCount(1);
         return &self.data.children[0];
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: LargeListArray, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 2);
-        std.debug.assert(self.data.children.len == 1);
-
-        const offsets = try self.data.buffers[1].typedSlice(i64);
-        const base = self.data.offset + i;
-        const start: usize = @intCast(offsets[base]);
-        const end: usize = @intCast(offsets[base + 1]);
-        return self.data.children[0].slice(start, end - start);
+    pub fn value(self: LargeListArray, i: usize) AccessorError!ArrayRef {
+        return listValue(self.data, i64, i);
     }
 };
 
@@ -341,15 +346,15 @@ test "list array reads values" {
     defer first.release();
     const first_values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = first.data() };
     try std.testing.expectEqual(@as(usize, 2), first_values.len());
-    try std.testing.expectEqual(@as(i32, 1), first_values.value(0));
-    try std.testing.expectEqual(@as(i32, 2), first_values.value(1));
+    try std.testing.expectEqual(@as(i32, 1), try first_values.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try first_values.value(1));
 
     var third = try list.value(2);
     defer third.release();
     const third_values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = third.data() };
     try std.testing.expectEqual(@as(usize, 2), third_values.len());
-    try std.testing.expectEqual(@as(i32, 3), third_values.value(0));
-    try std.testing.expectEqual(@as(i32, 4), third_values.value(1));
+    try std.testing.expectEqual(@as(i32, 3), try third_values.value(0));
+    try std.testing.expectEqual(@as(i32, 4), try third_values.value(1));
 }
 
 test "list builder appendLens batches offsets" {
@@ -380,14 +385,14 @@ test "list builder appendLens batches offsets" {
     defer first.release();
     const first_values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = first.data() };
     try std.testing.expectEqual(@as(usize, 1), first_values.len());
-    try std.testing.expectEqual(@as(i32, 11), first_values.value(0));
+    try std.testing.expectEqual(@as(i32, 11), try first_values.value(0));
 
     var second = try list.value(1);
     defer second.release();
     const second_values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = second.data() };
     try std.testing.expectEqual(@as(usize, 2), second_values.len());
-    try std.testing.expectEqual(@as(i32, 22), second_values.value(0));
-    try std.testing.expectEqual(@as(i32, 33), second_values.value(1));
+    try std.testing.expectEqual(@as(i32, 22), try second_values.value(0));
+    try std.testing.expectEqual(@as(i32, 33), try second_values.value(1));
 }
 
 test "list builder appendNulls batches nulls" {
@@ -441,14 +446,14 @@ test "large list array reads values" {
     defer first.release();
     const first_values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = first.data() };
     try std.testing.expectEqual(@as(usize, 1), first_values.len());
-    try std.testing.expectEqual(@as(i32, 5), first_values.value(0));
+    try std.testing.expectEqual(@as(i32, 5), try first_values.value(0));
 
     var second = try list.value(1);
     defer second.release();
     const second_values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = second.data() };
     try std.testing.expectEqual(@as(usize, 2), second_values.len());
-    try std.testing.expectEqual(@as(i32, 6), second_values.value(0));
-    try std.testing.expectEqual(@as(i32, 7), second_values.value(1));
+    try std.testing.expectEqual(@as(i32, 6), try second_values.value(0));
+    try std.testing.expectEqual(@as(i32, 7), try second_values.value(1));
 }
 
 test "list builder finishReset allows reuse" {

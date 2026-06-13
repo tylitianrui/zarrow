@@ -79,7 +79,7 @@ pub fn main() !void {
     const out_union = zarrow.DenseUnionArray{ .data = out_batch.columns[0].data() };
     std.debug.print("roundtrip rows={d}\n", .{out_union.len()});
     for (0..out_union.len()) |i| {
-        const type_id = out_union.typeId(i);
+        const type_id = try out_union.typeId(i);
         if (type_id == 5) {
             var value = try out_union.value(i);
             defer value.release();
@@ -89,7 +89,7 @@ pub fn main() !void {
             var value = try out_union.value(i);
             defer value.release();
             const arr = zarrow.BooleanArray{ .data = value.data() };
-            std.debug.print("  row[{d}] type_id={d} bool={}\n", .{ i, type_id, arr.value(0) });
+            std.debug.print("  row[{d}] type_id={d} bool={}\n", .{ i, type_id, try arr.value(0) });
         }
     }
 }

@@ -23,7 +23,7 @@ pub fn main() !void {
     defer struct_ref.release();
 
     const struct_array = zarrow.StructArray{ .data = struct_ref.data() };
-    const child = struct_array.fieldRef(0);
+    const child = try struct_array.fieldRef(0);
     const child_array = zarrow.Int32Array{ .data = child.data() };
 
     std.debug.print("examples/struct_builder.zig | length={d}, field0_value0={d}\n", .{

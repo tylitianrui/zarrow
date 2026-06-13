@@ -1576,9 +1576,9 @@ test "c data array export/import zero-copy smoke" {
 
         const view = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = imported.data() };
         try std.testing.expectEqual(@as(usize, 3), view.len());
-        try std.testing.expectEqual(@as(i32, 10), view.value(0));
+        try std.testing.expectEqual(@as(i32, 10), try view.value(0));
         try std.testing.expect(view.isNull(1));
-        try std.testing.expectEqual(@as(i32, 30), view.value(2));
+        try std.testing.expectEqual(@as(i32, 30), try view.value(2));
 
         // Zero-copy: values buffer pointer should be shared.
         try std.testing.expectEqual(
@@ -1627,9 +1627,9 @@ test "c data array export/import handles extension layout via storage type" {
     try std.testing.expect(ext.storage_type.* == .int32);
 
     const ints = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = imported.data() };
-    try std.testing.expectEqual(@as(i32, 7), ints.value(0));
+    try std.testing.expectEqual(@as(i32, 7), try ints.value(0));
     try std.testing.expect(ints.isNull(1));
-    try std.testing.expectEqual(@as(i32, 11), ints.value(2));
+    try std.testing.expectEqual(@as(i32, 11), try ints.value(2));
 
     try std.testing.expect(c_array.release == null);
 }
@@ -1980,12 +1980,12 @@ test "c data map import validates offsets and entries values explicitly" {
     const keys_arr = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = keys_all.data() };
     const items_arr = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = items_all.data() };
 
-    try std.testing.expectEqual(@as(i32, 1), keys_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 2), keys_arr.value(1));
-    try std.testing.expectEqual(@as(i32, 3), keys_arr.value(2));
-    try std.testing.expectEqual(@as(i32, 10), items_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 1), try keys_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try keys_arr.value(1));
+    try std.testing.expectEqual(@as(i32, 3), try keys_arr.value(2));
+    try std.testing.expectEqual(@as(i32, 10), try items_arr.value(0));
     try std.testing.expect(items_arr.isNull(1));
-    try std.testing.expectEqual(@as(i32, 30), items_arr.value(2));
+    try std.testing.expectEqual(@as(i32, 30), try items_arr.value(2));
 
     try std.testing.expect(c_array.release == null);
 }
@@ -2278,11 +2278,11 @@ test "c data array import supports run-end-encoded" {
     const run_ends = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = imported.data().children[0].data() };
     const values = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = imported.data().children[1].data() };
     try std.testing.expectEqual(@as(usize, 2), run_ends.len());
-    try std.testing.expectEqual(@as(i32, 2), run_ends.value(0));
-    try std.testing.expectEqual(@as(i32, 5), run_ends.value(1));
+    try std.testing.expectEqual(@as(i32, 2), try run_ends.value(0));
+    try std.testing.expectEqual(@as(i32, 5), try run_ends.value(1));
     try std.testing.expectEqual(@as(usize, 2), values.len());
-    try std.testing.expectEqual(@as(i32, 7), values.value(0));
-    try std.testing.expectEqual(@as(i32, 9), values.value(1));
+    try std.testing.expectEqual(@as(i32, 7), try values.value(0));
+    try std.testing.expectEqual(@as(i32, 9), try values.value(1));
     try std.testing.expect(c_array.release == null);
 }
 

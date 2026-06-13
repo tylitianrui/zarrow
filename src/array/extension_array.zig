@@ -116,6 +116,6 @@ test "extension builder wraps storage array and preserves layout" {
     try std.testing.expect(ext.extension().storage_type.* == .int32);
 
     const values = @import("primitive_array.zig").PrimitiveArray(i32){ .data = ext_ref.data() };
-    try std.testing.expectEqual(@as(i32, 7), values.value(0));
-    try std.testing.expectEqual(@as(i32, 11), values.value(2));
+    try std.testing.expectEqual(@as(i32, 7), try values.value(0));
+    try std.testing.expectEqual(@as(i32, 11), try values.value(2));
 }

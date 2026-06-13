@@ -233,14 +233,16 @@ fn predicateDecisionAt(predicate: Datum, logical_index: usize, options: FilterOp
             if (logical_index >= arr.data().length) break :blk error.InvalidInput;
             if (arr.data().isNull(logical_index)) break :blk if (options.drop_nulls) .drop else .emit_null;
             const bool_array = array_mod.BooleanArray{ .data = arr.data() };
-            break :blk if (bool_array.value(logical_index)) .keep else .drop;
+            const keep = bool_array.value(logical_index) catch |err| return mapArrayReadError(err);
+            break :blk if (keep) .keep else .drop;
         },
         .chunked => |chunks| blk: {
             if (chunks.dataType() != .bool) break :blk error.InvalidInput;
             const located = lookupChunkAt(chunks, logical_index) orelse break :blk error.InvalidInput;
             if (located.chunk.data().isNull(located.local_index)) break :blk if (options.drop_nulls) .drop else .emit_null;
             const bool_array = array_mod.BooleanArray{ .data = located.chunk.data() };
-            break :blk if (bool_array.value(located.local_index)) .keep else .drop;
+            const keep = bool_array.value(located.local_index) catch |err| return mapArrayReadError(err);
+            break :blk if (keep) .keep else .drop;
         },
     };
 }
@@ -280,7 +282,8 @@ pub fn datumFilterSelectionIndices(
                     (if (options.drop_nulls) .drop else .emit_null)
                 else blk: {
                     const bool_array = array_mod.BooleanArray{ .data = chunk.data() };
-                    break :blk if (bool_array.value(local_idx)) .keep else .drop;
+                    const keep = bool_array.value(local_idx) catch |err| return mapArrayReadError(err);
+                    break :blk if (keep) .keep else .drop;
                 };
                 local_idx += 1;
                 switch (decision) {
@@ -462,7 +465,8 @@ pub fn datumFilter(datum: Datum, predicate: Datum, options: FilterOptions) Kerne
                     (if (options.drop_nulls) .drop else .emit_null)
                 else blk: {
                     const bool_array = array_mod.BooleanArray{ .data = chunk.data() };
-                    break :blk if (bool_array.value(local_idx)) .keep else .drop;
+                    const keep = bool_array.value(local_idx) catch |err| return mapArrayReadError(err);
+                    break :blk if (keep) .keep else .drop;
                 };
                 local_idx += 1;
                 const piece = switch (decision) {

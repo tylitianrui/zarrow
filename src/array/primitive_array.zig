@@ -13,6 +13,7 @@ const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const DataType = datatype.DataType;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const ArrayRef = array_ref.ArrayRef;
 const BuilderState = builder_state.BuilderState;
 
@@ -23,7 +24,7 @@ pub fn PrimitiveArray(comptime T: type) type {
 
         const Self = @This();
 
-        pub const Error = error{ InvalidBufferCount, IndexOutOfBounds } || SharedBuffer.Error;
+        pub const Error = AccessorError;
 
         /// Return the logical length.
         pub fn len(self: Self) usize {
@@ -37,12 +38,10 @@ pub fn PrimitiveArray(comptime T: type) type {
 
         pub fn values(self: Self) Error![]const T {
             // Primitive arrays require [validity] and [values] buffers.
-            if (self.data.buffers.len < 2) return error.InvalidBufferCount;
-
-            const raw = try self.data.buffers[1].typedSlice(T);
+            const raw = try self.data.typedBufferAt(1, T);
             const start = self.data.offset;
-            const end = std.math.add(usize, start, self.data.length) catch return error.SliceOutOfBounds;
-            if (end > raw.len) return error.SliceOutOfBounds;
+            const end = try self.data.logicalEnd();
+            if (end > raw.len) return error.BufferTooSmall;
             return raw[start..end];
         }
 

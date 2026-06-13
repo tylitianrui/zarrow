@@ -12,6 +12,7 @@ const array_data = @import("array_data.zig");
 const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const DataType = datatype.DataType;
 pub const Field = datatype.Field;
 pub const IntType = datatype.IntType;
@@ -31,22 +32,30 @@ pub const MapArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn entriesRef(self: MapArray) *const ArrayRef {
-        std.debug.assert(self.data.children.len == 1);
+    pub fn entriesRef(self: MapArray) AccessorError!*const ArrayRef {
+        try self.data.expectChildCount(1);
         return &self.data.children[0];
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: MapArray, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 2);
-        std.debug.assert(self.data.children.len == 1);
+    pub fn value(self: MapArray, i: usize) AccessorError!ArrayRef {
+        const base = try self.data.logicalIndex(i);
+        const next = std.math.add(usize, base, 1) catch return error.InvalidOffsets;
+        const offsets = try self.data.typedBufferAt(1, i32);
+        if (next >= offsets.len) return error.BufferTooSmall;
+        try self.data.expectChildCount(1);
 
-        const offsets = try self.data.buffers[1].typedSlice(i32);
-        const base = self.data.offset + i;
-        const start: usize = @intCast(offsets[base]);
-        const end: usize = @intCast(offsets[base + 1]);
-        return self.data.children[0].slice(start, end - start);
+        const start_raw = offsets[base];
+        const end_raw = offsets[next];
+        if (start_raw < 0 or end_raw < start_raw) return error.InvalidOffsets;
+        const start = std.math.cast(usize, start_raw) orelse return error.InvalidOffsets;
+        const end = std.math.cast(usize, end_raw) orelse return error.InvalidOffsets;
+
+        const entries = self.data.children[0];
+        if (end > entries.data().length) return error.InvalidOffsets;
+        return entries.slice(start, end - start) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+        };
     }
 };
 
@@ -58,21 +67,22 @@ pub const SparseUnionArray = struct {
         return self.data.length;
     }
 
-    pub fn typeId(self: SparseUnionArray, i: usize) i8 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 1);
-        return (self.data.buffers[0].typedSlice(i8) catch unreachable)[self.data.offset + i];
+    pub fn typeId(self: SparseUnionArray, i: usize) AccessorError!i8 {
+        const pos = try self.data.logicalIndex(i);
+        const type_ids = try self.data.typedBufferAt(0, i8);
+        if (pos >= type_ids.len) return error.BufferTooSmall;
+        return type_ids[pos];
     }
 
-    pub fn childRef(self: SparseUnionArray, child_index: usize) *const ArrayRef {
-        std.debug.assert(child_index < self.data.children.len);
+    pub fn childRef(self: SparseUnionArray, child_index: usize) AccessorError!*const ArrayRef {
+        if (child_index >= self.data.children.len) return error.IndexOutOfBounds;
         return &self.data.children[child_index];
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: SparseUnionArray, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        const type_id = self.typeId(i);
+    pub fn value(self: SparseUnionArray, i: usize) AccessorError!ArrayRef {
+        const pos = try self.data.logicalIndex(i);
+        const type_id = try self.typeId(i);
         const uni = self.data.data_type.sparse_union;
 
         var child_index: ?usize = null;
@@ -83,7 +93,12 @@ pub const SparseUnionArray = struct {
             }
         }
         const idx = child_index orelse return error.InvalidChildren;
-        return self.data.children[idx].slice(self.data.offset + i, 1);
+        if (idx >= self.data.children.len) return error.InvalidChildren;
+        const child = self.data.children[idx];
+        if (pos >= child.data().length) return error.InvalidChildren;
+        return child.slice(pos, 1) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+        };
     }
 };
 
@@ -95,22 +110,24 @@ pub const DenseUnionArray = struct {
         return self.data.length;
     }
 
-    pub fn typeId(self: DenseUnionArray, i: usize) i8 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 1);
-        return (self.data.buffers[0].typedSlice(i8) catch unreachable)[self.data.offset + i];
+    pub fn typeId(self: DenseUnionArray, i: usize) AccessorError!i8 {
+        const pos = try self.data.logicalIndex(i);
+        const type_ids = try self.data.typedBufferAt(0, i8);
+        if (pos >= type_ids.len) return error.BufferTooSmall;
+        return type_ids[pos];
     }
 
-    pub fn childOffset(self: DenseUnionArray, i: usize) i32 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 2);
-        return (self.data.buffers[1].typedSlice(i32) catch unreachable)[self.data.offset + i];
+    pub fn childOffset(self: DenseUnionArray, i: usize) AccessorError!i32 {
+        const pos = try self.data.logicalIndex(i);
+        const offsets = try self.data.typedBufferAt(1, i32);
+        if (pos >= offsets.len) return error.BufferTooSmall;
+        return offsets[pos];
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: DenseUnionArray, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        const type_id = self.typeId(i);
+    pub fn value(self: DenseUnionArray, i: usize) AccessorError!ArrayRef {
+        _ = try self.data.logicalIndex(i);
+        const type_id = try self.typeId(i);
         const uni = self.data.data_type.dense_union;
 
         var child_index: ?usize = null;
@@ -121,8 +138,15 @@ pub const DenseUnionArray = struct {
             }
         }
         const idx = child_index orelse return error.InvalidChildren;
-        const off: usize = @intCast(self.childOffset(i));
-        return self.data.children[idx].slice(off, 1);
+        if (idx >= self.data.children.len) return error.InvalidChildren;
+        const raw_off = try self.childOffset(i);
+        if (raw_off < 0) return error.InvalidOffsets;
+        const off = std.math.cast(usize, raw_off) orelse return error.InvalidOffsets;
+        const child = self.data.children[idx];
+        if (off >= child.data().length) return error.InvalidOffsets;
+        return child.slice(off, 1) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+        };
     }
 };
 
@@ -134,40 +158,42 @@ pub const RunEndEncodedArray = struct {
         return self.data.length;
     }
 
-    fn runCount(self: RunEndEncodedArray) usize {
-        std.debug.assert(self.data.children.len == 2);
+    fn runCount(self: RunEndEncodedArray) AccessorError!usize {
+        try self.data.expectChildCount(2);
         return self.data.children[0].data().length;
     }
 
-    fn runEndAt(self: RunEndEncodedArray, run_index: usize) !i64 {
-        std.debug.assert(self.data.children.len == 2);
+    fn runEndAt(self: RunEndEncodedArray, run_index: usize) AccessorError!i64 {
+        try self.data.expectChildCount(2);
         const run_ends = self.data.children[0].data();
+        const pos = std.math.add(usize, run_ends.offset, run_index) catch return error.InvalidOffsets;
         const run_ty = self.data.data_type.run_end_encoded.run_end_type;
         return switch (run_ty.bit_width) {
             8 => if (run_ty.signed)
-                @as(i64, (try run_ends.buffers[1].typedSlice(i8))[run_ends.offset + run_index])
+                @as(i64, try runEndIndexAt(run_ends, i8, pos))
             else
-                @as(i64, @intCast((try run_ends.buffers[1].typedSlice(u8))[run_ends.offset + run_index])),
+                @as(i64, @intCast(try runEndIndexAt(run_ends, u8, pos))),
             16 => if (run_ty.signed)
-                @as(i64, (try run_ends.buffers[1].typedSlice(i16))[run_ends.offset + run_index])
+                @as(i64, try runEndIndexAt(run_ends, i16, pos))
             else
-                @as(i64, @intCast((try run_ends.buffers[1].typedSlice(u16))[run_ends.offset + run_index])),
+                @as(i64, @intCast(try runEndIndexAt(run_ends, u16, pos))),
             32 => if (run_ty.signed)
-                @as(i64, (try run_ends.buffers[1].typedSlice(i32))[run_ends.offset + run_index])
+                @as(i64, try runEndIndexAt(run_ends, i32, pos))
             else
-                @as(i64, @intCast((try run_ends.buffers[1].typedSlice(u32))[run_ends.offset + run_index])),
+                @as(i64, @intCast(try runEndIndexAt(run_ends, u32, pos))),
             64 => if (run_ty.signed)
-                (try run_ends.buffers[1].typedSlice(i64))[run_ends.offset + run_index]
+                try runEndIndexAt(run_ends, i64, pos)
             else
-                std.math.cast(i64, (try run_ends.buffers[1].typedSlice(u64))[run_ends.offset + run_index]) orelse return error.InvalidRunEnds,
-            else => error.InvalidRunEnds,
+                std.math.cast(i64, try runEndIndexAt(run_ends, u64, pos)) orelse return error.InvalidOffsets,
+            else => error.InvalidOffsetBuffer,
         };
     }
 
-    fn runIndexFor(self: RunEndEncodedArray, logical_index: usize) !usize {
+    fn runIndexFor(self: RunEndEncodedArray, logical_index: usize) AccessorError!usize {
         var lo: usize = 0;
-        var hi: usize = self.runCount();
-        const target = std.math.cast(i64, logical_index + 1) orelse return error.InvalidRunEnds;
+        var hi: usize = try self.runCount();
+        const next = std.math.add(usize, logical_index, 1) catch return error.InvalidOffsets;
+        const target = std.math.cast(i64, next) orelse return error.InvalidOffsets;
 
         while (lo < hi) {
             const mid = lo + (hi - lo) / 2;
@@ -181,19 +207,29 @@ pub const RunEndEncodedArray = struct {
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: RunEndEncodedArray, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.children.len == 2);
-        const run_idx = try self.runIndexFor(self.data.offset + i);
-        if (run_idx >= self.runCount()) return error.InvalidRunEnds;
-        return self.data.children[1].slice(run_idx, 1);
+    pub fn value(self: RunEndEncodedArray, i: usize) AccessorError!ArrayRef {
+        const logical_index = try self.data.logicalIndex(i);
+        try self.data.expectChildCount(2);
+        const run_idx = try self.runIndexFor(logical_index);
+        if (run_idx >= try self.runCount()) return error.InvalidOffsets;
+        const values = self.data.children[1];
+        if (run_idx >= values.data().length) return error.InvalidChildren;
+        return values.slice(run_idx, 1) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+        };
     }
 
-    pub fn valuesRef(self: RunEndEncodedArray) *const ArrayRef {
-        std.debug.assert(self.data.children.len == 2);
+    pub fn valuesRef(self: RunEndEncodedArray) AccessorError!*const ArrayRef {
+        try self.data.expectChildCount(2);
         return &self.data.children[1];
     }
 };
+
+fn runEndIndexAt(data: *const ArrayData, comptime T: type, pos: usize) AccessorError!T {
+    const values = try data.typedBufferAt(1, T);
+    if (pos >= values.len) return error.BufferTooSmall;
+    return values[pos];
+}
 
 fn dataTypeFromIntType(int_type: IntType) ?DataType {
     return switch (int_type.bit_width) {
@@ -870,8 +906,8 @@ test "run end encoded builder and array basic path" {
     defer v4.release();
     const a0 = @import("primitive_array.zig").PrimitiveArray(i32){ .data = v0.data() };
     const a4 = @import("primitive_array.zig").PrimitiveArray(i32){ .data = v4.data() };
-    try std.testing.expectEqual(@as(i32, 100), a0.value(0));
-    try std.testing.expectEqual(@as(i32, 200), a4.value(0));
+    try std.testing.expectEqual(@as(i32, 100), try a0.value(0));
+    try std.testing.expectEqual(@as(i32, 200), try a4.value(0));
 }
 
 test "map builder preserves nullability invariants" {

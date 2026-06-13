@@ -15,9 +15,9 @@ pub fn main() !void {
     const array = zarrow.LargeBinaryArray{ .data = array_ref.data() };
 
     std.debug.assert(array.len() == 3);
-    std.debug.assert(std.mem.eql(u8, array.value(0), "za"));
+    std.debug.assert(std.mem.eql(u8, try array.value(0), "za"));
     std.debug.assert(array.isNull(1));
-    std.debug.assert(std.mem.eql(u8, array.value(2), "rrow"));
+    std.debug.assert(std.mem.eql(u8, try array.value(2), "rrow"));
 
     // Reuse the same builder for another chunk to demonstrate lifecycle behavior.
     try builder.append("again");
@@ -28,14 +28,14 @@ pub fn main() !void {
     const array2 = zarrow.LargeBinaryArray{ .data = array_ref2.data() };
 
     std.debug.assert(array2.len() == 2);
-    std.debug.assert(std.mem.eql(u8, array2.value(0), "again"));
+    std.debug.assert(std.mem.eql(u8, try array2.value(0), "again"));
     std.debug.assert(array2.isNull(1));
 
     std.debug.print("examples/large_binary_builder.zig | type=LargeBinaryBuilder | length={d}, value_index_0={s}, isNull_index_1={any}, value_index_2={s}, length2={d}\n", .{
         array.len(),
-        array.value(0),
+        try array.value(0),
         array.isNull(1),
-        array.value(2),
+        try array.value(2),
         array2.len(),
     });
 }

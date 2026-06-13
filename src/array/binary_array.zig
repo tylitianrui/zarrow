@@ -12,12 +12,30 @@ const array_data = @import("array_data.zig");
 const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const DataType = datatype.DataType;
 const ArrayRef = array_ref.ArrayRef;
 const BuilderState = builder_state.BuilderState;
 
 const BINARY_TYPE = DataType{ .binary = {} };
 const LARGE_BINARY_TYPE = DataType{ .large_binary = {} };
+
+fn offsetValue(data: *const ArrayData, comptime T: type, i: usize) AccessorError![]const u8 {
+    const base = try data.logicalIndex(i);
+    const next = std.math.add(usize, base, 1) catch return error.InvalidOffsets;
+    const offsets = try data.typedBufferAt(1, T);
+    if (next >= offsets.len) return error.BufferTooSmall;
+
+    const start_raw = offsets[base];
+    const end_raw = offsets[next];
+    if (start_raw < 0 or end_raw < start_raw) return error.InvalidOffsets;
+    const start = std.math.cast(usize, start_raw) orelse return error.InvalidOffsets;
+    const end = std.math.cast(usize, end_raw) orelse return error.InvalidOffsets;
+
+    const values = try data.bufferAt(2);
+    if (end > values.len()) return error.InvalidOffsets;
+    return values.data[start..end];
+}
 
 pub const BinaryArray = struct {
     data: *const ArrayData,
@@ -33,14 +51,8 @@ pub const BinaryArray = struct {
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: BinaryArray, i: usize) []const u8 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 3);
-
-        const offsets = self.data.buffers[1].typedSlice(i32) catch unreachable;
-        const start = offsets[self.data.offset + i];
-        const end = offsets[self.data.offset + i + 1];
-        return self.data.buffers[2].data[@intCast(start)..@intCast(end)];
+    pub fn value(self: BinaryArray, i: usize) AccessorError![]const u8 {
+        return offsetValue(self.data, i32, i);
     }
 };
 
@@ -58,14 +70,8 @@ pub const LargeBinaryArray = struct {
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: LargeBinaryArray, i: usize) []const u8 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 3);
-
-        const offsets = self.data.buffers[1].typedSlice(i64) catch unreachable;
-        const start = offsets[self.data.offset + i];
-        const end = offsets[self.data.offset + i + 1];
-        return self.data.buffers[2].data[@intCast(start)..@intCast(end)];
+    pub fn value(self: LargeBinaryArray, i: usize) AccessorError![]const u8 {
+        return offsetValue(self.data, i64, i);
     }
 };
 
@@ -369,8 +375,8 @@ test "binary array reads slices" {
     };
 
     const array = BinaryArray{ .data = &data };
-    try std.testing.expectEqualStrings("zi", array.value(0));
-    try std.testing.expectEqualStrings("ggy", array.value(1));
+    try std.testing.expectEqualStrings("zi", try array.value(0));
+    try std.testing.expectEqualStrings("ggy", try array.value(1));
 }
 
 test "binary builder appends slices" {
@@ -385,9 +391,9 @@ test "binary builder appends slices" {
     defer array_handle.release();
     const array = BinaryArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), array.len());
-    try std.testing.expectEqualStrings("zi", array.value(0));
+    try std.testing.expectEqualStrings("zi", try array.value(0));
     try std.testing.expect(array.isNull(1));
-    try std.testing.expectEqualStrings("ggy", array.value(2));
+    try std.testing.expectEqualStrings("ggy", try array.value(2));
 }
 
 test "binary builder returns offset overflow for 32-bit offsets" {
@@ -415,8 +421,8 @@ test "large binary array reads slices" {
     };
 
     const array = LargeBinaryArray{ .data = &data };
-    try std.testing.expectEqualStrings("zi", array.value(0));
-    try std.testing.expectEqualStrings("ggy", array.value(1));
+    try std.testing.expectEqualStrings("zi", try array.value(0));
+    try std.testing.expectEqualStrings("ggy", try array.value(1));
 }
 
 test "large binary builder appends slices and supports slice" {
@@ -431,20 +437,20 @@ test "large binary builder appends slices and supports slice" {
     defer array_handle.release();
     const array = LargeBinaryArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), array.len());
-    try std.testing.expectEqualStrings("zi", array.value(0));
+    try std.testing.expectEqualStrings("zi", try array.value(0));
     try std.testing.expect(array.isNull(1));
-    try std.testing.expectEqualStrings("ggy", array.value(2));
+    try std.testing.expectEqualStrings("ggy", try array.value(2));
 
     var sliced = try array_handle.slice(1, 2);
     defer sliced.release();
     const sliced_view = LargeBinaryArray{ .data = sliced.data() };
     try std.testing.expect(sliced_view.isNull(0));
-    try std.testing.expectEqualStrings("ggy", sliced_view.value(1));
+    try std.testing.expectEqualStrings("ggy", try sliced_view.value(1));
 
     try builder.append("xy");
     var second = try builder.finishClear();
     defer second.release();
     const second_view = LargeBinaryArray{ .data = second.data() };
     try std.testing.expectEqual(@as(usize, 1), second_view.len());
-    try std.testing.expectEqualStrings("xy", second_view.value(0));
+    try std.testing.expectEqualStrings("xy", try second_view.value(0));
 }

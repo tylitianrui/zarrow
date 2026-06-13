@@ -320,7 +320,7 @@ test "compute datum list extraction supports array chunked and scalar inputs" {
     defer out_array.release();
     const out_array_view = int32_array{ .data = out_array.data() };
     try std.testing.expectEqual(@as(usize, 1), out_array_view.len());
-    try std.testing.expectEqual(@as(i32, 3), out_array_view.value(0));
+    try std.testing.expectEqual(@as(i32, 3), try out_array_view.value(0));
 
     var list_chunk0 = try list_array.slice(0, 1);
     defer list_chunk0.release();
@@ -334,7 +334,7 @@ test "compute datum list extraction supports array chunked and scalar inputs" {
     defer out_chunked.release();
     const out_chunked_view = int32_array{ .data = out_chunked.data() };
     try std.testing.expectEqual(@as(usize, 1), out_chunked_view.len());
-    try std.testing.expectEqual(@as(i32, 3), out_chunked_view.value(0));
+    try std.testing.expectEqual(@as(i32, 3), try out_chunked_view.value(0));
 
     var scalar_payload = try list_array.slice(2, 1);
     defer scalar_payload.release();
@@ -344,7 +344,7 @@ test "compute datum list extraction supports array chunked and scalar inputs" {
     defer out_scalar.release();
     const out_scalar_view = int32_array{ .data = out_scalar.data() };
     try std.testing.expectEqual(@as(usize, 1), out_scalar_view.len());
-    try std.testing.expectEqual(@as(i32, 3), out_scalar_view.value(0));
+    try std.testing.expectEqual(@as(i32, 3), try out_scalar_view.value(0));
 
     var null_payload = try list_array.slice(1, 1);
     defer null_payload.release();
@@ -394,7 +394,7 @@ test "compute datumStructField supports scalar struct bool fields" {
     try std.testing.expect(field0_array.isArray());
     const bool_view = array_mod.BooleanArray{ .data = field0_array.array.data() };
     try std.testing.expectEqual(@as(usize, 1), bool_view.len());
-    try std.testing.expectEqual(true, bool_view.value(0));
+    try std.testing.expectEqual(true, try bool_view.value(0));
 
     var null_child_a = try makeBoolArray(allocator, &[_]?bool{true});
     defer null_child_a.release();
@@ -668,8 +668,8 @@ test "compute datumFilter supports scalar array chunked and fixed_size_list null
     var fs0 = try filtered_scalar_list.value(0);
     defer fs0.release();
     const fs0_values = int32_array{ .data = fs0.data() };
-    try std.testing.expectEqual(@as(i32, 7), fs0_values.value(0));
-    try std.testing.expectEqual(@as(i32, 8), fs0_values.value(1));
+    try std.testing.expectEqual(@as(i32, 7), try fs0_values.value(0));
+    try std.testing.expectEqual(@as(i32, 8), try fs0_values.value(1));
 
     var list_values = try makeInt32Array(allocator, &[_]?i32{ 1, 2, 3 });
     defer list_values.release();
@@ -730,7 +730,7 @@ test "compute datumFilter supports scalar array chunked and fixed_size_list null
 
     const fsl_view = array_mod.FixedSizeListArray{ .data = filtered_fsl.array.data() };
     try std.testing.expect(fsl_view.isNull(0));
-    try std.testing.expectEqual(@as(usize, 4), fsl_view.valuesRef().data().length);
+    try std.testing.expectEqual(@as(usize, 4), (try fsl_view.valuesRef()).data().length);
 }
 
 test "compute datumSelect supports mixed candidate datum forms" {
@@ -764,9 +764,9 @@ test "compute datumSelect supports mixed candidate datum forms" {
     try std.testing.expect(out.isArray());
     try std.testing.expectEqual(@as(usize, 3), out.array.data().length);
     const view = int32_array{ .data = out.array.data() };
-    try std.testing.expectEqual(@as(i32, 10), view.value(0));
-    try std.testing.expectEqual(@as(i32, 99), view.value(1));
-    try std.testing.expectEqual(@as(i32, 300), view.value(2));
+    try std.testing.expectEqual(@as(i32, 10), try view.value(0));
+    try std.testing.expectEqual(@as(i32, 99), try view.value(1));
+    try std.testing.expectEqual(@as(i32, 300), try view.value(2));
 }
 
 test "compute datumSelectNullable and datumBuildNullLikeWithAllocator support null output rows" {
@@ -795,9 +795,9 @@ test "compute datumSelectNullable and datumBuildNullLikeWithAllocator support nu
     try std.testing.expectEqual(@as(usize, 3), out.array.data().length);
     try out.array.data().validateLayout();
     const view = int32_array{ .data = out.array.data() };
-    try std.testing.expectEqual(@as(i32, 10), view.value(0));
+    try std.testing.expectEqual(@as(i32, 10), try view.value(0));
     try std.testing.expect(view.isNull(1));
-    try std.testing.expectEqual(@as(i32, 88), view.value(2));
+    try std.testing.expectEqual(@as(i32, 88), try view.value(2));
 
     var nulls = try datumBuildNullLikeWithAllocator(allocator, .{ .int32 = {} }, 3);
     defer nulls.release();
@@ -828,7 +828,7 @@ test "compute datumSelectNullable and datumBuildNullLikeWithAllocator support nu
     try std.testing.expect(fsl_view.isNull(0));
     try std.testing.expect(fsl_view.isNull(1));
     try std.testing.expect(fsl_view.isNull(2));
-    try std.testing.expectEqual(@as(usize, 6), fsl_view.valuesRef().data().length);
+    try std.testing.expectEqual(@as(usize, 6), (try fsl_view.valuesRef()).data().length);
 }
 
 test "compute datumSelectNullable emits fixed_size_list null rows without child mismatch" {
@@ -883,15 +883,15 @@ test "compute datumSelectNullable emits fixed_size_list null rows without child 
     try std.testing.expect(!fsl_view.isNull(0));
     try std.testing.expect(fsl_view.isNull(1));
     try std.testing.expect(!fsl_view.isNull(2));
-    try std.testing.expectEqual(@as(usize, 6), fsl_view.valuesRef().data().length);
+    try std.testing.expectEqual(@as(usize, 6), (try fsl_view.valuesRef()).data().length);
 
-    const child = int32_array{ .data = fsl_view.valuesRef().data() };
-    try std.testing.expectEqual(@as(i32, 1), child.value(0));
-    try std.testing.expectEqual(@as(i32, 2), child.value(1));
+    const child = int32_array{ .data = (try fsl_view.valuesRef()).data() };
+    try std.testing.expectEqual(@as(i32, 1), try child.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try child.value(1));
     try std.testing.expect(child.isNull(2));
     try std.testing.expect(child.isNull(3));
-    try std.testing.expectEqual(@as(i32, 30), child.value(4));
-    try std.testing.expectEqual(@as(i32, 31), child.value(5));
+    try std.testing.expectEqual(@as(i32, 30), try child.value(4));
+    try std.testing.expectEqual(@as(i32, 31), try child.value(5));
 }
 
 test "compute datumFilter emits fixed_size_list null rows when predicate nulls are kept" {
@@ -931,11 +931,11 @@ test "compute datumFilter emits fixed_size_list null rows when predicate nulls a
     const fsl_view = array_mod.FixedSizeListArray{ .data = out.array.data() };
     try std.testing.expect(!fsl_view.isNull(0));
     try std.testing.expect(fsl_view.isNull(1));
-    try std.testing.expectEqual(@as(usize, 4), fsl_view.valuesRef().data().length);
+    try std.testing.expectEqual(@as(usize, 4), (try fsl_view.valuesRef()).data().length);
 
-    const child = int32_array{ .data = fsl_view.valuesRef().data() };
-    try std.testing.expectEqual(@as(i32, 1), child.value(0));
-    try std.testing.expectEqual(@as(i32, 2), child.value(1));
+    const child = int32_array{ .data = (try fsl_view.valuesRef()).data() };
+    try std.testing.expectEqual(@as(i32, 1), try child.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try child.value(1));
     try std.testing.expect(child.isNull(2));
     try std.testing.expect(child.isNull(3));
 }

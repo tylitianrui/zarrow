@@ -120,8 +120,8 @@ test "compute registry registers and invokes scalar kernel" {
     try std.testing.expect(out == .array);
     const view = int32_array{ .data = out.array.data() };
     try std.testing.expectEqual(@as(usize, 3), view.len());
-    try std.testing.expectEqual(@as(i32, 7), view.value(0));
-    try std.testing.expectEqual(@as(i32, 9), view.value(2));
+    try std.testing.expectEqual(@as(i32, 7), try view.value(0));
+    try std.testing.expectEqual(@as(i32, 9), try view.value(2));
 }
 
 test "compute registry reports function and arity errors" {
@@ -231,8 +231,8 @@ test "compute invoke helpers cover vector and aggregate kernels" {
     try std.testing.expect(vec_out.isArray());
     const vec_view = int32_array{ .data = vec_out.array.data() };
     try std.testing.expectEqual(@as(usize, 4), vec_view.len());
-    try std.testing.expectEqual(@as(i32, 10), vec_view.value(0));
-    try std.testing.expectEqual(@as(i32, 40), vec_view.value(3));
+    try std.testing.expectEqual(@as(i32, 10), try vec_view.value(0));
+    try std.testing.expectEqual(@as(i32, 40), try vec_view.value(3));
 
     var agg_out = try ctx.invokeAggregate("count_len", args[0..], Options.noneValue());
     defer agg_out.release();

@@ -12,6 +12,7 @@ const array_data = @import("array_data.zig");
 const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const DataType = datatype.DataType;
 pub const IntType = datatype.IntType;
 const ArrayRef = array_ref.ArrayRef;
@@ -33,38 +34,41 @@ pub const DictionaryArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn dictionaryRef(self: DictionaryArray) *const ArrayRef {
-        std.debug.assert(self.data.dictionary != null);
-        return &self.data.dictionary.?;
+    pub fn dictionaryRef(self: DictionaryArray) AccessorError!*const ArrayRef {
+        if (self.data.dictionary) |*dict| return dict;
+        return error.MissingDictionary;
     }
 
-    pub fn index(self: DictionaryArray, i: usize) i64 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 2);
-
+    pub fn index(self: DictionaryArray, i: usize) AccessorError!i64 {
+        const pos = try self.data.logicalIndex(i);
         const idx_ty = self.data.data_type.dictionary.index_type;
-        const pos = self.data.offset + i;
         return switch (idx_ty.bit_width) {
             8 => if (idx_ty.signed)
-                @as(i64, (self.data.buffers[1].typedSlice(i8) catch unreachable)[pos])
+                @as(i64, try indexAt(self.data, i8, pos))
             else
-                @as(i64, @intCast((self.data.buffers[1].typedSlice(u8) catch unreachable)[pos])),
+                @as(i64, @intCast(try indexAt(self.data, u8, pos))),
             16 => if (idx_ty.signed)
-                @as(i64, (self.data.buffers[1].typedSlice(i16) catch unreachable)[pos])
+                @as(i64, try indexAt(self.data, i16, pos))
             else
-                @as(i64, @intCast((self.data.buffers[1].typedSlice(u16) catch unreachable)[pos])),
+                @as(i64, @intCast(try indexAt(self.data, u16, pos))),
             32 => if (idx_ty.signed)
-                @as(i64, (self.data.buffers[1].typedSlice(i32) catch unreachable)[pos])
+                @as(i64, try indexAt(self.data, i32, pos))
             else
-                @as(i64, @intCast((self.data.buffers[1].typedSlice(u32) catch unreachable)[pos])),
+                @as(i64, @intCast(try indexAt(self.data, u32, pos))),
             64 => if (idx_ty.signed)
-                (self.data.buffers[1].typedSlice(i64) catch unreachable)[pos]
+                try indexAt(self.data, i64, pos)
             else
-                @as(i64, @intCast((self.data.buffers[1].typedSlice(u64) catch unreachable)[pos])),
-            else => std.debug.panic("invalid dictionary index bit width: {}", .{idx_ty.bit_width}),
+                std.math.cast(i64, try indexAt(self.data, u64, pos)) orelse return error.InvalidOffsets,
+            else => error.InvalidOffsetBuffer,
         };
     }
 };
+
+fn indexAt(data: *const ArrayData, comptime T: type, pos: usize) AccessorError!T {
+    const indices = try data.typedBufferAt(1, T);
+    if (pos >= indices.len) return error.BufferTooSmall;
+    return indices[pos];
+}
 
 pub const DictionaryBuilder = struct {
     allocator: std.mem.Allocator,
@@ -272,20 +276,20 @@ test "dictionary builder builds and slices" {
 
     const arr = DictionaryArray{ .data = out.data() };
     try std.testing.expectEqual(@as(usize, 3), arr.len());
-    try std.testing.expectEqual(@as(i64, 1), arr.index(0));
+    try std.testing.expectEqual(@as(i64, 1), try arr.index(0));
     try std.testing.expect(arr.isNull(1));
-    try std.testing.expectEqual(@as(i64, 0), arr.index(2));
+    try std.testing.expectEqual(@as(i64, 0), try arr.index(2));
 
-    const dict_view = @import("string_array.zig").StringArray{ .data = arr.dictionaryRef().data() };
-    try std.testing.expectEqualStrings("red", dict_view.value(0));
-    try std.testing.expectEqualStrings("blue", dict_view.value(1));
+    const dict_view = @import("string_array.zig").StringArray{ .data = (try arr.dictionaryRef()).data() };
+    try std.testing.expectEqualStrings("red", try dict_view.value(0));
+    try std.testing.expectEqualStrings("blue", try dict_view.value(1));
 
     var sliced = try out.slice(1, 2);
     defer sliced.release();
     const sliced_arr = DictionaryArray{ .data = sliced.data() };
     try std.testing.expectEqual(@as(usize, 2), sliced_arr.len());
     try std.testing.expect(sliced_arr.isNull(0));
-    try std.testing.expectEqual(@as(i64, 0), sliced_arr.index(1));
+    try std.testing.expectEqual(@as(i64, 0), try sliced_arr.index(1));
 }
 
 test "dictionary builder rejects invalid dictionary type" {

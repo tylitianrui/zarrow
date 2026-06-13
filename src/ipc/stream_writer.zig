@@ -1457,16 +1457,16 @@ test "ipc writer roundtrip supports view types and variadicBufferCounts" {
     try std.testing.expectEqual(@as(usize, 4), out_batch.numRows());
 
     const sv = @import("../array/view_array.zig").StringViewArray{ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqualStrings("short", sv.value(0));
+    try std.testing.expectEqualStrings("short", try sv.value(0));
     try std.testing.expect(sv.isNull(1));
-    try std.testing.expectEqualStrings("tiny", sv.value(2));
-    try std.testing.expectEqualStrings("this string is longer than twelve", sv.value(3));
+    try std.testing.expectEqualStrings("tiny", try sv.value(2));
+    try std.testing.expectEqualStrings("this string is longer than twelve", try sv.value(3));
 
     const bv = @import("../array/view_array.zig").BinaryViewArray{ .data = out_batch.columns[1].data() };
-    try std.testing.expectEqualStrings("ab", bv.value(0));
-    try std.testing.expectEqualStrings("this-binary-view-is-long", bv.value(1));
+    try std.testing.expectEqualStrings("ab", try bv.value(0));
+    try std.testing.expectEqualStrings("this-binary-view-is-long", try bv.value(1));
     try std.testing.expect(bv.isNull(2));
-    try std.testing.expectEqualStrings("xy", bv.value(3));
+    try std.testing.expectEqualStrings("xy", try bv.value(3));
 }
 
 test "ipc writer and reader roundtrip extension field metadata and values" {
@@ -1533,9 +1533,9 @@ test "ipc writer and reader roundtrip extension field metadata and values" {
     try std.testing.expectEqual(@as(usize, 3), read_batch.numRows());
     try std.testing.expect(read_batch.columns[0].data().data_type == .extension);
     const values = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = read_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i32, 7), values.value(0));
+    try std.testing.expectEqual(@as(i32, 7), try values.value(0));
     try std.testing.expect(values.isNull(1));
-    try std.testing.expectEqual(@as(i32, 11), values.value(2));
+    try std.testing.expectEqual(@as(i32, 11), try values.value(2));
 }
 
 test "ipc writer emits dictionary delta on append-only dictionary growth" {
@@ -1977,8 +1977,8 @@ test "ipc writer emits V4-compatible sparse union buffers" {
     var out_batch = out_batch_opt.?;
     defer out_batch.deinit();
     const out_union = @import("../array/advanced_array.zig").SparseUnionArray{ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(0));
-    try std.testing.expectEqual(@as(i8, 7), out_union.typeId(1));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(0));
+    try std.testing.expectEqual(@as(i8, 7), try out_union.typeId(1));
 }
 
 test "ipc writer emits tensor message via public tensor-like api" {

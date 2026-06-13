@@ -123,24 +123,24 @@ test "compute execution helpers align chunked chunks for binary kernels" {
     defer c0.deinit();
     const l0_arr = int32_array{ .data = c0.lhs.array.data() };
     const r0_arr = int32_array{ .data = c0.rhs.array.data() };
-    try std.testing.expectEqual(@as(i32, 10), l0_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 100), r0_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 10), try l0_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 100), try r0_arr.value(0));
 
     var c1 = (try iter_values.next()).?;
     defer c1.deinit();
     const l1_arr = int32_array{ .data = c1.lhs.array.data() };
     const r1_arr = int32_array{ .data = c1.rhs.array.data() };
-    try std.testing.expectEqual(@as(i32, 11), l1_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 101), r1_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 11), try l1_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 101), try r1_arr.value(0));
 
     var c2 = (try iter_values.next()).?;
     defer c2.deinit();
     const l2_arr = int32_array{ .data = c2.lhs.array.data() };
     const r2_arr = int32_array{ .data = c2.rhs.array.data() };
-    try std.testing.expectEqual(@as(i32, 20), l2_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 22), l2_arr.value(2));
-    try std.testing.expectEqual(@as(i32, 102), r2_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 104), r2_arr.value(2));
+    try std.testing.expectEqual(@as(i32, 20), try l2_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 22), try l2_arr.value(2));
+    try std.testing.expectEqual(@as(i32, 102), try r2_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 104), try r2_arr.value(2));
 
     try std.testing.expect((try iter_values.next()) == null);
 }
@@ -255,13 +255,13 @@ test "compute nary execution helper supports array scalar chunked mixed broadcas
         const left = int32_array{ .data = chunk.values[0].array.data() };
         const right = int32_array{ .data = chunk.values[2].array.data() };
         if (idx == 0) {
-            try std.testing.expectEqual(@as(i32, 1), left.value(0));
-            try std.testing.expectEqual(@as(i32, 2), left.value(1));
-            try std.testing.expectEqual(@as(i32, 10), right.value(0));
-            try std.testing.expectEqual(@as(i32, 11), right.value(1));
+            try std.testing.expectEqual(@as(i32, 1), try left.value(0));
+            try std.testing.expectEqual(@as(i32, 2), try left.value(1));
+            try std.testing.expectEqual(@as(i32, 10), try right.value(0));
+            try std.testing.expectEqual(@as(i32, 11), try right.value(1));
         } else {
-            try std.testing.expectEqual(@as(i32, 3), left.value(0));
-            try std.testing.expectEqual(@as(i32, 12), right.value(0));
+            try std.testing.expectEqual(@as(i32, 3), try left.value(0));
+            try std.testing.expectEqual(@as(i32, 12), try right.value(0));
         }
         try std.testing.expectEqual(@as(i32, 9), chunk.values[1].scalar.value.i32);
     }

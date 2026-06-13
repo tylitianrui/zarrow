@@ -120,7 +120,7 @@ fn scalarFromSingleArrayRef(value: ArrayRef) KernelError!Scalar {
     }.get;
 
     return switch (data.data_type) {
-        .bool => Scalar.init(data.data_type, .{ .bool = (array_mod.BooleanArray{ .data = data }).value(0) }),
+        .bool => Scalar.init(data.data_type, .{ .bool = (array_mod.BooleanArray{ .data = data }).value(0) catch |err| return mapArrayReadError(err) }),
         .int8 => Scalar.init(data.data_type, .{ .i8 = try pValue(i8, array_mod.Int8Array{ .data = data }) }),
         .int16 => Scalar.init(data.data_type, .{ .i16 = try pValue(i16, array_mod.Int16Array{ .data = data }) }),
         .int32 => Scalar.init(data.data_type, .{ .i32 = try pValue(i32, array_mod.Int32Array{ .data = data }) }),
@@ -147,27 +147,27 @@ fn scalarFromSingleArrayRef(value: ArrayRef) KernelError!Scalar {
         .decimal256 => Scalar.init(data.data_type, .{ .decimal256 = try pValue(i256, array_mod.Decimal256Array{ .data = data }) }),
         .string => .{
             .data_type = data.data_type,
-            .value = .{ .string = (array_mod.StringArray{ .data = data }).value(0) },
+            .value = .{ .string = (array_mod.StringArray{ .data = data }).value(0) catch |err| return mapArrayReadError(err) },
             .payload = value.retain(),
         },
         .large_string => .{
             .data_type = data.data_type,
-            .value = .{ .string = (array_mod.LargeStringArray{ .data = data }).value(0) },
+            .value = .{ .string = (array_mod.LargeStringArray{ .data = data }).value(0) catch |err| return mapArrayReadError(err) },
             .payload = value.retain(),
         },
         .binary => .{
             .data_type = data.data_type,
-            .value = .{ .binary = (array_mod.BinaryArray{ .data = data }).value(0) },
+            .value = .{ .binary = (array_mod.BinaryArray{ .data = data }).value(0) catch |err| return mapArrayReadError(err) },
             .payload = value.retain(),
         },
         .large_binary => .{
             .data_type = data.data_type,
-            .value = .{ .binary = (array_mod.LargeBinaryArray{ .data = data }).value(0) },
+            .value = .{ .binary = (array_mod.LargeBinaryArray{ .data = data }).value(0) catch |err| return mapArrayReadError(err) },
             .payload = value.retain(),
         },
         .fixed_size_binary => .{
             .data_type = data.data_type,
-            .value = .{ .binary = (array_mod.FixedSizeBinaryArray{ .data = data }).value(0) },
+            .value = .{ .binary = (array_mod.FixedSizeBinaryArray{ .data = data }).value(0) catch |err| return mapArrayReadError(err) },
             .payload = value.retain(),
         },
         .list, .large_list, .fixed_size_list, .struct_ => Scalar.initNested(data.data_type, value),

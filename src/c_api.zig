@@ -296,9 +296,9 @@ test "c api schema and array import/export roundtrip" {
     defer id_ref.release();
     const id_arr = array_mod.Int32Array{ .data = id_ref.data() };
     try std.testing.expectEqual(@as(usize, 3), id_arr.len());
-    try std.testing.expectEqual(@as(i32, 1), id_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 2), id_arr.value(1));
-    try std.testing.expectEqual(@as(i32, 3), id_arr.value(2));
+    try std.testing.expectEqual(@as(i32, 1), try id_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try id_arr.value(1));
+    try std.testing.expectEqual(@as(i32, 3), try id_arr.value(2));
 
     zarrow_c_release_array(array_handle);
 }

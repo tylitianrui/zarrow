@@ -21,6 +21,11 @@ pub const ValidationError = error{
     InvalidChildren,
 };
 
+pub const AccessorError = ValidationError || error{
+    IndexOutOfBounds,
+    OutOfMemory,
+};
+
 /// Core Arrow array metadata and buffers.
 ///
 /// Field semantics:
@@ -73,6 +78,34 @@ pub const ArrayData = struct {
     fn checkedBitmapByteLength(bit_length: usize) ValidationError!usize {
         const padded = std.math.add(usize, bit_length, 7) catch return error.InvalidOffsets;
         return padded >> 3;
+    }
+
+    pub fn logicalIndex(self: Self, i: usize) AccessorError!usize {
+        if (i >= self.length) return error.IndexOutOfBounds;
+        return std.math.add(usize, self.offset, i) catch return error.InvalidOffsets;
+    }
+
+    pub fn logicalEnd(self: Self) AccessorError!usize {
+        return std.math.add(usize, self.offset, self.length) catch return error.InvalidOffsets;
+    }
+
+    pub fn bufferAt(self: Self, index: usize) AccessorError!SharedBuffer {
+        if (index >= self.buffers.len) return error.InvalidBufferCount;
+        return self.buffers[index];
+    }
+
+    pub fn typedBufferAt(self: Self, index: usize, comptime T: type) AccessorError![]const T {
+        const buf = try self.bufferAt(index);
+        return buf.typedSlice(T) catch return error.InvalidOffsetBuffer;
+    }
+
+    pub fn childAt(self: Self, index: usize) AccessorError!*const ArrayRef {
+        if (index >= self.children.len) return error.IndexOutOfBounds;
+        return &self.children[index];
+    }
+
+    pub fn expectChildCount(self: Self, count: usize) AccessorError!void {
+        if (self.children.len != count) return error.InvalidChildren;
     }
 
     pub fn validity(self: Self) ?ValidityBitmap {

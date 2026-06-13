@@ -29,6 +29,7 @@ const array_data = @import("array_data.zig");
 const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const ArrayRef = array_ref.ArrayRef;
 const DataType = datatype.DataType;
 pub const Field = datatype.Field;
@@ -72,19 +73,22 @@ pub const StructArray = struct {
         return self.data.children.len;
     }
 
-    pub fn fieldRef(self: StructArray, index: usize) *const ArrayRef {
-        std.debug.assert(index < self.data.children.len);
+    pub fn fieldRef(self: StructArray, index: usize) AccessorError!*const ArrayRef {
+        if (index >= self.data.children.len) return error.IndexOutOfBounds;
         return &self.data.children[index];
     }
 
-    pub fn field(self: StructArray, index: usize) !ArrayRef {
-        std.debug.assert(index < self.data.children.len);
-        const child = self.data.children[index];
+    pub fn field(self: StructArray, index: usize) AccessorError!ArrayRef {
+        const child = (try self.fieldRef(index)).*;
         const child_data = child.data();
         if (child_data.length == self.data.length and child_data.offset == self.data.offset) {
             return child.retain();
         }
-        return child.slice(self.data.offset, self.data.length);
+        const end = std.math.add(usize, self.data.offset, self.data.length) catch return error.InvalidChildren;
+        if (end > child_data.length) return error.InvalidChildren;
+        return child.slice(self.data.offset, self.data.length) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+        };
     }
 };
 
@@ -408,8 +412,8 @@ test "struct array fields follow parent slice" {
 
     const child_view = @import("primitive_array.zig").PrimitiveArray(i32){ .data = sliced_child.data() };
     try std.testing.expectEqual(@as(usize, 2), child_view.len());
-    try std.testing.expectEqual(@as(i32, 2), child_view.value(0));
-    try std.testing.expectEqual(@as(i32, 3), child_view.value(1));
+    try std.testing.expectEqual(@as(i32, 2), try child_view.value(0));
+    try std.testing.expectEqual(@as(i32, 3), try child_view.value(1));
 }
 
 test "struct array fieldRef returns child" {
@@ -444,10 +448,10 @@ test "struct array fieldRef returns child" {
     defer struct_ref.release();
 
     const struct_array = StructArray{ .data = struct_ref.data() };
-    const child_view = @import("primitive_array.zig").PrimitiveArray(i32){ .data = struct_array.fieldRef(0).data() };
+    const child_view = @import("primitive_array.zig").PrimitiveArray(i32){ .data = (try struct_array.fieldRef(0)).data() };
     try std.testing.expectEqual(@as(usize, 2), child_view.len());
-    try std.testing.expectEqual(@as(i32, 9), child_view.value(0));
-    try std.testing.expectEqual(@as(i32, 11), child_view.value(1));
+    try std.testing.expectEqual(@as(i32, 9), try child_view.value(0));
+    try std.testing.expectEqual(@as(i32, 11), try child_view.value(1));
 }
 
 test "struct builder builds arrays" {

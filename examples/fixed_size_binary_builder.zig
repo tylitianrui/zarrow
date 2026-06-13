@@ -23,7 +23,7 @@ pub fn main() !void {
         if (arr.isNull(i)) {
             std.debug.print("  [{d}] null\n", .{i});
         } else {
-            const v = arr.value(i);
+            const v = try arr.value(i);
             std.debug.print("  [{d}] {d}.{d}.{d}.{d}\n", .{ i, v[0], v[1], v[2], v[3] });
         }
     }

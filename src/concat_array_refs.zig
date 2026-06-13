@@ -384,7 +384,8 @@ fn concatStringViewArray(
         if (left_view.isNull(i)) {
             builder.appendNull() catch |err| return mapViewBuilderError(err);
         } else {
-            builder.append(left_view.value(i)) catch |err| return mapViewBuilderError(err);
+            const value = left_view.value(i) catch return error.InvalidInput;
+            builder.append(value) catch |err| return mapViewBuilderError(err);
         }
     }
 
@@ -394,7 +395,8 @@ fn concatStringViewArray(
         if (right_view.isNull(i)) {
             builder.appendNull() catch |err| return mapViewBuilderError(err);
         } else {
-            builder.append(right_view.value(i)) catch |err| return mapViewBuilderError(err);
+            const value = right_view.value(i) catch return error.InvalidInput;
+            builder.append(value) catch |err| return mapViewBuilderError(err);
         }
     }
 
@@ -423,7 +425,8 @@ fn concatBinaryViewArray(
         if (left_view.isNull(i)) {
             builder.appendNull() catch |err| return mapViewBuilderError(err);
         } else {
-            builder.append(left_view.value(i)) catch |err| return mapViewBuilderError(err);
+            const value = left_view.value(i) catch return error.InvalidInput;
+            builder.append(value) catch |err| return mapViewBuilderError(err);
         }
     }
 
@@ -433,7 +436,8 @@ fn concatBinaryViewArray(
         if (right_view.isNull(i)) {
             builder.appendNull() catch |err| return mapViewBuilderError(err);
         } else {
-            builder.append(right_view.value(i)) catch |err| return mapViewBuilderError(err);
+            const value = right_view.value(i) catch return error.InvalidInput;
+            builder.append(value) catch |err| return mapViewBuilderError(err);
         }
     }
 
@@ -867,11 +871,11 @@ test "concatArrayRefs supports null bool and fixed-width with sliced inputs" {
 
     const bool_view = arr.BooleanArray{ .data = merged_bool.data() };
     try std.testing.expectEqual(@as(usize, 5), bool_view.len());
-    try std.testing.expectEqual(false, bool_view.value(0));
+    try std.testing.expectEqual(false, try bool_view.value(0));
     try std.testing.expect(bool_view.isNull(1));
-    try std.testing.expectEqual(true, bool_view.value(2));
+    try std.testing.expectEqual(true, try bool_view.value(2));
     try std.testing.expect(bool_view.isNull(3));
-    try std.testing.expectEqual(false, bool_view.value(4));
+    try std.testing.expectEqual(false, try bool_view.value(4));
 
     var i32_left_builder = try arr.Int32Builder.init(allocator, 4);
     defer i32_left_builder.deinit();
@@ -901,10 +905,10 @@ test "concatArrayRefs supports null bool and fixed-width with sliced inputs" {
 
     const i32_view = arr.Int32Array{ .data = merged_i32.data() };
     try std.testing.expectEqual(@as(usize, 4), i32_view.len());
-    try std.testing.expectEqual(@as(i32, 2), i32_view.value(0));
-    try std.testing.expectEqual(@as(i32, 3), i32_view.value(1));
-    try std.testing.expectEqual(@as(i32, 6), i32_view.value(2));
-    try std.testing.expectEqual(@as(i32, 7), i32_view.value(3));
+    try std.testing.expectEqual(@as(i32, 2), try i32_view.value(0));
+    try std.testing.expectEqual(@as(i32, 3), try i32_view.value(1));
+    try std.testing.expectEqual(@as(i32, 6), try i32_view.value(2));
+    try std.testing.expectEqual(@as(i32, 7), try i32_view.value(3));
 }
 
 test "concatArrayRefs supports string and binary families" {
@@ -935,10 +939,10 @@ test "concatArrayRefs supports string and binary families" {
 
     const str_view = arr.StringArray{ .data = merged_str.data() };
     try std.testing.expectEqual(@as(usize, 4), str_view.len());
-    try std.testing.expectEqualStrings("bbb", str_view.value(0));
-    try std.testing.expectEqualStrings("c", str_view.value(1));
-    try std.testing.expectEqualStrings("d", str_view.value(2));
-    try std.testing.expectEqualStrings("ee", str_view.value(3));
+    try std.testing.expectEqualStrings("bbb", try str_view.value(0));
+    try std.testing.expectEqualStrings("c", try str_view.value(1));
+    try std.testing.expectEqualStrings("d", try str_view.value(2));
+    try std.testing.expectEqualStrings("ee", try str_view.value(3));
 
     var bin_left_builder = try arr.BinaryBuilder.init(allocator, 3, 8);
     defer bin_left_builder.deinit();
@@ -962,9 +966,9 @@ test "concatArrayRefs supports string and binary families" {
     try merged_bin.data().validateLayout();
 
     const bin_view = arr.BinaryArray{ .data = merged_bin.data() };
-    try std.testing.expectEqualStrings("y22", bin_view.value(0));
-    try std.testing.expectEqualStrings("z", bin_view.value(1));
-    try std.testing.expectEqualStrings("qq", bin_view.value(2));
+    try std.testing.expectEqualStrings("y22", try bin_view.value(0));
+    try std.testing.expectEqualStrings("z", try bin_view.value(1));
+    try std.testing.expectEqualStrings("qq", try bin_view.value(2));
 
     var lstr_left_builder = try arr.LargeStringBuilder.init(allocator, 2, 4);
     defer lstr_left_builder.deinit();
@@ -984,9 +988,9 @@ test "concatArrayRefs supports string and binary families" {
     try merged_lstr.data().validateLayout();
 
     const lstr_view = arr.LargeStringArray{ .data = merged_lstr.data() };
-    try std.testing.expectEqualStrings("l1", lstr_view.value(0));
-    try std.testing.expectEqualStrings("l22", lstr_view.value(1));
-    try std.testing.expectEqualStrings("l3", lstr_view.value(2));
+    try std.testing.expectEqualStrings("l1", try lstr_view.value(0));
+    try std.testing.expectEqualStrings("l22", try lstr_view.value(1));
+    try std.testing.expectEqualStrings("l3", try lstr_view.value(2));
 
     var lbin_left_builder = try arr.LargeBinaryBuilder.init(allocator, 2, 4);
     defer lbin_left_builder.deinit();
@@ -1010,9 +1014,9 @@ test "concatArrayRefs supports string and binary families" {
     try merged_lbin.data().validateLayout();
 
     const lbin_view = arr.LargeBinaryArray{ .data = merged_lbin.data() };
-    try std.testing.expectEqualStrings("ab", lbin_view.value(0));
-    try std.testing.expectEqualStrings("c", lbin_view.value(1));
-    try std.testing.expectEqualStrings("de", lbin_view.value(2));
+    try std.testing.expectEqualStrings("ab", try lbin_view.value(0));
+    try std.testing.expectEqualStrings("c", try lbin_view.value(1));
+    try std.testing.expectEqualStrings("de", try lbin_view.value(2));
 
     var sv_left_builder = try arr.StringViewBuilder.init(allocator, 3, 32);
     defer sv_left_builder.deinit();
@@ -1040,8 +1044,8 @@ test "concatArrayRefs supports string and binary families" {
     const sv_view = arr.StringViewArray{ .data = merged_sv.data() };
     try std.testing.expectEqual(@as(usize, 3), sv_view.len());
     try std.testing.expect(sv_view.isNull(0));
-    try std.testing.expectEqualStrings("this string is longer than twelve", sv_view.value(1));
-    try std.testing.expectEqualStrings("tail", sv_view.value(2));
+    try std.testing.expectEqualStrings("this string is longer than twelve", try sv_view.value(1));
+    try std.testing.expectEqualStrings("tail", try sv_view.value(2));
 
     var bv_left_builder = try arr.BinaryViewBuilder.init(allocator, 3, 32);
     defer bv_left_builder.deinit();
@@ -1065,8 +1069,8 @@ test "concatArrayRefs supports string and binary families" {
     const bv_view = arr.BinaryViewArray{ .data = merged_bv.data() };
     try std.testing.expectEqual(@as(usize, 3), bv_view.len());
     try std.testing.expect(bv_view.isNull(0));
-    try std.testing.expectEqualStrings("this-binary-view-is-long", bv_view.value(1));
-    try std.testing.expectEqualStrings("zz", bv_view.value(2));
+    try std.testing.expectEqualStrings("this-binary-view-is-long", try bv_view.value(1));
+    try std.testing.expectEqualStrings("zz", try bv_view.value(2));
 }
 
 test "concatArrayRefs supports list large_list and fixed_size_list" {
@@ -1123,11 +1127,11 @@ test "concatArrayRefs supports list large_list and fixed_size_list" {
     try std.testing.expectEqual(@as(i32, 5), list_offsets[3]);
 
     const list_child = arr.Int32Array{ .data = merged_list.data().children[0].data() };
-    try std.testing.expectEqual(@as(i32, 11), list_child.value(0));
-    try std.testing.expectEqual(@as(i32, 12), list_child.value(1));
-    try std.testing.expectEqual(@as(i32, 13), list_child.value(2));
-    try std.testing.expectEqual(@as(i32, 20), list_child.value(3));
-    try std.testing.expectEqual(@as(i32, 21), list_child.value(4));
+    try std.testing.expectEqual(@as(i32, 11), try list_child.value(0));
+    try std.testing.expectEqual(@as(i32, 12), try list_child.value(1));
+    try std.testing.expectEqual(@as(i32, 13), try list_child.value(2));
+    try std.testing.expectEqual(@as(i32, 20), try list_child.value(3));
+    try std.testing.expectEqual(@as(i32, 21), try list_child.value(4));
 
     var llist_left_values_builder = try arr.Int32Builder.init(allocator, 3);
     defer llist_left_values_builder.deinit();
@@ -1169,9 +1173,9 @@ test "concatArrayRefs supports list large_list and fixed_size_list" {
     try std.testing.expectEqual(@as(i64, 3), llist_offsets[2]);
 
     const llist_child = arr.Int32Array{ .data = merged_llist.data().children[0].data() };
-    try std.testing.expectEqual(@as(i32, 3), llist_child.value(0));
-    try std.testing.expectEqual(@as(i32, 4), llist_child.value(1));
-    try std.testing.expectEqual(@as(i32, 5), llist_child.value(2));
+    try std.testing.expectEqual(@as(i32, 3), try llist_child.value(0));
+    try std.testing.expectEqual(@as(i32, 4), try llist_child.value(1));
+    try std.testing.expectEqual(@as(i32, 5), try llist_child.value(2));
 
     var fsl_left_values_builder = try arr.Int32Builder.init(allocator, 4);
     defer fsl_left_values_builder.deinit();
@@ -1220,11 +1224,11 @@ test "concatArrayRefs supports list large_list and fixed_size_list" {
 
     const fsl_view = arr.FixedSizeListArray{ .data = merged_fsl.data() };
     try std.testing.expectEqual(@as(usize, 2), fsl_view.len());
-    const fsl_child = arr.Int32Array{ .data = fsl_view.valuesRef().data() };
-    try std.testing.expectEqual(@as(i32, 3), fsl_child.value(0));
-    try std.testing.expectEqual(@as(i32, 4), fsl_child.value(1));
-    try std.testing.expectEqual(@as(i32, 5), fsl_child.value(2));
-    try std.testing.expectEqual(@as(i32, 6), fsl_child.value(3));
+    const fsl_child = arr.Int32Array{ .data = (try fsl_view.valuesRef()).data() };
+    try std.testing.expectEqual(@as(i32, 3), try fsl_child.value(0));
+    try std.testing.expectEqual(@as(i32, 4), try fsl_child.value(1));
+    try std.testing.expectEqual(@as(i32, 5), try fsl_child.value(2));
+    try std.testing.expectEqual(@as(i32, 6), try fsl_child.value(3));
 
     var fsl_null_left_values_builder = try arr.Int32Builder.init(allocator, 6);
     defer fsl_null_left_values_builder.deinit();
@@ -1364,9 +1368,9 @@ test "concatArrayRefs supports recursive struct" {
 
     try std.testing.expectEqual(@as(usize, 3), merged.data().length);
     const ids = arr.Int32Array{ .data = merged.data().children[0].data() };
-    try std.testing.expectEqual(@as(i32, 20), ids.value(0));
-    try std.testing.expectEqual(@as(i32, 30), ids.value(1));
-    try std.testing.expectEqual(@as(i32, 40), ids.value(2));
+    try std.testing.expectEqual(@as(i32, 20), try ids.value(0));
+    try std.testing.expectEqual(@as(i32, 30), try ids.value(1));
+    try std.testing.expectEqual(@as(i32, 40), try ids.value(2));
 
     const nums = merged.data().children[1];
     const nums_offsets = try nums.data().buffers[1].typedSlice(i32);
@@ -1376,11 +1380,11 @@ test "concatArrayRefs supports recursive struct" {
     try std.testing.expectEqual(@as(i32, 5), nums_offsets[3]);
 
     const nums_values = arr.Int32Array{ .data = nums.data().children[0].data() };
-    try std.testing.expectEqual(@as(i32, 2), nums_values.value(0));
-    try std.testing.expectEqual(@as(i32, 3), nums_values.value(1));
-    try std.testing.expectEqual(@as(i32, 4), nums_values.value(2));
-    try std.testing.expectEqual(@as(i32, 5), nums_values.value(3));
-    try std.testing.expectEqual(@as(i32, 6), nums_values.value(4));
+    try std.testing.expectEqual(@as(i32, 2), try nums_values.value(0));
+    try std.testing.expectEqual(@as(i32, 3), try nums_values.value(1));
+    try std.testing.expectEqual(@as(i32, 4), try nums_values.value(2));
+    try std.testing.expectEqual(@as(i32, 5), try nums_values.value(3));
+    try std.testing.expectEqual(@as(i32, 6), try nums_values.value(4));
 }
 
 test "concatArrayRefs rejects empty input" {

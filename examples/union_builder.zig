@@ -50,7 +50,7 @@ pub fn main() !void {
     const sparse = zarrow.SparseUnionArray{ .data = sparse_ref.data() };
     std.debug.print("examples/union_builder.zig | sparse union length={d}\n", .{sparse.len()});
     for (0..sparse.len()) |i| {
-        if (sparse.typeId(i) == 0) {
+        if ((try sparse.typeId(i)) == 0) {
             var v = try sparse.value(i);
             defer v.release();
             const a = zarrow.Int32Array{ .data = v.data() };
@@ -99,7 +99,7 @@ pub fn main() !void {
     const dense = zarrow.DenseUnionArray{ .data = dense_ref.data() };
     std.debug.print("examples/union_builder.zig | dense union length={d}\n", .{dense.len()});
     for (0..dense.len()) |i| {
-        if (dense.typeId(i) == 0) {
+        if ((try dense.typeId(i)) == 0) {
             var v = try dense.value(i);
             defer v.release();
             const a = zarrow.Int32Array{ .data = v.data() };

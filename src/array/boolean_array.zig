@@ -12,6 +12,7 @@ const array_data = @import("array_data.zig");
 const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const DataType = datatype.DataType;
 const ArrayRef = array_ref.ArrayRef;
 const BuilderState = builder_state.BuilderState;
@@ -36,10 +37,13 @@ pub const BooleanArray = struct {
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: Self, i: usize) bool {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 2);
-        return bitmap.bitIsSet(self.data.buffers[1].data, self.data.offset + i);
+    pub fn value(self: Self, i: usize) AccessorError!bool {
+        const pos = try self.data.logicalIndex(i);
+        const needed_bits = std.math.add(usize, pos, 1) catch return error.InvalidOffsets;
+        const padded = std.math.add(usize, needed_bits, 7) catch return error.InvalidOffsets;
+        const values = try self.data.bufferAt(1);
+        if (values.len() < (padded >> 3)) return error.BufferTooSmall;
+        return bitmap.bitIsSet(values.data, pos);
     }
 };
 
@@ -178,7 +182,7 @@ test "boolean builder appends values" {
     defer array_handle.release();
     const built = BooleanArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
-    try std.testing.expect(built.value(0));
-    try std.testing.expect(!built.value(1));
+    try std.testing.expect(try built.value(0));
+    try std.testing.expect(!(try built.value(1)));
     try std.testing.expect(built.isNull(2));
 }

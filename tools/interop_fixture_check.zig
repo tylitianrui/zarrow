@@ -170,16 +170,16 @@ fn checkView(reader: anytype) !void {
     if (batch.numRows() != 4) return error.InvalidBatch;
 
     const sv = zarrow.StringViewArray{ .data = batch.columns[0].data() };
-    if (!std.mem.eql(u8, sv.value(0), "short")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, sv.value(0) catch return error.InvalidBatch, "short")) return error.InvalidBatch;
     if (!sv.isNull(1)) return error.InvalidBatch;
-    if (!std.mem.eql(u8, sv.value(2), "tiny")) return error.InvalidBatch;
-    if (!std.mem.eql(u8, sv.value(3), "this string is longer than twelve")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, sv.value(2) catch return error.InvalidBatch, "tiny")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, sv.value(3) catch return error.InvalidBatch, "this string is longer than twelve")) return error.InvalidBatch;
 
     const bv = zarrow.BinaryViewArray{ .data = batch.columns[1].data() };
-    if (!std.mem.eql(u8, bv.value(0), "ab")) return error.InvalidBatch;
-    if (!std.mem.eql(u8, bv.value(1), "this-binary-view-is-long")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, bv.value(0) catch return error.InvalidBatch, "ab")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, bv.value(1) catch return error.InvalidBatch, "this-binary-view-is-long")) return error.InvalidBatch;
     if (!bv.isNull(2)) return error.InvalidBatch;
-    if (!std.mem.eql(u8, bv.value(3), "xy")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, bv.value(3) catch return error.InvalidBatch, "xy")) return error.InvalidBatch;
 
     const done = try reader.nextRecordBatch();
     if (done != null) return error.UnexpectedExtraBatch;
@@ -264,9 +264,9 @@ fn checkCanonical(reader: anytype) !void {
     if ((ids.value(0) catch return error.InvalidBatch) != 1 or (ids.value(1) catch return error.InvalidBatch) != 2 or (ids.value(2) catch return error.InvalidBatch) != 3) return error.InvalidBatch;
 
     const names = zarrow.StringArray{ .data = batch.columns[1].data() };
-    if (!std.mem.eql(u8, names.value(0), "alice")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, names.value(0) catch return error.InvalidBatch, "alice")) return error.InvalidBatch;
     if (!names.isNull(1)) return error.InvalidBatch;
-    if (!std.mem.eql(u8, names.value(2), "bob")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, names.value(2) catch return error.InvalidBatch, "bob")) return error.InvalidBatch;
 
     const done = try reader.nextRecordBatch();
     if (done != null) return error.UnexpectedExtraBatch;
@@ -285,9 +285,9 @@ fn checkDictionaryDelta(reader: anytype) !void {
     if (first.numRows() != 2) return error.InvalidBatch;
 
     const first_dict = zarrow.DictionaryArray{ .data = first.columns[0].data() };
-    const first_values = zarrow.StringArray{ .data = first_dict.dictionaryRef().data() };
-    if (!std.mem.eql(u8, first_values.value(@intCast(first_dict.index(0))), "red")) return error.InvalidBatch;
-    if (!std.mem.eql(u8, first_values.value(@intCast(first_dict.index(1))), "blue")) return error.InvalidBatch;
+    const first_values = zarrow.StringArray{ .data = (first_dict.dictionaryRef() catch return error.InvalidBatch).data() };
+    if (!std.mem.eql(u8, first_values.value(@intCast(first_dict.index(0) catch return error.InvalidBatch)) catch return error.InvalidBatch, "red")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, first_values.value(@intCast(first_dict.index(1) catch return error.InvalidBatch)) catch return error.InvalidBatch, "blue")) return error.InvalidBatch;
 
     const second_opt = try reader.nextRecordBatch();
     if (second_opt == null) return error.MissingBatch;
@@ -296,8 +296,8 @@ fn checkDictionaryDelta(reader: anytype) !void {
     if (second.numRows() != 1) return error.InvalidBatch;
 
     const second_dict = zarrow.DictionaryArray{ .data = second.columns[0].data() };
-    const second_values = zarrow.StringArray{ .data = second_dict.dictionaryRef().data() };
-    if (!std.mem.eql(u8, second_values.value(@intCast(second_dict.index(0))), "green")) return error.InvalidBatch;
+    const second_values = zarrow.StringArray{ .data = (second_dict.dictionaryRef() catch return error.InvalidBatch).data() };
+    if (!std.mem.eql(u8, second_values.value(@intCast(second_dict.index(0) catch return error.InvalidBatch)) catch return error.InvalidBatch, "green")) return error.InvalidBatch;
 
     const done = try reader.nextRecordBatch();
     if (done != null) return error.UnexpectedExtraBatch;
@@ -342,8 +342,8 @@ fn checkComplex(reader: anytype) !void {
     const struct_ids = zarrow.Int32Array{ .data = batch.columns[1].data().children[0].data() };
     const struct_names = zarrow.StringArray{ .data = batch.columns[1].data().children[1].data() };
     if ((struct_ids.value(0) catch return error.InvalidBatch) != 10 or (struct_ids.value(2) catch return error.InvalidBatch) != 30) return error.InvalidBatch;
-    if (!std.mem.eql(u8, struct_names.value(0), "aa")) return error.InvalidBatch;
-    if (!std.mem.eql(u8, struct_names.value(2), "cc")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, struct_names.value(0) catch return error.InvalidBatch, "aa")) return error.InvalidBatch;
+    if (!std.mem.eql(u8, struct_names.value(2) catch return error.InvalidBatch, "cc")) return error.InvalidBatch;
 
     const map_col = zarrow.MapArray{ .data = batch.columns[2].data() };
     if (!map_col.isNull(1)) return error.InvalidBatch;
@@ -361,13 +361,13 @@ fn checkComplex(reader: anytype) !void {
     if ((m2_keys.value(0) catch return error.InvalidBatch) != 3 or (m2_vals.value(0) catch return error.InvalidBatch) != 30) return error.InvalidBatch;
 
     const union_col = zarrow.DenseUnionArray{ .data = batch.columns[3].data() };
-    const t0 = union_col.typeId(0);
-    const t1 = union_col.typeId(1);
-    const t2 = union_col.typeId(2);
+    const t0 = union_col.typeId(0) catch return error.InvalidBatch;
+    const t1 = union_col.typeId(1) catch return error.InvalidBatch;
+    const t2 = union_col.typeId(2) catch return error.InvalidBatch;
     if (t0 != t2 or t0 == t1) return error.InvalidBatch;
-    if (union_col.childOffset(0) != 0) return error.InvalidBatch;
-    if (union_col.childOffset(1) != 0) return error.InvalidBatch;
-    if (union_col.childOffset(2) != 1) return error.InvalidBatch;
+    if ((union_col.childOffset(0) catch return error.InvalidBatch) != 0) return error.InvalidBatch;
+    if ((union_col.childOffset(1) catch return error.InvalidBatch) != 0) return error.InvalidBatch;
+    if ((union_col.childOffset(2) catch return error.InvalidBatch) != 1) return error.InvalidBatch;
     var uv0 = try union_col.value(0);
     defer uv0.release();
     var uv1 = try union_col.value(1);
@@ -377,7 +377,7 @@ fn checkComplex(reader: anytype) !void {
     const union_i_first = zarrow.Int32Array{ .data = uv0.data() };
     const union_b_middle = zarrow.BooleanArray{ .data = uv1.data() };
     const union_i_last = zarrow.Int32Array{ .data = uv2.data() };
-    if ((union_i_first.value(0) catch return error.InvalidBatch) != 100 or !union_b_middle.value(0) or (union_i_last.value(0) catch return error.InvalidBatch) != 200) {
+    if ((union_i_first.value(0) catch return error.InvalidBatch) != 100 or !(union_b_middle.value(0) catch return error.InvalidBatch) or (union_i_last.value(0) catch return error.InvalidBatch) != 200) {
         return error.InvalidBatch;
     }
 

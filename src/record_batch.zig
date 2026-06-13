@@ -346,8 +346,8 @@ test "record batch slice returns sliced columns" {
 
     const view = @import("array/primitive_array.zig").PrimitiveArray(i32){ .data = sliced.column(0).data() };
     try std.testing.expectEqual(@as(usize, 2), view.len());
-    try std.testing.expectEqual(@as(i32, 20), view.value(0));
-    try std.testing.expectEqual(@as(i32, 30), view.value(1));
+    try std.testing.expectEqual(@as(i32, 20), try view.value(0));
+    try std.testing.expectEqual(@as(i32, 30), try view.value(1));
 }
 
 test "record batch accepts non-nullable sliced column with nulls outside slice" {
@@ -380,8 +380,8 @@ test "record batch accepts non-nullable sliced column with nulls outside slice" 
 
     const view = @import("array/primitive_array.zig").PrimitiveArray(i32){ .data = batch.column(0).data() };
     try std.testing.expectEqual(@as(usize, 2), view.len());
-    try std.testing.expectEqual(@as(i32, 20), view.value(0));
-    try std.testing.expectEqual(@as(i32, 30), view.value(1));
+    try std.testing.expectEqual(@as(i32, 20), try view.value(0));
+    try std.testing.expectEqual(@as(i32, 30), try view.value(1));
 }
 
 test "record batch slice rejects out of bounds" {
