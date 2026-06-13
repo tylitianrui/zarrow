@@ -70,6 +70,11 @@ pub const ArrayData = struct {
         };
     }
 
+    fn checkedBitmapByteLength(bit_length: usize) ValidationError!usize {
+        const padded = std.math.add(usize, bit_length, 7) catch return error.InvalidOffsets;
+        return padded >> 3;
+    }
+
     pub fn validity(self: Self) ?ValidityBitmap {
         if (!hasTopLevelValidityBitmap(self.data_type)) return null;
         if (self.buffers.len == 0) return null;
@@ -339,6 +344,95 @@ pub const ArrayData = struct {
         }
     }
 
+    fn childCoversRange(child_data: *const ArrayData, end: usize) ValidationError!void {
+        const child_total = std.math.add(usize, child_data.offset, child_data.length) catch return error.InvalidChildren;
+        if (child_total < end) return error.InvalidChildren;
+    }
+
+    fn validateStructChildren(self: Self, fields: []const datatype.Field, end: usize) ValidationError!void {
+        if (self.children.len != fields.len) return error.InvalidChildren;
+        for (fields, 0..) |field, i| {
+            const child_data = self.children[i].data();
+            if (!child_data.data_type.eql(field.data_type.*)) return error.InvalidChildren;
+            try childCoversRange(child_data, end);
+        }
+    }
+
+    fn validateMapChild(self: Self, map_type: datatype.MapType) ValidationError!void {
+        if (self.children.len != 1) return error.InvalidChildren;
+        const entries_data = self.children[0].data();
+        if (map_type.entries_type) |entries_type| {
+            if (!entries_data.data_type.eql(entries_type.*)) return error.InvalidChildren;
+            return;
+        }
+
+        const entries_fields = [_]datatype.Field{ map_type.key_field, map_type.item_field };
+        const expected_entries = DataType{ .struct_ = .{ .fields = entries_fields[0..] } };
+        if (!entries_data.data_type.eql(expected_entries)) return error.InvalidChildren;
+    }
+
+    fn validateDictionaryIndexSigned(
+        self: Self,
+        comptime T: type,
+        indices: []const T,
+        start: usize,
+        end: usize,
+        dictionary_len: usize,
+    ) ValidationError!void {
+        if (indices.len < end) return error.BufferTooSmall;
+        var pos = start;
+        while (pos < end) : (pos += 1) {
+            if (self.isNull(pos - start)) continue;
+            const value = indices[pos];
+            if (value < 0) return error.InvalidOffsets;
+            const index = std.math.cast(usize, value) orelse return error.InvalidOffsets;
+            if (index >= dictionary_len) return error.InvalidOffsets;
+        }
+    }
+
+    fn validateDictionaryIndexUnsigned(
+        self: Self,
+        comptime T: type,
+        indices: []const T,
+        start: usize,
+        end: usize,
+        dictionary_len: usize,
+    ) ValidationError!void {
+        if (indices.len < end) return error.BufferTooSmall;
+        var pos = start;
+        while (pos < end) : (pos += 1) {
+            if (self.isNull(pos - start)) continue;
+            const index = std.math.cast(usize, indices[pos]) orelse return error.InvalidOffsets;
+            if (index >= dictionary_len) return error.InvalidOffsets;
+        }
+    }
+
+    fn validateDictionaryIndices(self: Self, dict: datatype.DictionaryType, start: usize, end: usize) ValidationError!void {
+        if (self.buffers.len < 2) return error.InvalidBufferCount;
+        const dictionary_ref = self.dictionary orelse return error.MissingDictionary;
+        const dictionary_len = dictionary_ref.data().length;
+
+        return switch (dict.index_type.bit_width) {
+            8 => if (dict.index_type.signed)
+                self.validateDictionaryIndexSigned(i8, self.buffers[1].typedSlice(i8) catch return error.InvalidOffsetBuffer, start, end, dictionary_len)
+            else
+                self.validateDictionaryIndexUnsigned(u8, self.buffers[1].typedSlice(u8) catch return error.InvalidOffsetBuffer, start, end, dictionary_len),
+            16 => if (dict.index_type.signed)
+                self.validateDictionaryIndexSigned(i16, self.buffers[1].typedSlice(i16) catch return error.InvalidOffsetBuffer, start, end, dictionary_len)
+            else
+                self.validateDictionaryIndexUnsigned(u16, self.buffers[1].typedSlice(u16) catch return error.InvalidOffsetBuffer, start, end, dictionary_len),
+            32 => if (dict.index_type.signed)
+                self.validateDictionaryIndexSigned(i32, self.buffers[1].typedSlice(i32) catch return error.InvalidOffsetBuffer, start, end, dictionary_len)
+            else
+                self.validateDictionaryIndexUnsigned(u32, self.buffers[1].typedSlice(u32) catch return error.InvalidOffsetBuffer, start, end, dictionary_len),
+            64 => if (dict.index_type.signed)
+                self.validateDictionaryIndexSigned(i64, self.buffers[1].typedSlice(i64) catch return error.InvalidOffsetBuffer, start, end, dictionary_len)
+            else
+                self.validateDictionaryIndexUnsigned(u64, self.buffers[1].typedSlice(u64) catch return error.InvalidOffsetBuffer, start, end, dictionary_len),
+            else => error.InvalidOffsetBuffer,
+        };
+    }
+
     // LargeListView offsets/sizes use 64-bit indices.
     fn validateOffsetsSizesI64(offsets: []const i64, sizes: []const i64, total_len: usize, child_len: usize) ValidationError!void {
         if (offsets.len < total_len) return error.BufferTooSmall;
@@ -375,7 +469,7 @@ pub const ArrayData = struct {
         const total_len = std.math.add(usize, self.offset, self.length) catch return error.InvalidOffsets;
         const has_top_level_validity = hasTopLevelValidityBitmap(dt);
         if (has_top_level_validity and self.buffers.len > 0 and !self.buffers[0].isEmpty()) {
-            const needed = bitmap.byteLength(total_len);
+            const needed = try checkedBitmapByteLength(total_len);
             if (self.buffers[0].len() < needed) return error.BufferTooSmall;
         }
 
@@ -388,7 +482,7 @@ pub const ArrayData = struct {
             },
             .bool => {
                 if (self.buffers.len < 2) return error.InvalidBufferCount;
-                const needed = bitmap.byteLength(total_len);
+                const needed = try checkedBitmapByteLength(total_len);
                 if (self.buffers[1].len() < needed) return error.BufferTooSmall;
             },
             .list_view, .large_list_view => {
@@ -538,10 +632,10 @@ pub const ArrayData = struct {
     pub fn validateFull(self: Self) ValidationError!void {
         try self.validateLayout();
         const dt = layoutDataType(self.data_type);
+        const total_len = std.math.add(usize, self.offset, self.length) catch return error.InvalidOffsets;
 
         if (self.null_count) |expected_count| {
             if (hasTopLevelValidityBitmap(dt) and self.buffers.len > 0 and !self.buffers[0].isEmpty()) {
-                const total_len = std.math.add(usize, self.offset, self.length) catch return error.InvalidOffsets;
                 const validity_bitmap = ValidityBitmap.fromBuffer(self.buffers[0], total_len);
                 var actual_count: usize = 0;
                 var i: usize = 0;
@@ -550,6 +644,13 @@ pub const ArrayData = struct {
                 }
                 if (actual_count != expected_count) return error.InvalidNullCount;
             }
+        }
+
+        switch (dt) {
+            .struct_ => |st| try self.validateStructChildren(st.fields, total_len),
+            .map => |map_type| try self.validateMapChild(map_type),
+            .dictionary => |dict| try self.validateDictionaryIndices(dict, self.offset, total_len),
+            else => {},
         }
 
         for (self.children) |child| try child.data().validateFull();
@@ -1045,6 +1146,112 @@ test "array data validateLayout rejects dictionary index buffer too small" {
     }
 
     try std.testing.expectError(error.BufferTooSmall, data.validateLayout());
+}
+
+test "array data validateFull rejects dictionary index beyond dictionary length" {
+    const allocator = std.testing.allocator;
+    const value_type = DataType{ .int32 = {} };
+    const dict_type = DataType{ .dictionary = .{ .index_type = .{ .bit_width = 32, .signed = true }, .value_type = &value_type, .ordered = false } };
+
+    var dict_values_bytes: [2 * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(dict_values_bytes[0..], std.mem.sliceAsBytes(&[_]i32{ 10, 20 }));
+    const values = ArrayData{
+        .data_type = value_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(dict_values_bytes[0..]) },
+    };
+    var dict_ref = try ArrayRef.fromBorrowed(allocator, values);
+    defer dict_ref.release();
+
+    const indices = [_]i32{ 0, 2 };
+    var index_bytes: [indices.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(index_bytes[0..], std.mem.sliceAsBytes(indices[0..]));
+    const data = ArrayData{
+        .data_type = dict_type,
+        .length = 2,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(index_bytes[0..]) },
+        .dictionary = dict_ref.retain(),
+    };
+    defer {
+        var owned = data.dictionary.?;
+        owned.release();
+    }
+
+    try data.validateLayout();
+    try std.testing.expectError(error.InvalidOffsets, data.validateFull());
+}
+
+test "array data validateFull rejects struct child type mismatch" {
+    const allocator = std.testing.allocator;
+    const field_type = DataType{ .string = {} };
+    const child_type = DataType{ .int32 = {} };
+    const fields = &[_]datatype.Field{.{ .name = "x", .data_type = &field_type, .nullable = true }};
+
+    var child_values: [@sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memset(child_values[0..], 0);
+    const child_data = ArrayData{
+        .data_type = child_type,
+        .length = 1,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child_values[0..]) },
+    };
+    var child_ref = try ArrayRef.fromBorrowed(allocator, child_data);
+    defer child_ref.release();
+    const children = &[_]ArrayRef{child_ref.retain()};
+    defer {
+        var owned = children[0];
+        owned.release();
+    }
+
+    const data = ArrayData{
+        .data_type = DataType{ .struct_ = .{ .fields = fields } },
+        .length = 1,
+        .buffers = &[_]SharedBuffer{SharedBuffer.empty},
+        .children = children,
+    };
+
+    try data.validateLayout();
+    try std.testing.expectError(error.InvalidChildren, data.validateFull());
+}
+
+test "array data validateFull rejects map entries child type mismatch" {
+    const allocator = std.testing.allocator;
+    const key_type = DataType{ .int32 = {} };
+    const item_type = DataType{ .int32 = {} };
+    const key_field = datatype.Field{ .name = "key", .data_type = &key_type, .nullable = false };
+    const item_field = datatype.Field{ .name = "item", .data_type = &item_type, .nullable = true };
+    const map_type = DataType{ .map = .{ .key_field = key_field, .item_field = item_field } };
+
+    var child_values: [@sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memset(child_values[0..], 0);
+    const child_data = ArrayData{
+        .data_type = key_type,
+        .length = 1,
+        .null_count = 0,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(child_values[0..]) },
+    };
+    var child_ref = try ArrayRef.fromBorrowed(allocator, child_data);
+    defer child_ref.release();
+    const children = &[_]ArrayRef{child_ref.retain()};
+    defer {
+        var owned = children[0];
+        owned.release();
+    }
+
+    const offsets = [_]i32{ 0, 1 };
+    var offset_bytes: [offsets.len * @sizeOf(i32)]u8 align(buffer.ALIGNMENT) = undefined;
+    @memcpy(offset_bytes[0..], std.mem.sliceAsBytes(offsets[0..]));
+    const data = ArrayData{
+        .data_type = map_type,
+        .length = 1,
+        .buffers = &[_]SharedBuffer{ SharedBuffer.empty, SharedBuffer.fromSlice(offset_bytes[0..]) },
+        .children = children,
+    };
+
+    try data.validateLayout();
+    try std.testing.expectError(error.InvalidChildren, data.validateFull());
 }
 
 test "array data validateLayout catches invalid offsets" {

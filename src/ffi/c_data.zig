@@ -696,7 +696,7 @@ fn importArrayRecursive(
     const n_buffers = toUsize(c_array.n_buffers).?;
     const n_children = toUsize(c_array.n_children).?;
 
-    const total_len = off + len;
+    const total_len = std.math.add(usize, off, len) catch return error.InvalidLength;
 
     const buffers = try allocator.alloc(SharedBuffer, n_buffers);
     var filled_buffers: usize = 0;
@@ -717,7 +717,7 @@ fn importArrayRecursive(
     var view_variadic_lengths: ?[]const i64 = null;
     if (is_view_type) {
         const variadic_count = n_buffers - 3;
-        const lengths_len = variadic_count * @sizeOf(i64);
+        const lengths_len = try checkedMulLen(variadic_count, @sizeOf(i64));
         const lengths_ptr_any = c_array.buffers[n_buffers - 1];
         if (lengths_len > 0 and lengths_ptr_any == null) return error.InvalidBufferCount;
         if (variadic_count == 0) {
@@ -735,7 +735,7 @@ fn importArrayRecursive(
 
     var i: usize = 0;
     while (i < n_buffers) : (i += 1) {
-        const needed = neededBufferLen(layout_dt, i, total_len, offsets_i32, offsets_i64, data_buffer_len, view_variadic_lengths, n_buffers) orelse return error.UnsupportedType;
+        const needed = try neededBufferLen(layout_dt, i, total_len, offsets_i32, offsets_i64, data_buffer_len, view_variadic_lengths, n_buffers);
         const ptr_any = c_array.buffers[i];
         buffers[i] = try importBuffer(ptr_any, needed);
         filled_buffers += 1;
@@ -813,6 +813,22 @@ fn importBuffer(ptr_any: ?*const anyopaque, needed_len: usize) Error!SharedBuffe
     return SharedBuffer.fromSlice(ptr[0..needed_len]);
 }
 
+fn checkedAddLen(lhs: usize, rhs: usize) Error!usize {
+    return std.math.add(usize, lhs, rhs) catch error.InvalidLength;
+}
+
+fn checkedMulLen(lhs: usize, rhs: usize) Error!usize {
+    return std.math.mul(usize, lhs, rhs) catch error.InvalidLength;
+}
+
+fn checkedBitmapByteLength(bit_length: usize) Error!usize {
+    return (try checkedAddLen(bit_length, 7)) >> 3;
+}
+
+fn checkedOffsetBufferLen(comptime T: type, total_len: usize) Error!usize {
+    return checkedMulLen(try checkedAddLen(total_len, 1), @sizeOf(T));
+}
+
 fn neededBufferLen(
     dt: DataType,
     idx: usize,
@@ -822,80 +838,80 @@ fn neededBufferLen(
     data_buffer_len: usize,
     view_variadic_lengths: ?[]const i64,
     n_buffers: usize,
-) ?usize {
+) Error!usize {
     _ = data_buffer_len;
     const layout_dt = storageDataType(dt);
 
-    if (layout_dt == .null) return if (idx == 0) 0 else null;
+    if (layout_dt == .null) return if (idx == 0) 0 else error.UnsupportedType;
 
     if (idx == 0 and hasValidity(layout_dt)) {
-        return bitmap.byteLength(total_len);
+        return checkedBitmapByteLength(total_len);
     }
 
     return switch (layout_dt) {
-        .bool => if (idx == 1) bitmap.byteLength(total_len) else null,
-        .int8, .uint8 => if (idx == 1) total_len else null,
-        .int16, .uint16, .half_float => if (idx == 1) total_len * 2 else null,
-        .int32, .uint32, .float, .date32, .time32, .interval_months, .decimal32 => if (idx == 1) total_len * 4 else null,
-        .int64, .uint64, .double, .date64, .timestamp, .time64, .duration, .interval_day_time, .decimal64 => if (idx == 1) total_len * 8 else null,
-        .interval_month_day_nano, .decimal128 => if (idx == 1) total_len * 16 else null,
-        .decimal256 => if (idx == 1) total_len * 32 else null,
-        .fixed_size_binary => |fsb| if (idx == 1) total_len * (std.math.cast(usize, fsb.byte_width) orelse return null) else null,
+        .bool => if (idx == 1) checkedBitmapByteLength(total_len) else error.UnsupportedType,
+        .int8, .uint8 => if (idx == 1) total_len else error.UnsupportedType,
+        .int16, .uint16, .half_float => if (idx == 1) checkedMulLen(total_len, 2) else error.UnsupportedType,
+        .int32, .uint32, .float, .date32, .time32, .interval_months, .decimal32 => if (idx == 1) checkedMulLen(total_len, 4) else error.UnsupportedType,
+        .int64, .uint64, .double, .date64, .timestamp, .time64, .duration, .interval_day_time, .decimal64 => if (idx == 1) checkedMulLen(total_len, 8) else error.UnsupportedType,
+        .interval_month_day_nano, .decimal128 => if (idx == 1) checkedMulLen(total_len, 16) else error.UnsupportedType,
+        .decimal256 => if (idx == 1) checkedMulLen(total_len, 32) else error.UnsupportedType,
+        .fixed_size_binary => |fsb| if (idx == 1) checkedMulLen(total_len, std.math.cast(usize, fsb.byte_width) orelse return error.InvalidLength) else error.UnsupportedType,
         .string, .binary, .list => {
-            if (idx == 1) return (total_len + 1) * @sizeOf(i32);
+            if (idx == 1) return checkedOffsetBufferLen(i32, total_len);
             if (idx == 2) {
-                const offs = offsets_i32 orelse return null;
-                return std.math.cast(usize, offs[total_len]) orelse return null;
+                const offs = offsets_i32 orelse return error.UnsupportedType;
+                return std.math.cast(usize, offs[total_len]) orelse return error.InvalidOffset;
             }
-            return null;
+            return error.UnsupportedType;
         },
         .map => {
-            if (idx == 1) return (total_len + 1) * @sizeOf(i32);
-            return null;
+            if (idx == 1) return checkedOffsetBufferLen(i32, total_len);
+            return error.UnsupportedType;
         },
         .list_view => {
-            if (idx == 1) return total_len * @sizeOf(i32);
-            if (idx == 2) return total_len * @sizeOf(i32);
-            return null;
+            if (idx == 1) return checkedMulLen(total_len, @sizeOf(i32));
+            if (idx == 2) return checkedMulLen(total_len, @sizeOf(i32));
+            return error.UnsupportedType;
         },
         .large_list_view => {
-            if (idx == 1) return total_len * @sizeOf(i64);
-            if (idx == 2) return total_len * @sizeOf(i64);
-            return null;
+            if (idx == 1) return checkedMulLen(total_len, @sizeOf(i64));
+            if (idx == 2) return checkedMulLen(total_len, @sizeOf(i64));
+            return error.UnsupportedType;
         },
         .sparse_union => {
             if (idx == 0) return total_len;
-            return null;
+            return error.UnsupportedType;
         },
         .dense_union => {
             if (idx == 0) return total_len;
-            if (idx == 1) return total_len * @sizeOf(i32);
-            return null;
+            if (idx == 1) return checkedMulLen(total_len, @sizeOf(i32));
+            return error.UnsupportedType;
         },
         .large_string, .large_binary, .large_list => {
-            if (idx == 1) return (total_len + 1) * @sizeOf(i64);
+            if (idx == 1) return checkedOffsetBufferLen(i64, total_len);
             if (idx == 2) {
-                const offs = offsets_i64 orelse return null;
-                return std.math.cast(usize, offs[total_len]) orelse return null;
+                const offs = offsets_i64 orelse return error.UnsupportedType;
+                return std.math.cast(usize, offs[total_len]) orelse return error.InvalidOffset;
             }
-            return null;
+            return error.UnsupportedType;
         },
         .string_view, .binary_view => {
-            if (n_buffers < 3) return null;
+            if (n_buffers < 3) return error.UnsupportedType;
             const variadic_count = n_buffers - 3;
-            if (idx == 1) return total_len * @sizeOf(u128);
+            if (idx == 1) return checkedMulLen(total_len, @sizeOf(u128));
             if (idx >= 2 and idx < 2 + variadic_count) {
-                const lengths = view_variadic_lengths orelse return null;
+                const lengths = view_variadic_lengths orelse return error.UnsupportedType;
                 const one = lengths[idx - 2];
-                if (one < 0) return null;
-                return std.math.cast(usize, one);
+                if (one < 0) return error.InvalidLength;
+                return std.math.cast(usize, one) orelse return error.InvalidLength;
             }
-            if (idx == n_buffers - 1) return variadic_count * @sizeOf(i64);
-            return null;
+            if (idx == n_buffers - 1) return checkedMulLen(variadic_count, @sizeOf(i64));
+            return error.UnsupportedType;
         },
-        .struct_, .fixed_size_list => null,
-        .dictionary => |dict| if (idx == 1) total_len * (@as(usize, dict.index_type.bit_width) / 8) else null,
-        else => null,
+        .struct_, .fixed_size_list => error.UnsupportedType,
+        .dictionary => |dict| if (idx == 1) checkedMulLen(total_len, @as(usize, dict.index_type.bit_width) / 8) else error.UnsupportedType,
+        else => error.UnsupportedType,
     };
 }
 
@@ -1980,6 +1996,12 @@ fn testNoopReleaseSchema(raw: ?*ArrowSchema) callconv(.c) void {
     raw.?.private_data = null;
 }
 
+fn testNoopReleaseArray(raw: ?*ArrowArray) callconv(.c) void {
+    if (raw == null) return;
+    raw.?.release = null;
+    raw.?.private_data = null;
+}
+
 test "c data import schema returns explicit top-level struct error" {
     const allocator = std.testing.allocator;
 
@@ -2046,6 +2068,27 @@ test "c data import array rejects released input" {
     };
 
     try std.testing.expectError(error.Released, importArray(allocator, &int_ty, &c_array));
+}
+
+test "c data import array rejects overflowing required buffer length" {
+    const allocator = std.testing.allocator;
+
+    const int_ty = DataType{ .int32 = {} };
+    var buffers = [_]?*const anyopaque{ null, null };
+    var c_array = ArrowArray{
+        .length = std.math.maxInt(i64),
+        .null_count = 0,
+        .offset = std.math.maxInt(i64),
+        .n_buffers = 2,
+        .n_children = 0,
+        .buffers = buffers[0..].ptr,
+        .children = null,
+        .dictionary = null,
+        .release = testNoopReleaseArray,
+        .private_data = null,
+    };
+
+    try std.testing.expectError(error.InvalidLength, importArray(allocator, &int_ty, &c_array));
 }
 
 test "c data map import requires entries_type in target datatype" {
