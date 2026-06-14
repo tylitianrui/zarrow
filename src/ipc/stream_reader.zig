@@ -8,6 +8,7 @@ const array_data = @import("../array/array_data.zig");
 const format = @import("format.zig");
 const compression_dynlib = @import("compression_dynlib.zig");
 const bitmap = @import("../bitmap.zig");
+const concat_array_refs = @import("../concat_array_refs.zig");
 const stream_writer = @import("stream_writer.zig");
 const tensor_types = @import("tensor_types.zig");
 const fbs_lite_verify = @import("fbs_lite/verify.zig");
@@ -1726,36 +1727,22 @@ fn mergeDictionaryValues(
     base: ArrayRef,
     delta: ArrayRef,
 ) (StreamError || array_data.ValidationError || error{OutOfMemory})!ArrayRef {
-    if (!datatype.dataTypeEql(base.data().data_type, delta.data().data_type)) return StreamError.InvalidMetadata;
-
-    const dt = base.data().data_type;
-    const layout_dt = storageDataType(dt);
-    var merged_storage = try switch (layout_dt) {
-        .null => try concatNullArray(allocator, layout_dt, base.data(), delta.data()),
-        .bool => try concatBooleanArray(allocator, layout_dt, base.data(), delta.data()),
-        .uint8, .int8 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 1),
-        .uint16, .int16, .half_float => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 2),
-        .uint32, .int32, .float, .date32, .time32, .interval_months, .decimal32 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 4),
-        .uint64, .int64, .double, .date64, .time64, .timestamp, .duration, .interval_day_time, .decimal64 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 8),
-        .decimal128, .interval_month_day_nano => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 16),
-        .decimal256 => try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), 32),
-        .fixed_size_binary => |fsb| blk: {
-            const byte_width = std.math.cast(usize, fsb.byte_width) orelse return StreamError.InvalidMetadata;
-            break :blk try concatFixedWidthArray(allocator, layout_dt, base.data(), delta.data(), byte_width);
-        },
-        .string, .binary => try concatVariableBinaryArrayI32(allocator, layout_dt, base.data(), delta.data()),
-        .large_string, .large_binary => try concatVariableBinaryArrayI64(allocator, layout_dt, base.data(), delta.data()),
-        .list, .map => try concatListLikeArrayI32(allocator, layout_dt, base.data(), delta.data()),
-        .large_list => try concatListLikeArrayI64(allocator, layout_dt, base.data(), delta.data()),
-        .fixed_size_list => try concatFixedSizeListArray(allocator, layout_dt, base.data(), delta.data()),
-        .struct_ => try concatStructArray(allocator, layout_dt, base.data(), delta.data()),
-        else => StreamError.UnsupportedType,
+    return concat_array_refs.concatArrayRefs(
+        allocator,
+        base.data().data_type,
+        &[_]ArrayRef{ base, delta },
+    ) catch |err| switch (err) {
+        error.InvalidInput => return StreamError.InvalidMetadata,
+        error.UnsupportedType => return StreamError.UnsupportedType,
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidBufferCount => return error.InvalidBufferCount,
+        error.BufferTooSmall => return error.BufferTooSmall,
+        error.InvalidOffsetBuffer => return error.InvalidOffsetBuffer,
+        error.InvalidOffsets => return error.InvalidOffsets,
+        error.InvalidNullCount => return error.InvalidNullCount,
+        error.MissingDictionary => return error.MissingDictionary,
+        error.InvalidChildren => return error.InvalidChildren,
     };
-
-    if (datatype.dataTypeEql(dt, layout_dt)) return merged_storage;
-    const retagged = try retagArrayRefDataType(allocator, merged_storage, dt);
-    merged_storage.release();
-    return retagged;
 }
 
 fn retagArrayRefDataType(allocator: std.mem.Allocator, src: ArrayRef, out_dt: DataType) error{OutOfMemory}!ArrayRef {
@@ -2947,9 +2934,9 @@ test "ipc stream roundtrip large string and binary" {
 
     const ls_view = @import("../array/string_array.zig").LargeStringArray{ .data = out_batch.columns[0].data() };
     const lb_view = @import("../array/binary_array.zig").LargeBinaryArray{ .data = out_batch.columns[1].data() };
-    try std.testing.expectEqualStrings("hi", ls_view.value(0));
+    try std.testing.expectEqualStrings("hi", try ls_view.value(0));
     try std.testing.expect(ls_view.isNull(1));
-    try std.testing.expectEqualStrings("zz", lb_view.value(0));
+    try std.testing.expectEqualStrings("zz", try lb_view.value(0));
     try std.testing.expect(lb_view.isNull(1));
 }
 
@@ -3021,9 +3008,9 @@ test "ipc stream roundtrip temporal and decimal primitives" {
     const d = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = out_batch.columns[0].data() };
     const ts = @import("../array/primitive_array.zig").PrimitiveArray(i64){ .data = out_batch.columns[1].data() };
     const dec = @import("../array/primitive_array.zig").PrimitiveArray(i128){ .data = out_batch.columns[2].data() };
-    try std.testing.expectEqual(@as(i32, 20000), d.value(0));
-    try std.testing.expectEqual(@as(i64, 1700000001000), ts.value(1));
-    try std.testing.expectEqual(@as(i128, -42), dec.value(1));
+    try std.testing.expectEqual(@as(i32, 20000), try d.value(0));
+    try std.testing.expectEqual(@as(i64, 1700000001000), try ts.value(1));
+    try std.testing.expectEqual(@as(i128, -42), try dec.value(1));
 }
 
 test "ipc stream roundtrip dictionary encoded string column" {
@@ -3089,13 +3076,13 @@ test "ipc stream roundtrip dictionary encoded string column" {
 
     const out_dict = @import("../array/dictionary_array.zig").DictionaryArray{ .data = out_batch.columns[0].data() };
     try std.testing.expectEqual(@as(usize, 3), out_dict.len());
-    try std.testing.expectEqual(@as(i64, 1), out_dict.index(0));
+    try std.testing.expectEqual(@as(i64, 1), try out_dict.index(0));
     try std.testing.expect(out_dict.isNull(1));
-    try std.testing.expectEqual(@as(i64, 0), out_dict.index(2));
+    try std.testing.expectEqual(@as(i64, 0), try out_dict.index(2));
 
-    const dict_view = @import("../array/string_array.zig").StringArray{ .data = out_dict.dictionaryRef().data() };
-    try std.testing.expectEqualStrings("red", dict_view.value(0));
-    try std.testing.expectEqualStrings("blue", dict_view.value(1));
+    const dict_view = @import("../array/string_array.zig").StringArray{ .data = (try out_dict.dictionaryRef()).data() };
+    try std.testing.expectEqualStrings("red", try dict_view.value(0));
+    try std.testing.expectEqualStrings("blue", try dict_view.value(1));
 }
 
 test "ipc reader merges dictionary delta batches" {
@@ -3228,14 +3215,14 @@ test "ipc reader merges dictionary delta batches" {
     defer out_batch.deinit();
 
     const out_dict = @import("../array/dictionary_array.zig").DictionaryArray{ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i64, 2), out_dict.index(0));
-    try std.testing.expectEqual(@as(i64, 0), out_dict.index(1));
+    try std.testing.expectEqual(@as(i64, 2), try out_dict.index(0));
+    try std.testing.expectEqual(@as(i64, 0), try out_dict.index(1));
 
-    const dict_view = @import("../array/string_array.zig").StringArray{ .data = out_dict.dictionaryRef().data() };
+    const dict_view = @import("../array/string_array.zig").StringArray{ .data = (try out_dict.dictionaryRef()).data() };
     try std.testing.expectEqual(@as(usize, 3), dict_view.len());
-    try std.testing.expectEqualStrings("red", dict_view.value(0));
-    try std.testing.expectEqualStrings("blue", dict_view.value(1));
-    try std.testing.expectEqualStrings("green", dict_view.value(2));
+    try std.testing.expectEqualStrings("red", try dict_view.value(0));
+    try std.testing.expectEqualStrings("blue", try dict_view.value(1));
+    try std.testing.expectEqualStrings("green", try dict_view.value(2));
 }
 
 test "ipc reader dictionary delta merge supports list values" {
@@ -3289,11 +3276,11 @@ test "ipc reader dictionary delta merge supports list values" {
 
     const child = arr.Int32Array{ .data = merged.data().children[0].data() };
     try std.testing.expectEqual(@as(usize, 5), child.len());
-    try std.testing.expectEqual(@as(i32, 1), child.value(0));
-    try std.testing.expectEqual(@as(i32, 2), child.value(1));
-    try std.testing.expectEqual(@as(i32, 3), child.value(2));
-    try std.testing.expectEqual(@as(i32, 4), child.value(3));
-    try std.testing.expectEqual(@as(i32, 5), child.value(4));
+    try std.testing.expectEqual(@as(i32, 1), try child.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try child.value(1));
+    try std.testing.expectEqual(@as(i32, 3), try child.value(2));
+    try std.testing.expectEqual(@as(i32, 4), try child.value(3));
+    try std.testing.expectEqual(@as(i32, 5), try child.value(4));
     _ = list_type;
 }
 
@@ -3355,12 +3342,12 @@ test "ipc reader dictionary delta merge supports struct values" {
     try std.testing.expectEqual(@as(usize, 3), merged.data().length);
     const ids = arr.Int32Array{ .data = merged.data().children[0].data() };
     const names = arr.StringArray{ .data = merged.data().children[1].data() };
-    try std.testing.expectEqual(@as(i32, 1), ids.value(0));
-    try std.testing.expectEqual(@as(i32, 2), ids.value(1));
-    try std.testing.expectEqual(@as(i32, 3), ids.value(2));
-    try std.testing.expectEqualStrings("a", names.value(0));
-    try std.testing.expectEqualStrings("b", names.value(1));
-    try std.testing.expectEqualStrings("c", names.value(2));
+    try std.testing.expectEqual(@as(i32, 1), try ids.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try ids.value(1));
+    try std.testing.expectEqual(@as(i32, 3), try ids.value(2));
+    try std.testing.expectEqualStrings("a", try names.value(0));
+    try std.testing.expectEqualStrings("b", try names.value(1));
+    try std.testing.expectEqualStrings("c", try names.value(2));
     _ = struct_type;
 }
 
@@ -3449,14 +3436,14 @@ test "ipc stream roundtrip map int32 to int32" {
     defer first.release();
     try std.testing.expectEqual(@as(usize, 2), first.data().length);
     const first_items = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = first.data().children[1].data() };
-    try std.testing.expectEqual(@as(i32, 10), first_items.value(0));
-    try std.testing.expectEqual(@as(i32, 20), first_items.value(1));
+    try std.testing.expectEqual(@as(i32, 10), try first_items.value(0));
+    try std.testing.expectEqual(@as(i32, 20), try first_items.value(1));
 
     var third = try map.value(2);
     defer third.release();
     try std.testing.expectEqual(@as(usize, 1), third.data().length);
     const third_items = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = third.data().children[1].data() };
-    try std.testing.expectEqual(@as(i32, 30), third_items.value(0));
+    try std.testing.expectEqual(@as(i32, 30), try third_items.value(0));
 }
 
 test "ipc stream roundtrip sparse union int32/bool" {
@@ -3531,9 +3518,9 @@ test "ipc stream roundtrip sparse union int32/bool" {
     defer out_batch.deinit();
 
     const out_union = @import("../array/advanced_array.zig").SparseUnionArray{ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(0));
-    try std.testing.expectEqual(@as(i8, 7), out_union.typeId(1));
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(2));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(0));
+    try std.testing.expectEqual(@as(i8, 7), try out_union.typeId(1));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(2));
 
     var v0 = try out_union.value(0);
     defer v0.release();
@@ -3541,8 +3528,8 @@ test "ipc stream roundtrip sparse union int32/bool" {
     defer v1.release();
     const int_at_0 = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = v0.data() };
     const b1 = @import("../array/boolean_array.zig").BooleanArray{ .data = v1.data() };
-    try std.testing.expectEqual(@as(i32, 10), int_at_0.value(0));
-    try std.testing.expectEqual(true, b1.value(0));
+    try std.testing.expectEqual(@as(i32, 10), try int_at_0.value(0));
+    try std.testing.expectEqual(true, try b1.value(0));
 }
 
 test "ipc stream roundtrip sparse union int32/bool with metadata version V4" {
@@ -3621,9 +3608,9 @@ test "ipc stream roundtrip sparse union int32/bool with metadata version V4" {
     defer out_batch.deinit();
 
     const out_union = @import("../array/advanced_array.zig").SparseUnionArray{ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(0));
-    try std.testing.expectEqual(@as(i8, 7), out_union.typeId(1));
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(2));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(0));
+    try std.testing.expectEqual(@as(i8, 7), try out_union.typeId(1));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(2));
 
     var v0 = try out_union.value(0);
     defer v0.release();
@@ -3631,8 +3618,8 @@ test "ipc stream roundtrip sparse union int32/bool with metadata version V4" {
     defer v1.release();
     const int_at_0 = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = v0.data() };
     const b1 = @import("../array/boolean_array.zig").BooleanArray{ .data = v1.data() };
-    try std.testing.expectEqual(@as(i32, 10), int_at_0.value(0));
-    try std.testing.expectEqual(true, b1.value(0));
+    try std.testing.expectEqual(@as(i32, 10), try int_at_0.value(0));
+    try std.testing.expectEqual(true, try b1.value(0));
 }
 
 test "ipc stream roundtrip dense union int32/bool" {
@@ -3704,12 +3691,12 @@ test "ipc stream roundtrip dense union int32/bool" {
     defer out_batch.deinit();
 
     const out_union = @import("../array/advanced_array.zig").DenseUnionArray{ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(0));
-    try std.testing.expectEqual(@as(i8, 7), out_union.typeId(1));
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(2));
-    try std.testing.expectEqual(@as(i32, 0), out_union.childOffset(0));
-    try std.testing.expectEqual(@as(i32, 0), out_union.childOffset(1));
-    try std.testing.expectEqual(@as(i32, 1), out_union.childOffset(2));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(0));
+    try std.testing.expectEqual(@as(i8, 7), try out_union.typeId(1));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(2));
+    try std.testing.expectEqual(@as(i32, 0), try out_union.childOffset(0));
+    try std.testing.expectEqual(@as(i32, 0), try out_union.childOffset(1));
+    try std.testing.expectEqual(@as(i32, 1), try out_union.childOffset(2));
 
     var v1 = try out_union.value(1);
     defer v1.release();
@@ -3717,8 +3704,8 @@ test "ipc stream roundtrip dense union int32/bool" {
     defer v2.release();
     const b1 = @import("../array/boolean_array.zig").BooleanArray{ .data = v1.data() };
     const int_at_2 = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = v2.data() };
-    try std.testing.expectEqual(true, b1.value(0));
-    try std.testing.expectEqual(@as(i32, 20), int_at_2.value(0));
+    try std.testing.expectEqual(true, try b1.value(0));
+    try std.testing.expectEqual(@as(i32, 20), try int_at_2.value(0));
 }
 
 test "ipc stream roundtrip dense union int32/bool with metadata version V4" {
@@ -3794,12 +3781,12 @@ test "ipc stream roundtrip dense union int32/bool with metadata version V4" {
     defer out_batch.deinit();
 
     const out_union = @import("../array/advanced_array.zig").DenseUnionArray{ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(0));
-    try std.testing.expectEqual(@as(i8, 7), out_union.typeId(1));
-    try std.testing.expectEqual(@as(i8, 5), out_union.typeId(2));
-    try std.testing.expectEqual(@as(i32, 0), out_union.childOffset(0));
-    try std.testing.expectEqual(@as(i32, 0), out_union.childOffset(1));
-    try std.testing.expectEqual(@as(i32, 1), out_union.childOffset(2));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(0));
+    try std.testing.expectEqual(@as(i8, 7), try out_union.typeId(1));
+    try std.testing.expectEqual(@as(i8, 5), try out_union.typeId(2));
+    try std.testing.expectEqual(@as(i32, 0), try out_union.childOffset(0));
+    try std.testing.expectEqual(@as(i32, 0), try out_union.childOffset(1));
+    try std.testing.expectEqual(@as(i32, 1), try out_union.childOffset(2));
 
     var v1 = try out_union.value(1);
     defer v1.release();
@@ -3807,8 +3794,8 @@ test "ipc stream roundtrip dense union int32/bool with metadata version V4" {
     defer v2.release();
     const b1 = @import("../array/boolean_array.zig").BooleanArray{ .data = v1.data() };
     const int_at_2 = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = v2.data() };
-    try std.testing.expectEqual(true, b1.value(0));
-    try std.testing.expectEqual(@as(i32, 20), int_at_2.value(0));
+    try std.testing.expectEqual(true, try b1.value(0));
+    try std.testing.expectEqual(@as(i32, 20), try int_at_2.value(0));
 }
 
 test "ipc stream roundtrip run-end encoded int32 values" {
@@ -3882,8 +3869,8 @@ test "ipc stream roundtrip run-end encoded int32 values" {
     defer v4.release();
     const a0 = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = v0.data() };
     const a4 = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = v4.data() };
-    try std.testing.expectEqual(@as(i32, 100), a0.value(0));
-    try std.testing.expectEqual(@as(i32, 200), a4.value(0));
+    try std.testing.expectEqual(@as(i32, 100), try a0.value(0));
+    try std.testing.expectEqual(@as(i32, 200), try a4.value(0));
 }
 
 test "ipc reader handles body compression framing for zstd and lz4 codecs" {
@@ -3928,9 +3915,9 @@ test "ipc reader handles body compression framing for zstd and lz4 codecs" {
 
         const arr = @import("../array/primitive_array.zig").PrimitiveArray(i32){ .data = out_batch.columns[0].data() };
         try std.testing.expectEqual(@as(usize, 3), arr.len());
-        try std.testing.expectEqual(@as(i32, 10), arr.value(0));
+        try std.testing.expectEqual(@as(i32, 10), try arr.value(0));
         try std.testing.expect(arr.isNull(1));
-        try std.testing.expectEqual(@as(i32, 30), arr.value(2));
+        try std.testing.expectEqual(@as(i32, 30), try arr.value(2));
     }
 }
 
@@ -4240,7 +4227,7 @@ test "ipc reader accepts pyarrow simple stream fixture" {
 
     try std.testing.expectEqual(@as(usize, 2), batch.numRows());
     const names = @import("../array/string_array.zig").StringArray{ .data = batch.columns[1].data() };
-    try std.testing.expectEqualStrings("a", names.value(0));
+    try std.testing.expectEqualStrings("a", try names.value(0));
     try std.testing.expect(names.isNull(1));
 }
 

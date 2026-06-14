@@ -39,6 +39,6 @@ pub fn main() !void {
         var v = try arr.value(i);
         defer v.release();
         const s = zarrow.StringArray{ .data = v.data() };
-        std.debug.print("  [{d}] {s}\n", .{ i, s.value(0) });
+        std.debug.print("  [{d}] {s}\n", .{ i, try s.value(0) });
     }
 }

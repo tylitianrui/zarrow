@@ -206,7 +206,7 @@ test "chunked array slice spans chunk boundary" {
     const second = array.Int32Array{ .data = sliced.chunk(1).data() };
     try std.testing.expectEqual(@as(usize, 1), first.len());
     try std.testing.expectEqual(@as(usize, 2), second.len());
-    try std.testing.expectEqual(@as(i32, 12), first.value(0));
-    try std.testing.expectEqual(@as(i32, 20), second.value(0));
-    try std.testing.expectEqual(@as(i32, 21), second.value(1));
+    try std.testing.expectEqual(@as(i32, 12), try first.value(0));
+    try std.testing.expectEqual(@as(i32, 20), try second.value(0));
+    try std.testing.expectEqual(@as(i32, 21), try second.value(1));
 }

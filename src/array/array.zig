@@ -9,6 +9,7 @@ pub const OwnedBuffer = buffer.OwnedBuffer;
 
 pub const DataType = datatype.DataType;
 pub const ArrayData = @import("array_data.zig").ArrayData;
+pub const AccessorError = @import("array_data.zig").AccessorError;
 pub const ArrayRef = @import("array_ref.zig").ArrayRef;
 pub const NullArray = @import("null_array.zig").NullArray;
 pub const NullBuilder = @import("null_array.zig").NullBuilder;
@@ -142,7 +143,7 @@ test "date32 aliases build primitive i32 with date32 logical type" {
     const built = Date32Array{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i32, 18_630), built.value(2));
+    try std.testing.expectEqual(@as(i32, 18_630), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .date32);
 }
 
@@ -160,7 +161,7 @@ test "date64 aliases build primitive i64 with date64 logical type" {
     const built = Date64Array{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i64, 1_609_545_600_000), built.value(2));
+    try std.testing.expectEqual(@as(i64, 1_609_545_600_000), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .date64);
 }
 
@@ -178,7 +179,7 @@ test "time32 builder alias builds primitive i32 with configured unit" {
     const built = Time32Array{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i32, 2500), built.value(2));
+    try std.testing.expectEqual(@as(i32, 2500), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .time32);
     try std.testing.expectEqual(datatype.TimeUnit.millisecond, array_handle.data().data_type.time32.unit);
 }
@@ -197,7 +198,7 @@ test "time64 builder alias builds primitive i64 with configured unit" {
     const built = Time64Array{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i64, 2_500_000), built.value(2));
+    try std.testing.expectEqual(@as(i64, 2_500_000), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .time64);
     try std.testing.expectEqual(datatype.TimeUnit.nanosecond, array_handle.data().data_type.time64.unit);
 }
@@ -216,7 +217,7 @@ test "timestamp builder alias builds primitive i64 with configured unit/timezone
     const built = TimestampArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i64, 1_700_000_000_123_456), built.value(2));
+    try std.testing.expectEqual(@as(i64, 1_700_000_000_123_456), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .timestamp);
     try std.testing.expectEqual(datatype.TimeUnit.microsecond, array_handle.data().data_type.timestamp.unit);
     try std.testing.expectEqualStrings("UTC", array_handle.data().data_type.timestamp.timezone.?);
@@ -236,7 +237,7 @@ test "duration builder alias builds primitive i64 with configured unit" {
     const built = DurationArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i64, 99), built.value(2));
+    try std.testing.expectEqual(@as(i64, 99), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .duration);
     try std.testing.expectEqual(datatype.TimeUnit.nanosecond, array_handle.data().data_type.duration.unit);
 }
@@ -252,7 +253,7 @@ test "timestamp builder alias supports null timezone" {
 
     const built = TimestampArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 1), built.len());
-    try std.testing.expectEqual(@as(i64, 1_700_000_000), built.value(0));
+    try std.testing.expectEqual(@as(i64, 1_700_000_000), try built.value(0));
     try std.testing.expect(array_handle.data().data_type == .timestamp);
     try std.testing.expectEqual(datatype.TimeUnit.second, array_handle.data().data_type.timestamp.unit);
     try std.testing.expect(array_handle.data().data_type.timestamp.timezone == null);
@@ -274,7 +275,7 @@ test "duration builder alias keeps unit across finishReset reuse" {
 
     const built = DurationArray{ .data = second.data() };
     try std.testing.expectEqual(@as(usize, 1), built.len());
-    try std.testing.expectEqual(@as(i64, 11), built.value(0));
+    try std.testing.expectEqual(@as(i64, 11), try built.value(0));
     try std.testing.expect(second.data().data_type == .duration);
     try std.testing.expectEqual(datatype.TimeUnit.millisecond, second.data().data_type.duration.unit);
 }
@@ -294,7 +295,7 @@ test "interval months builder alias builds primitive i32 with interval_months ty
     const built = IntervalMonthsArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i32, -6), built.value(2));
+    try std.testing.expectEqual(@as(i32, -6), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .interval_months);
     try std.testing.expectEqual(datatype.IntervalUnit.months, array_handle.data().data_type.interval_months.unit);
 }
@@ -314,7 +315,7 @@ test "interval day time builder alias builds primitive i64 with interval_day_tim
     const built = IntervalDayTimeArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i64, -43_200_000), built.value(2));
+    try std.testing.expectEqual(@as(i64, -43_200_000), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .interval_day_time);
     try std.testing.expectEqual(datatype.IntervalUnit.day_time, array_handle.data().data_type.interval_day_time.unit);
 }
@@ -333,7 +334,7 @@ test "half float aliases build primitive f16 with half_float type" {
     const built = HalfFloatArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(f16, -2.0), built.value(2));
+    try std.testing.expectEqual(@as(f16, -2.0), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .half_float);
 }
 
@@ -352,7 +353,7 @@ test "interval month day nano builder alias builds primitive i128 with interval_
     const built = IntervalMonthDayNanoArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i128, -123_456_789_012_345_678), built.value(2));
+    try std.testing.expectEqual(@as(i128, -123_456_789_012_345_678), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .interval_month_day_nano);
     try std.testing.expectEqual(datatype.IntervalUnit.month_day_nano, array_handle.data().data_type.interval_month_day_nano.unit);
 }
@@ -372,7 +373,7 @@ test "decimal32 builder alias builds primitive i32 with decimal32 params" {
     const built = Decimal32Array{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i32, -67_890), built.value(2));
+    try std.testing.expectEqual(@as(i32, -67_890), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .decimal32);
     try std.testing.expectEqual(@as(u8, 9), array_handle.data().data_type.decimal32.precision);
     try std.testing.expectEqual(@as(i32, 2), array_handle.data().data_type.decimal32.scale);
@@ -393,7 +394,7 @@ test "decimal64 builder alias builds primitive i64 with decimal64 params" {
     const built = Decimal64Array{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i64, -9_876_543_210_987), built.value(2));
+    try std.testing.expectEqual(@as(i64, -9_876_543_210_987), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .decimal64);
     try std.testing.expectEqual(@as(u8, 18), array_handle.data().data_type.decimal64.precision);
     try std.testing.expectEqual(@as(i32, 4), array_handle.data().data_type.decimal64.scale);
@@ -414,7 +415,7 @@ test "decimal128 builder alias builds primitive i128 with decimal128 params" {
     const built = Decimal128Array{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i128, -987_654_321_098_765_432), built.value(2));
+    try std.testing.expectEqual(@as(i128, -987_654_321_098_765_432), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .decimal128);
     try std.testing.expectEqual(@as(u8, 38), array_handle.data().data_type.decimal128.precision);
     try std.testing.expectEqual(@as(i32, 10), array_handle.data().data_type.decimal128.scale);
@@ -435,7 +436,7 @@ test "decimal256 builder alias builds primitive i256 with decimal256 params" {
     const built = Decimal256Array{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqual(@as(i256, -987_654_321_098_765_432_109_876_543_210), built.value(2));
+    try std.testing.expectEqual(@as(i256, -987_654_321_098_765_432_109_876_543_210), try built.value(2));
     try std.testing.expect(array_handle.data().data_type == .decimal256);
     try std.testing.expectEqual(@as(u8, 76), array_handle.data().data_type.decimal256.precision);
     try std.testing.expectEqual(@as(i32, 20), array_handle.data().data_type.decimal256.scale);

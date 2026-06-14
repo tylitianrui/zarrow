@@ -12,12 +12,30 @@ const array_data = @import("array_data.zig");
 const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const DataType = datatype.DataType;
 const ArrayRef = array_ref.ArrayRef;
 const BuilderState = builder_state.BuilderState;
 
 const STRING_TYPE = DataType{ .string = {} };
 const LARGE_STRING_TYPE = DataType{ .large_string = {} };
+
+fn offsetValue(data: *const ArrayData, comptime T: type, i: usize) AccessorError![]const u8 {
+    const base = try data.logicalIndex(i);
+    const next = std.math.add(usize, base, 1) catch return error.InvalidOffsets;
+    const offsets = try data.typedBufferAt(1, T);
+    if (next >= offsets.len) return error.BufferTooSmall;
+
+    const start_raw = offsets[base];
+    const end_raw = offsets[next];
+    if (start_raw < 0 or end_raw < start_raw) return error.InvalidOffsets;
+    const start = std.math.cast(usize, start_raw) orelse return error.InvalidOffsets;
+    const end = std.math.cast(usize, end_raw) orelse return error.InvalidOffsets;
+
+    const values = try data.bufferAt(2);
+    if (end > values.len()) return error.InvalidOffsets;
+    return values.data[start..end];
+}
 
 /// Variable-length UTF-8 array view.
 pub const StringArray = struct {
@@ -34,14 +52,8 @@ pub const StringArray = struct {
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: StringArray, i: usize) []const u8 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 3);
-
-        const offsets = self.data.buffers[1].typedSlice(i32) catch unreachable;
-        const start = offsets[self.data.offset + i];
-        const end = offsets[self.data.offset + i + 1];
-        return self.data.buffers[2].data[@intCast(start)..@intCast(end)];
+    pub fn value(self: StringArray, i: usize) AccessorError![]const u8 {
+        return offsetValue(self.data, i32, i);
     }
 };
 
@@ -59,14 +71,8 @@ pub const LargeStringArray = struct {
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: LargeStringArray, i: usize) []const u8 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 3);
-
-        const offsets = self.data.buffers[1].typedSlice(i64) catch unreachable;
-        const start = offsets[self.data.offset + i];
-        const end = offsets[self.data.offset + i + 1];
-        return self.data.buffers[2].data[@intCast(start)..@intCast(end)];
+    pub fn value(self: LargeStringArray, i: usize) AccessorError![]const u8 {
+        return offsetValue(self.data, i64, i);
     }
 };
 
@@ -370,8 +376,9 @@ test "string array reads slices" {
     };
 
     const array = StringArray{ .data = &data };
-    try std.testing.expectEqualStrings("zig", array.value(0));
-    try std.testing.expectEqualStrings("lang", array.value(1));
+    try std.testing.expectEqualStrings("zig", try array.value(0));
+    try std.testing.expectEqualStrings("lang", try array.value(1));
+    try std.testing.expectError(error.IndexOutOfBounds, array.value(2));
 }
 
 test "string builder appends slices" {
@@ -386,9 +393,9 @@ test "string builder appends slices" {
     defer array_handle.release();
     const built = StringArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
-    try std.testing.expectEqualStrings("zig", built.value(0));
+    try std.testing.expectEqualStrings("zig", try built.value(0));
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqualStrings("lang", built.value(2));
+    try std.testing.expectEqualStrings("lang", try built.value(2));
 }
 
 test "string builder returns offset overflow for 32-bit offsets" {
@@ -416,8 +423,8 @@ test "large string array reads slices" {
     };
 
     const array = LargeStringArray{ .data = &data };
-    try std.testing.expectEqualStrings("zig", array.value(0));
-    try std.testing.expectEqualStrings("lang", array.value(1));
+    try std.testing.expectEqualStrings("zig", try array.value(0));
+    try std.testing.expectEqualStrings("lang", try array.value(1));
 }
 
 test "large string builder appends slices and supports slice" {
@@ -432,20 +439,20 @@ test "large string builder appends slices and supports slice" {
     defer array_handle.release();
     const built = LargeStringArray{ .data = array_handle.data() };
     try std.testing.expectEqual(@as(usize, 3), built.len());
-    try std.testing.expectEqualStrings("zig", built.value(0));
+    try std.testing.expectEqualStrings("zig", try built.value(0));
     try std.testing.expect(built.isNull(1));
-    try std.testing.expectEqualStrings("lang", built.value(2));
+    try std.testing.expectEqualStrings("lang", try built.value(2));
 
     var sliced = try array_handle.slice(1, 2);
     defer sliced.release();
     const sliced_view = LargeStringArray{ .data = sliced.data() };
     try std.testing.expect(sliced_view.isNull(0));
-    try std.testing.expectEqualStrings("lang", sliced_view.value(1));
+    try std.testing.expectEqualStrings("lang", try sliced_view.value(1));
 
     try builder.append("more");
     var second = try builder.finishClear();
     defer second.release();
     const second_view = LargeStringArray{ .data = second.data() };
     try std.testing.expectEqual(@as(usize, 1), second_view.len());
-    try std.testing.expectEqualStrings("more", second_view.value(0));
+    try std.testing.expectEqualStrings("more", try second_view.value(0));
 }

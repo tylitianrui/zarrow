@@ -12,6 +12,7 @@ const array_data = @import("array_data.zig");
 const SharedBuffer = buffer.SharedBuffer;
 const OwnedBuffer = buffer.OwnedBuffer;
 const ArrayData = array_data.ArrayData;
+const AccessorError = array_data.AccessorError;
 const DataType = datatype.DataType;
 pub const Field = datatype.Field;
 const ArrayRef = array_ref.ArrayRef;
@@ -38,13 +39,15 @@ pub const FixedSizeBinaryArray = struct {
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: FixedSizeBinaryArray, i: usize) []const u8 {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 2);
-        const width = self.byteWidth();
-        const start = (self.data.offset + i) * width;
-        const end = start + width;
-        return self.data.buffers[1].data[start..end];
+    pub fn value(self: FixedSizeBinaryArray, i: usize) AccessorError![]const u8 {
+        const pos = try self.data.logicalIndex(i);
+        const width = std.math.cast(usize, self.data.data_type.fixed_size_binary.byte_width) orelse return error.InvalidOffsetBuffer;
+        if (width == 0) return error.InvalidOffsetBuffer;
+        const start = std.math.mul(usize, pos, width) catch return error.InvalidOffsets;
+        const end = std.math.add(usize, start, width) catch return error.InvalidOffsets;
+        const values = try self.data.bufferAt(1);
+        if (end > values.len()) return error.BufferTooSmall;
+        return values.data[start..end];
     }
 };
 
@@ -204,8 +207,8 @@ pub const FixedSizeListArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn valuesRef(self: FixedSizeListArray) *const ArrayRef {
-        std.debug.assert(self.data.children.len == 1);
+    pub fn valuesRef(self: FixedSizeListArray) AccessorError!*const ArrayRef {
+        try self.data.expectChildCount(1);
         return &self.data.children[0];
     }
 
@@ -214,13 +217,17 @@ pub const FixedSizeListArray = struct {
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: FixedSizeListArray, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.children.len == 1);
-
-        const list_size = self.listSize();
-        const start = (self.data.offset + i) * list_size;
-        return self.data.children[0].slice(start, list_size);
+    pub fn value(self: FixedSizeListArray, i: usize) AccessorError!ArrayRef {
+        const pos = try self.data.logicalIndex(i);
+        try self.data.expectChildCount(1);
+        const list_size = std.math.cast(usize, self.data.data_type.fixed_size_list.list_size) orelse return error.InvalidChildren;
+        const start = std.math.mul(usize, pos, list_size) catch return error.InvalidOffsets;
+        const end = std.math.add(usize, start, list_size) catch return error.InvalidOffsets;
+        const child = self.data.children[0];
+        if (end > child.data().length) return error.InvalidChildren;
+        return child.slice(start, list_size) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+        };
     }
 };
 
@@ -367,8 +374,8 @@ test "fixed size binary array reads fixed-width values" {
     };
 
     const array = FixedSizeBinaryArray{ .data = &data };
-    try std.testing.expectEqualStrings("ab", array.value(0));
-    try std.testing.expectEqualStrings("cd", array.value(1));
+    try std.testing.expectEqualStrings("ab", try array.value(0));
+    try std.testing.expectEqualStrings("cd", try array.value(1));
 }
 
 test "fixed size binary builder append and slice" {
@@ -384,22 +391,22 @@ test "fixed size binary builder append and slice" {
 
     const array = FixedSizeBinaryArray{ .data = out.data() };
     try std.testing.expectEqual(@as(usize, 3), array.len());
-    try std.testing.expectEqualStrings("ab", array.value(0));
+    try std.testing.expectEqualStrings("ab", try array.value(0));
     try std.testing.expect(array.isNull(1));
-    try std.testing.expectEqualStrings("cd", array.value(2));
+    try std.testing.expectEqualStrings("cd", try array.value(2));
 
     var sliced = try out.slice(1, 2);
     defer sliced.release();
     const sliced_array = FixedSizeBinaryArray{ .data = sliced.data() };
     try std.testing.expect(sliced_array.isNull(0));
-    try std.testing.expectEqualStrings("cd", sliced_array.value(1));
+    try std.testing.expectEqualStrings("cd", try sliced_array.value(1));
 
     try builder.append("xy");
     var out2 = try builder.finishClear();
     defer out2.release();
     const array2 = FixedSizeBinaryArray{ .data = out2.data() };
     try std.testing.expectEqual(@as(usize, 1), array2.len());
-    try std.testing.expectEqualStrings("xy", array2.value(0));
+    try std.testing.expectEqualStrings("xy", try array2.value(0));
 }
 
 test "fixed size binary builder rejects invalid width" {
@@ -436,8 +443,8 @@ test "fixed size list array value slices child" {
     defer first.release();
     const first_view = @import("primitive_array.zig").PrimitiveArray(i32){ .data = first.data() };
     try std.testing.expectEqual(@as(usize, 2), first_view.len());
-    try std.testing.expectEqual(@as(i32, 1), first_view.value(0));
-    try std.testing.expectEqual(@as(i32, 2), first_view.value(1));
+    try std.testing.expectEqual(@as(i32, 1), try first_view.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try first_view.value(1));
 }
 
 test "fixed size list builder finish validates child length" {

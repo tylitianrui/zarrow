@@ -33,13 +33,13 @@ pub fn main() !void {
     const arr = zarrow.DictionaryArray{ .data = dict_ref.data() };
     std.debug.print("examples/dictionary_builder.zig | length={d}\n", .{arr.len()});
 
-    const values = zarrow.StringArray{ .data = arr.dictionaryRef().data() };
+    const values = zarrow.StringArray{ .data = (try arr.dictionaryRef()).data() };
     for (0..arr.len()) |i| {
         if (arr.isNull(i)) {
             std.debug.print("  [{d}] null\n", .{i});
         } else {
-            const idx: usize = @intCast(arr.index(i));
-            std.debug.print("  [{d}] {s}\n", .{ i, values.value(idx) });
+            const idx: usize = @intCast(try arr.index(i));
+            std.debug.print("  [{d}] {s}\n", .{ i, try values.value(idx) });
         }
     }
 }

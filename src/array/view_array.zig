@@ -19,6 +19,7 @@ const ArrayData = array_data.ArrayData;
 const ArrayRef = array_ref.ArrayRef;
 pub const PrimitiveArray = primitive_array.PrimitiveArray;
 const BuilderState = builder_state.BuilderState;
+const AccessorError = array_data.AccessorError;
 
 const STRING_VIEW_TYPE = DataType{ .string_view = {} };
 const BINARY_VIEW_TYPE = DataType{ .binary_view = {} };
@@ -43,18 +44,17 @@ fn writeU32Le(dst: []u8, value: u32) void {
     dst[3] = @truncate(value >> 24);
 }
 
-fn viewRecordAt(data: *const ArrayData, i: usize) []const u8 {
-    std.debug.assert(data.buffers.len >= 2);
-    const base = data.offset + i;
-    const start = base * VIEW_RECORD_SIZE;
-    const end = start + VIEW_RECORD_SIZE;
-    std.debug.assert(end <= data.buffers[1].len());
-    return data.buffers[1].data[start..end];
+fn viewRecordAt(data: *const ArrayData, i: usize) AccessorError![]const u8 {
+    const base = try data.logicalIndex(i);
+    const start = std.math.mul(usize, base, VIEW_RECORD_SIZE) catch return error.InvalidOffsets;
+    const end = std.math.add(usize, start, VIEW_RECORD_SIZE) catch return error.InvalidOffsets;
+    const views = try data.bufferAt(1);
+    if (end > views.len()) return error.BufferTooSmall;
+    return views.data[start..end];
 }
 
-fn viewValueAt(data: *const ArrayData, i: usize) []const u8 {
-    std.debug.assert(i < data.length);
-    const record = viewRecordAt(data, i);
+fn viewValueAt(data: *const ArrayData, i: usize) AccessorError![]const u8 {
+    const record = try viewRecordAt(data, i);
     const len_u32 = readU32Le(record[0..4]);
     const len = @as(usize, @intCast(len_u32));
     if (len <= MAX_INLINE_VIEW_LEN) {
@@ -63,13 +63,15 @@ fn viewValueAt(data: *const ArrayData, i: usize) []const u8 {
 
     const buffer_index: usize = @intCast(readU32Le(record[8..12]));
     const byte_offset: usize = @intCast(readU32Le(record[12..16]));
-    const variadic_idx = 2 + buffer_index;
-    std.debug.assert(variadic_idx < data.buffers.len);
+    const variadic_idx = std.math.add(usize, 2, buffer_index) catch return error.InvalidOffsets;
+    if (variadic_idx >= data.buffers.len) return error.InvalidOffsets;
 
     const variadic = data.buffers[variadic_idx].data;
-    const end = byte_offset + len;
-    std.debug.assert(end <= variadic.len);
-    std.debug.assert(std.mem.eql(u8, record[4..8], variadic[byte_offset .. byte_offset + 4]));
+    const end = std.math.add(usize, byte_offset, len) catch return error.InvalidOffsets;
+    if (end > variadic.len) return error.InvalidOffsets;
+    if (!std.mem.eql(u8, record[4..8], variadic[byte_offset .. byte_offset + 4])) {
+        return error.InvalidOffsets;
+    }
     return variadic[byte_offset..end];
 }
 
@@ -86,7 +88,7 @@ pub const StringViewArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn value(self: Self, i: usize) []const u8 {
+    pub fn value(self: Self, i: usize) AccessorError![]const u8 {
         return viewValueAt(self.data, i);
     }
 };
@@ -104,7 +106,7 @@ pub const BinaryViewArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn value(self: Self, i: usize) []const u8 {
+    pub fn value(self: Self, i: usize) AccessorError![]const u8 {
         return viewValueAt(self.data, i);
     }
 };
@@ -124,23 +126,14 @@ pub const ListViewArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn valuesRef(self: Self) *const ArrayRef {
-        std.debug.assert(self.data.children.len == 1);
+    pub fn valuesRef(self: Self) AccessorError!*const ArrayRef {
+        try self.data.expectChildCount(1);
         return &self.data.children[0];
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: Self, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 3);
-        std.debug.assert(self.data.children.len == 1);
-
-        const offsets = try self.data.buffers[1].typedSlice(i32);
-        const sizes = try self.data.buffers[2].typedSlice(i32);
-        const base = self.data.offset + i;
-        const start: usize = @intCast(offsets[base]);
-        const size: usize = @intCast(sizes[base]);
-        return self.data.children[0].slice(start, size);
+    pub fn value(self: Self, i: usize) AccessorError!ArrayRef {
+        return listViewValue(self.data, i32, i);
     }
 };
 
@@ -159,25 +152,37 @@ pub const LargeListViewArray = struct {
         return self.data.isNull(i);
     }
 
-    pub fn valuesRef(self: Self) *const ArrayRef {
-        std.debug.assert(self.data.children.len == 1);
+    pub fn valuesRef(self: Self) AccessorError!*const ArrayRef {
+        try self.data.expectChildCount(1);
         return &self.data.children[0];
     }
 
     /// Return the logical value view at the requested index.
-    pub fn value(self: Self, i: usize) !ArrayRef {
-        std.debug.assert(i < self.data.length);
-        std.debug.assert(self.data.buffers.len >= 3);
-        std.debug.assert(self.data.children.len == 1);
-
-        const offsets = try self.data.buffers[1].typedSlice(i64);
-        const sizes = try self.data.buffers[2].typedSlice(i64);
-        const base = self.data.offset + i;
-        const start: usize = @intCast(offsets[base]);
-        const size: usize = @intCast(sizes[base]);
-        return self.data.children[0].slice(start, size);
+    pub fn value(self: Self, i: usize) AccessorError!ArrayRef {
+        return listViewValue(self.data, i64, i);
     }
 };
+
+fn listViewValue(data: *const ArrayData, comptime T: type, i: usize) AccessorError!ArrayRef {
+    const base = try data.logicalIndex(i);
+    const offsets = try data.typedBufferAt(1, T);
+    const sizes = try data.typedBufferAt(2, T);
+    if (base >= offsets.len or base >= sizes.len) return error.BufferTooSmall;
+    try data.expectChildCount(1);
+
+    const start_raw = offsets[base];
+    const size_raw = sizes[base];
+    if (start_raw < 0 or size_raw < 0) return error.InvalidOffsets;
+    const start = std.math.cast(usize, start_raw) orelse return error.InvalidOffsets;
+    const size = std.math.cast(usize, size_raw) orelse return error.InvalidOffsets;
+    const end = std.math.add(usize, start, size) catch return error.InvalidOffsets;
+
+    const child = data.children[0];
+    if (end > child.data().length) return error.InvalidOffsets;
+    return child.slice(start, size) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+    };
+}
 
 fn convertListToView(
     comptime OffsetT: type,
@@ -579,9 +584,9 @@ test "string view builder builds string_view array" {
     const arr = StringViewArray{ .data = arr_ref.data() };
     try std.testing.expectEqual(@as(usize, 4), arr.len());
     try std.testing.expect(arr.isNull(1));
-    try std.testing.expectEqualStrings("a", arr.value(0));
-    try std.testing.expectEqualStrings("bc", arr.value(2));
-    try std.testing.expectEqualStrings("this string is definitely longer than twelve", arr.value(3));
+    try std.testing.expectEqualStrings("a", try arr.value(0));
+    try std.testing.expectEqualStrings("bc", try arr.value(2));
+    try std.testing.expectEqualStrings("this string is definitely longer than twelve", try arr.value(3));
     try std.testing.expect(arr_ref.data().data_type == .string_view);
     try std.testing.expectEqual(@as(usize, 3), arr_ref.data().buffers.len);
 }
@@ -601,9 +606,9 @@ test "binary view builder builds binary_view array" {
     const arr = BinaryViewArray{ .data = arr_ref.data() };
     try std.testing.expectEqual(@as(usize, 4), arr.len());
     try std.testing.expect(arr.isNull(1));
-    try std.testing.expectEqualStrings("ab", arr.value(0));
-    try std.testing.expectEqualStrings("c", arr.value(2));
-    try std.testing.expectEqualStrings("this-binary-view-is-long", arr.value(3));
+    try std.testing.expectEqualStrings("ab", try arr.value(0));
+    try std.testing.expectEqualStrings("c", try arr.value(2));
+    try std.testing.expectEqualStrings("this-binary-view-is-long", try arr.value(3));
     try std.testing.expect(arr_ref.data().data_type == .binary_view);
     try std.testing.expectEqual(@as(usize, 3), arr_ref.data().buffers.len);
 }
@@ -642,15 +647,15 @@ test "list view builder builds list_view array" {
     defer first.release();
     const first_values = PrimitiveArray(i32){ .data = first.data() };
     try std.testing.expectEqual(@as(usize, 2), first_values.len());
-    try std.testing.expectEqual(@as(i32, 1), first_values.value(0));
-    try std.testing.expectEqual(@as(i32, 2), first_values.value(1));
+    try std.testing.expectEqual(@as(i32, 1), try first_values.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try first_values.value(1));
 
     var third = try list.value(2);
     defer third.release();
     const third_values = PrimitiveArray(i32){ .data = third.data() };
     try std.testing.expectEqual(@as(usize, 2), third_values.len());
-    try std.testing.expectEqual(@as(i32, 3), third_values.value(0));
-    try std.testing.expectEqual(@as(i32, 4), third_values.value(1));
+    try std.testing.expectEqual(@as(i32, 3), try third_values.value(0));
+    try std.testing.expectEqual(@as(i32, 4), try third_values.value(1));
 }
 
 test "large list view builder builds large_list_view array" {
@@ -684,12 +689,12 @@ test "large list view builder builds large_list_view array" {
     defer first.release();
     const first_values = PrimitiveArray(i32){ .data = first.data() };
     try std.testing.expectEqual(@as(usize, 1), first_values.len());
-    try std.testing.expectEqual(@as(i32, 5), first_values.value(0));
+    try std.testing.expectEqual(@as(i32, 5), try first_values.value(0));
 
     var second = try list.value(1);
     defer second.release();
     const second_values = PrimitiveArray(i32){ .data = second.data() };
     try std.testing.expectEqual(@as(usize, 2), second_values.len());
-    try std.testing.expectEqual(@as(i32, 6), second_values.value(0));
-    try std.testing.expectEqual(@as(i32, 7), second_values.value(1));
+    try std.testing.expectEqual(@as(i32, 6), try second_values.value(0));
+    try std.testing.expectEqual(@as(i32, 7), try second_values.value(1));
 }

@@ -65,7 +65,7 @@ pub fn main() !void {
         std.debug.print("  [{d}]", .{i});
         for (0..n) |j| {
             const value = try row_vals.value(j);
-            std.debug.print(" {s}:{d}", .{ row_keys.value(j), value });
+            std.debug.print(" {s}:{d}", .{ try row_keys.value(j), value });
         }
         std.debug.print("\n", .{});
     }

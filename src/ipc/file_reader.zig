@@ -664,12 +664,12 @@ test "ipc file reader roundtrips batches via stream reader" {
 
     const id_arr = prim.PrimitiveArray(i32){ .data = out_batch.columns[0].data() };
     const name_arr = str.StringArray{ .data = out_batch.columns[1].data() };
-    try std.testing.expectEqual(@as(i32, 10), id_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 20), id_arr.value(1));
-    try std.testing.expectEqual(@as(i32, 30), id_arr.value(2));
-    try std.testing.expectEqualStrings("aa", name_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 10), try id_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 20), try id_arr.value(1));
+    try std.testing.expectEqual(@as(i32, 30), try id_arr.value(2));
+    try std.testing.expectEqualStrings("aa", try name_arr.value(0));
     try std.testing.expect(name_arr.isNull(1));
-    try std.testing.expectEqualStrings("cc", name_arr.value(2));
+    try std.testing.expectEqualStrings("cc", try name_arr.value(2));
 
     try std.testing.expect((try fr.nextRecordBatch()) == null);
 }
@@ -735,15 +735,15 @@ test "ipc file reader supports indexed record batch access" {
     defer second.deinit();
     const second_ids = prim.PrimitiveArray(i32){ .data = second.columns[0].data() };
     try std.testing.expectEqual(@as(usize, 2), second.numRows());
-    try std.testing.expectEqual(@as(i32, 3), second_ids.value(0));
-    try std.testing.expectEqual(@as(i32, 4), second_ids.value(1));
+    try std.testing.expectEqual(@as(i32, 3), try second_ids.value(0));
+    try std.testing.expectEqual(@as(i32, 4), try second_ids.value(1));
 
     var first = try fr.readRecordBatchAt(0);
     defer first.deinit();
     const first_ids = prim.PrimitiveArray(i32){ .data = first.columns[0].data() };
     try std.testing.expectEqual(@as(usize, 2), first.numRows());
-    try std.testing.expectEqual(@as(i32, 1), first_ids.value(0));
-    try std.testing.expectEqual(@as(i32, 2), first_ids.value(1));
+    try std.testing.expectEqual(@as(i32, 1), try first_ids.value(0));
+    try std.testing.expectEqual(@as(i32, 2), try first_ids.value(1));
 }
 
 test "ipc file reader rebuilds dictionary state for indexed reads" {
@@ -839,20 +839,20 @@ test "ipc file reader rebuilds dictionary state for indexed reads" {
     defer second.deinit();
     const second_dict = dict_arr.DictionaryArray{ .data = second.columns[0].data() };
     try std.testing.expectEqual(@as(usize, 1), second_dict.len());
-    try std.testing.expectEqual(@as(i64, 0), second_dict.index(0));
-    const second_values = str.StringArray{ .data = second_dict.dictionaryRef().data() };
-    try std.testing.expectEqualStrings("red", second_values.value(0));
-    try std.testing.expectEqualStrings("blue", second_values.value(1));
+    try std.testing.expectEqual(@as(i64, 0), try second_dict.index(0));
+    const second_values = str.StringArray{ .data = (try second_dict.dictionaryRef()).data() };
+    try std.testing.expectEqualStrings("red", try second_values.value(0));
+    try std.testing.expectEqualStrings("blue", try second_values.value(1));
 
     var first = try fr.readRecordBatchAt(0);
     defer first.deinit();
     const first_dict = dict_arr.DictionaryArray{ .data = first.columns[0].data() };
     try std.testing.expectEqual(@as(usize, 2), first_dict.len());
-    try std.testing.expectEqual(@as(i64, 1), first_dict.index(0));
-    try std.testing.expectEqual(@as(i64, 0), first_dict.index(1));
-    const first_values = str.StringArray{ .data = first_dict.dictionaryRef().data() };
-    try std.testing.expectEqualStrings("red", first_values.value(0));
-    try std.testing.expectEqualStrings("blue", first_values.value(1));
+    try std.testing.expectEqual(@as(i64, 1), try first_dict.index(0));
+    try std.testing.expectEqual(@as(i64, 0), try first_dict.index(1));
+    const first_values = str.StringArray{ .data = (try first_dict.dictionaryRef()).data() };
+    try std.testing.expectEqualStrings("red", try first_values.value(0));
+    try std.testing.expectEqualStrings("blue", try first_values.value(1));
 }
 
 test "ipc file reader rejects footer with out-of-bounds block offset" {
@@ -1020,9 +1020,9 @@ test "ipc file reader decodes using footer block index without stream reconstruc
     var out_batch = out_batch_opt.?;
     defer out_batch.deinit();
     const id_arr = prim.PrimitiveArray(i32){ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i32, 7), id_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 8), id_arr.value(1));
-    try std.testing.expectEqual(@as(i32, 9), id_arr.value(2));
+    try std.testing.expectEqual(@as(i32, 7), try id_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 8), try id_arr.value(1));
+    try std.testing.expectEqual(@as(i32, 9), try id_arr.value(2));
 }
 
 test "ipc file reader accepts file with leading padding before schema message" {
@@ -1105,8 +1105,8 @@ test "ipc file reader accepts file with leading padding before schema message" {
     var out_batch = out_batch_opt.?;
     defer out_batch.deinit();
     const id_arr = prim.PrimitiveArray(i32){ .data = out_batch.columns[0].data() };
-    try std.testing.expectEqual(@as(i32, 11), id_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 22), id_arr.value(1));
+    try std.testing.expectEqual(@as(i32, 11), try id_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 22), try id_arr.value(1));
 }
 
 test "ipc file roundtrips tensor and sparse tensor messages" {

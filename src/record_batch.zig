@@ -106,7 +106,8 @@ pub const RecordBatch = struct {
 
     /// Create a logical slice view over the current value.
     pub fn slice(self: *const Self, offset: usize, length: usize) !Self {
-        if (offset > self.num_rows or offset + length > self.num_rows) return RecordBatchError.SliceOutOfBounds;
+        const end = std.math.add(usize, offset, length) catch return RecordBatchError.SliceOutOfBounds;
+        if (offset > self.num_rows or end > self.num_rows) return RecordBatchError.SliceOutOfBounds;
 
         const sliced_columns = try self.allocator.alloc(ArrayRef, self.columns.len);
         var count: usize = 0;
@@ -345,8 +346,42 @@ test "record batch slice returns sliced columns" {
 
     const view = @import("array/primitive_array.zig").PrimitiveArray(i32){ .data = sliced.column(0).data() };
     try std.testing.expectEqual(@as(usize, 2), view.len());
-    try std.testing.expectEqual(@as(i32, 20), view.value(0));
-    try std.testing.expectEqual(@as(i32, 30), view.value(1));
+    try std.testing.expectEqual(@as(i32, 20), try view.value(0));
+    try std.testing.expectEqual(@as(i32, 30), try view.value(1));
+}
+
+test "record batch accepts non-nullable sliced column with nulls outside slice" {
+    const allocator = std.testing.allocator;
+
+    const int_type = @import("datatype.zig").DataType{ .int32 = {} };
+    const fields = [_]Field{.{ .name = "id", .data_type = &int_type, .nullable = false }};
+
+    var validity: [1]u8 = .{0b0000_0110}; // valid: [1,2], null: [0]
+    var values_bytes: [3 * @sizeOf(i32)]u8 align(@import("buffer.zig").ALIGNMENT) = undefined;
+    @memcpy(values_bytes[0..], std.mem.sliceAsBytes(&[_]i32{ 0, 20, 30 }));
+
+    const parent_data = ArrayData{
+        .data_type = int_type,
+        .length = 3,
+        .null_count = null,
+        .buffers = &[_]array.SharedBuffer{
+            array.SharedBuffer.fromSlice(validity[0..]),
+            array.SharedBuffer.fromSlice(values_bytes[0..]),
+        },
+    };
+    var parent_ref = try ArrayRef.fromBorrowed(allocator, parent_data);
+    defer parent_ref.release();
+
+    var sliced_ref = try parent_ref.slice(1, 2);
+    defer sliced_ref.release();
+
+    var batch = try RecordBatch.initBorrowed(allocator, .{ .fields = fields[0..] }, &[_]ArrayRef{sliced_ref});
+    defer batch.deinit();
+
+    const view = @import("array/primitive_array.zig").PrimitiveArray(i32){ .data = batch.column(0).data() };
+    try std.testing.expectEqual(@as(usize, 2), view.len());
+    try std.testing.expectEqual(@as(i32, 20), try view.value(0));
+    try std.testing.expectEqual(@as(i32, 30), try view.value(1));
 }
 
 test "record batch slice rejects out of bounds" {

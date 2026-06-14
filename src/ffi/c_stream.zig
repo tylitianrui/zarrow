@@ -146,7 +146,17 @@ pub fn importRecordBatchStreamOwned(allocator: std.mem.Allocator, c_stream: *Arr
 
         var i: usize = 0;
         while (i < cols.len) : (i += 1) {
-            cols[i] = try struct_view.field(i);
+            cols[i] = struct_view.field(i) catch |err| switch (err) {
+                error.IndexOutOfBounds => return error.InvalidChildren,
+                error.InvalidBufferCount => return error.InvalidBufferCount,
+                error.BufferTooSmall => return error.BufferTooSmall,
+                error.InvalidOffsetBuffer => return error.InvalidOffsetBuffer,
+                error.InvalidOffsets => return error.InvalidOffsets,
+                error.InvalidNullCount => return error.InvalidNullCount,
+                error.MissingDictionary => return error.MissingDictionary,
+                error.InvalidChildren => return error.InvalidChildren,
+                error.OutOfMemory => return error.OutOfMemory,
+            };
             cols_count += 1;
         }
 
@@ -417,6 +427,6 @@ test "c stream import drains stream into owned record batches" {
     try std.testing.expectEqual(@as(usize, 1), owned.batches.len);
     try std.testing.expectEqual(@as(usize, 2), owned.batches[0].numRows());
     const ids_arr = array_mod.Int32Array{ .data = owned.batches[0].column(0).data() };
-    try std.testing.expectEqual(@as(i32, 10), ids_arr.value(0));
-    try std.testing.expectEqual(@as(i32, 20), ids_arr.value(1));
+    try std.testing.expectEqual(@as(i32, 10), try ids_arr.value(0));
+    try std.testing.expectEqual(@as(i32, 20), try ids_arr.value(1));
 }
