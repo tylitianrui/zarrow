@@ -1273,7 +1273,7 @@ pub fn padLen(len: usize) usize {
 
 // 写入消息时在 metadata 和 body 之间插入填充字节
 pub fn writePadding(writer: anytype, pad_len: usize) !void {
-    var zeros: [Alignment]u8 = [_]u8{0} ** Alignment;
+    var zeros: [Alignment]u8 = @splat(0);
     // ...
 }
 ```

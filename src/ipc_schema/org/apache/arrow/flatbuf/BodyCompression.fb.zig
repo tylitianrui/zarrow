@@ -30,9 +30,9 @@ const org = struct {
 pub const BodyCompressionT = struct {
     /// Compressor library.
     /// For LZ4_FRAME, each compressed buffer must consist of a single frame.
-    codec: org.apache.arrow.flatbuf.CompressionType = @as(org.apache.arrow.flatbuf.CompressionType, @enumFromInt(0)),
+    codec: org.apache.arrow.flatbuf.CompressionType = @as(org.apache.arrow.flatbuf.CompressionType, @fromBackingInt(@intCast(0))),
     /// Indicates the way the record batch body was compressed
-    method: org.apache.arrow.flatbuf.BodyCompressionMethod = @as(org.apache.arrow.flatbuf.BodyCompressionMethod, @enumFromInt(0)),
+    method: org.apache.arrow.flatbuf.BodyCompressionMethod = @as(org.apache.arrow.flatbuf.BodyCompressionMethod, @fromBackingInt(@intCast(0))),
 
     pub fn Pack(rcv: BodyCompressionT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
@@ -90,7 +90,7 @@ pub const BodyCompression = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.CompressionType, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.CompressionType, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.CompressionType, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateCodec(rcv: BodyCompression, n: org.apache.arrow.flatbuf.CompressionType) bool {
@@ -103,7 +103,7 @@ pub const BodyCompression = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.BodyCompressionMethod, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.BodyCompressionMethod, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.BodyCompressionMethod, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateMethod(rcv: BodyCompression, n: org.apache.arrow.flatbuf.BodyCompressionMethod) bool {
@@ -114,11 +114,11 @@ pub const BodyCompression = struct {
         try __builder.startObject(2);
     }
     pub fn AddCodec(__builder: *Builder, codec: org.apache.arrow.flatbuf.CompressionType) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.CompressionType, 0, codec, @as(org.apache.arrow.flatbuf.CompressionType, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.CompressionType, 0, codec, @as(org.apache.arrow.flatbuf.CompressionType, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddMethod(__builder: *Builder, method: org.apache.arrow.flatbuf.BodyCompressionMethod) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.BodyCompressionMethod, 1, method, @as(org.apache.arrow.flatbuf.BodyCompressionMethod, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.BodyCompressionMethod, 1, method, @as(org.apache.arrow.flatbuf.BodyCompressionMethod, @fromBackingInt(@intCast(0))));
     }
 
     pub fn End(__builder: *Builder) !u32 {

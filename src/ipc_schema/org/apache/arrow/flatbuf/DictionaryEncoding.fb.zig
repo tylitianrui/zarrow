@@ -41,7 +41,7 @@ pub const DictionaryEncodingT = struct {
     /// is used to represent ordered categorical data, and we provide a way to
     /// preserve that metadata here
     isOrdered: bool = false,
-    dictionaryKind: org.apache.arrow.flatbuf.DictionaryKind = @as(org.apache.arrow.flatbuf.DictionaryKind, @enumFromInt(0)),
+    dictionaryKind: org.apache.arrow.flatbuf.DictionaryKind = @as(org.apache.arrow.flatbuf.DictionaryKind, @fromBackingInt(@intCast(0))),
 
     pub fn Pack(rcv: DictionaryEncodingT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
@@ -160,7 +160,7 @@ pub const DictionaryEncoding = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.DictionaryKind, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.DictionaryKind, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.DictionaryKind, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateDictionaryKind(rcv: DictionaryEncoding, n: org.apache.arrow.flatbuf.DictionaryKind) bool {
@@ -183,7 +183,7 @@ pub const DictionaryEncoding = struct {
     }
 
     pub fn AddDictionaryKind(__builder: *Builder, dictionaryKind: org.apache.arrow.flatbuf.DictionaryKind) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.DictionaryKind, 3, dictionaryKind, @as(org.apache.arrow.flatbuf.DictionaryKind, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.DictionaryKind, 3, dictionaryKind, @as(org.apache.arrow.flatbuf.DictionaryKind, @fromBackingInt(@intCast(0))));
     }
 
     pub fn End(__builder: *Builder) !u32 {

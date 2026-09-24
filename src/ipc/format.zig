@@ -45,7 +45,7 @@ pub fn readMessageLength(reader: anytype) !?u32 {
 
 pub fn writePadding(writer: anytype, pad_len: usize) !void {
     if (pad_len == 0) return;
-    var zeros: [Alignment]u8 = [_]u8{0} ** Alignment;
+    var zeros: [Alignment]u8 = @splat(0);
     var remaining = pad_len;
     while (remaining > 0) {
         const chunk = @min(remaining, zeros.len);

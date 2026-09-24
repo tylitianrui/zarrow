@@ -181,7 +181,7 @@ fn exportRootSchema(allocator: std.mem.Allocator, schema: Schema) Error!ArrowSch
     const priv = try allocator.create(ExportedSchemaPrivate);
     errdefer allocator.destroy(priv);
 
-    const format_z = try allocator.dupeZ(u8, "+s");
+    const format_z = try allocator.dupeSentinel(u8, "+s", 0);
     errdefer allocator.free(format_z);
 
     priv.* = .{
@@ -237,7 +237,7 @@ fn exportFieldSchema(allocator: std.mem.Allocator, field: Field) Error!ArrowSche
     const fmt = try formatFromDataType(allocator, layout_dt);
     errdefer allocator.free(fmt);
 
-    const name_z = try allocator.dupeZ(u8, field.name);
+    const name_z = try allocator.dupeSentinel(u8, field.name, 0);
     errdefer allocator.free(name_z);
 
     priv.* = .{
@@ -1084,57 +1084,57 @@ fn childFieldsForDataType(allocator: std.mem.Allocator, dt: DataType) Error![]co
 fn formatFromDataType(allocator: std.mem.Allocator, dt: DataType) Error![:0]u8 {
     const layout_dt = storageDataType(dt);
     return switch (layout_dt) {
-        .null => try allocator.dupeZ(u8, "n"),
-        .bool => try allocator.dupeZ(u8, "b"),
-        .int8 => try allocator.dupeZ(u8, "c"),
-        .uint8 => try allocator.dupeZ(u8, "C"),
-        .int16 => try allocator.dupeZ(u8, "s"),
-        .uint16 => try allocator.dupeZ(u8, "S"),
-        .int32 => try allocator.dupeZ(u8, "i"),
-        .uint32 => try allocator.dupeZ(u8, "I"),
-        .int64 => try allocator.dupeZ(u8, "l"),
-        .uint64 => try allocator.dupeZ(u8, "L"),
-        .half_float => try allocator.dupeZ(u8, "e"),
-        .float => try allocator.dupeZ(u8, "f"),
-        .double => try allocator.dupeZ(u8, "g"),
-        .string => try allocator.dupeZ(u8, "u"),
-        .large_string => try allocator.dupeZ(u8, "U"),
-        .binary => try allocator.dupeZ(u8, "z"),
-        .large_binary => try allocator.dupeZ(u8, "Z"),
-        .string_view => try allocator.dupeZ(u8, "vu"),
-        .binary_view => try allocator.dupeZ(u8, "vz"),
-        .date32 => try allocator.dupeZ(u8, "tdD"),
-        .date64 => try allocator.dupeZ(u8, "tdm"),
+        .null => try allocator.dupeSentinel(u8, "n", 0),
+        .bool => try allocator.dupeSentinel(u8, "b", 0),
+        .int8 => try allocator.dupeSentinel(u8, "c", 0),
+        .uint8 => try allocator.dupeSentinel(u8, "C", 0),
+        .int16 => try allocator.dupeSentinel(u8, "s", 0),
+        .uint16 => try allocator.dupeSentinel(u8, "S", 0),
+        .int32 => try allocator.dupeSentinel(u8, "i", 0),
+        .uint32 => try allocator.dupeSentinel(u8, "I", 0),
+        .int64 => try allocator.dupeSentinel(u8, "l", 0),
+        .uint64 => try allocator.dupeSentinel(u8, "L", 0),
+        .half_float => try allocator.dupeSentinel(u8, "e", 0),
+        .float => try allocator.dupeSentinel(u8, "f", 0),
+        .double => try allocator.dupeSentinel(u8, "g", 0),
+        .string => try allocator.dupeSentinel(u8, "u", 0),
+        .large_string => try allocator.dupeSentinel(u8, "U", 0),
+        .binary => try allocator.dupeSentinel(u8, "z", 0),
+        .large_binary => try allocator.dupeSentinel(u8, "Z", 0),
+        .string_view => try allocator.dupeSentinel(u8, "vu", 0),
+        .binary_view => try allocator.dupeSentinel(u8, "vz", 0),
+        .date32 => try allocator.dupeSentinel(u8, "tdD", 0),
+        .date64 => try allocator.dupeSentinel(u8, "tdm", 0),
         .timestamp => |ts| formatTimestamp(allocator, ts.unit, ts.timezone),
         .time32 => |t| switch (t.unit) {
-            .second => try allocator.dupeZ(u8, "tts"),
-            .millisecond => try allocator.dupeZ(u8, "ttm"),
+            .second => try allocator.dupeSentinel(u8, "tts", 0),
+            .millisecond => try allocator.dupeSentinel(u8, "ttm", 0),
             else => return error.UnsupportedType,
         },
         .time64 => |t| switch (t.unit) {
-            .microsecond => try allocator.dupeZ(u8, "ttu"),
-            .nanosecond => try allocator.dupeZ(u8, "ttn"),
+            .microsecond => try allocator.dupeSentinel(u8, "ttu", 0),
+            .nanosecond => try allocator.dupeSentinel(u8, "ttn", 0),
             else => return error.UnsupportedType,
         },
         .duration => |d| switch (d.unit) {
-            .second => try allocator.dupeZ(u8, "tDs"),
-            .millisecond => try allocator.dupeZ(u8, "tDm"),
-            .microsecond => try allocator.dupeZ(u8, "tDu"),
-            .nanosecond => try allocator.dupeZ(u8, "tDn"),
+            .second => try allocator.dupeSentinel(u8, "tDs", 0),
+            .millisecond => try allocator.dupeSentinel(u8, "tDm", 0),
+            .microsecond => try allocator.dupeSentinel(u8, "tDu", 0),
+            .nanosecond => try allocator.dupeSentinel(u8, "tDn", 0),
         },
-        .interval_months => try allocator.dupeZ(u8, "tiM"),
-        .interval_day_time => try allocator.dupeZ(u8, "tiD"),
-        .interval_month_day_nano => try allocator.dupeZ(u8, "tin"),
+        .interval_months => try allocator.dupeSentinel(u8, "tiM", 0),
+        .interval_day_time => try allocator.dupeSentinel(u8, "tiD", 0),
+        .interval_month_day_nano => try allocator.dupeSentinel(u8, "tin", 0),
         .fixed_size_binary => |fsb| allocPrintZ(allocator, "w:{d}", .{fsb.byte_width}),
-        .list => try allocator.dupeZ(u8, "+l"),
-        .large_list => try allocator.dupeZ(u8, "+L"),
-        .list_view => try allocator.dupeZ(u8, "+vl"),
-        .large_list_view => try allocator.dupeZ(u8, "+vL"),
-        .map => try allocator.dupeZ(u8, "+m"),
-        .run_end_encoded => try allocator.dupeZ(u8, "+r"),
+        .list => try allocator.dupeSentinel(u8, "+l", 0),
+        .large_list => try allocator.dupeSentinel(u8, "+L", 0),
+        .list_view => try allocator.dupeSentinel(u8, "+vl", 0),
+        .large_list_view => try allocator.dupeSentinel(u8, "+vL", 0),
+        .map => try allocator.dupeSentinel(u8, "+m", 0),
+        .run_end_encoded => try allocator.dupeSentinel(u8, "+r", 0),
         .sparse_union => |u| formatUnion(allocator, true, u.type_ids),
         .dense_union => |u| formatUnion(allocator, false, u.type_ids),
-        .struct_ => try allocator.dupeZ(u8, "+s"),
+        .struct_ => try allocator.dupeSentinel(u8, "+s", 0),
         .fixed_size_list => |fsl| allocPrintZ(allocator, "+w:{d}", .{fsl.list_size}),
         .dictionary => |d| formatFromIntType(allocator, d.index_type),
         .decimal32 => |d| allocPrintZ(allocator, "d:{d},{d},32", .{ d.precision, d.scale }),
@@ -1153,7 +1153,7 @@ fn formatFromIntType(allocator: std.mem.Allocator, int_type: IntType) Error![:0]
         64 => if (int_type.signed) "l" else "L",
         else => return error.InvalidFormat,
     };
-    return allocator.dupeZ(u8, s) catch error.OutOfMemory;
+    return allocator.dupeSentinel(u8, s, 0) catch error.OutOfMemory;
 }
 
 fn intTypeFromFormat(fmt: []const u8) ?IntType {
@@ -1483,13 +1483,13 @@ fn formatUnion(allocator: std.mem.Allocator, sparse: bool, ids: []const i8) Erro
         defer allocator.free(s);
         try list.appendSlice(s);
     }
-    return allocator.dupeZ(u8, list.items) catch error.OutOfMemory;
+    return allocator.dupeSentinel(u8, list.items, 0) catch error.OutOfMemory;
 }
 
 fn allocPrintZ(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) Error![:0]u8 {
     const tmp = std.fmt.allocPrint(allocator, fmt, args) catch return error.OutOfMemory;
     defer allocator.free(tmp);
-    return allocator.dupeZ(u8, tmp) catch error.OutOfMemory;
+    return allocator.dupeSentinel(u8, tmp, 0) catch error.OutOfMemory;
 }
 
 test "c data schema export/import roundtrip" {
@@ -2418,7 +2418,7 @@ test "c data array import supports string_view and binary_view buffers" {
     const allocator = std.testing.allocator;
 
     var valid_bits = [_]u8{0x01};
-    var sv_views = [_]u8{0} ** 16;
+    var sv_views: [16]u8 = @splat(0);
     var sv_data = [_]u8{'x'};
     var sv_lens = [_]i64{@as(i64, sv_data.len)};
     const sv_layout = ArrayData{
@@ -2445,7 +2445,7 @@ test "c data array import supports string_view and binary_view buffers" {
     try std.testing.expectEqual(@as(usize, 8), sv_imported.data().buffers[3].len());
     try std.testing.expect(sv_c_array.release == null);
 
-    var bv_views = [_]u8{0} ** 16;
+    var bv_views: [16]u8 = @splat(0);
     const empty_lens = [_]i64{};
     const bv_layout = ArrayData{
         .data_type = DataType{ .binary_view = {} },

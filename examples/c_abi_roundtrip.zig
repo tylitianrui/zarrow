@@ -46,7 +46,7 @@ pub fn main() !void {
     var input_stream = try zarrow.exportRecordBatchStreamToC(allocator, schema, &[_]zarrow.RecordBatch{batch});
     errdefer if (input_stream.release) |release_fn| release_fn(&input_stream);
 
-    const import_stream_out_param_ty = @typeInfo(@TypeOf(c_api.zarrow_c_import_stream)).@"fn".params[1].type.?;
+    const import_stream_out_param_ty = @typeInfo(@TypeOf(c_api.zarrow_c_import_stream)).@"fn".param_types[1].?;
     const stream_handle_ty = @typeInfo(@typeInfo(import_stream_out_param_ty).optional.child).pointer.child;
     var stream_handle: stream_handle_ty = null;
     try ensureOk(c_api.zarrow_c_import_stream(&input_stream, &stream_handle), "zarrow_c_import_stream");

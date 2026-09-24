@@ -37,13 +37,13 @@ pub const SparseTensorT = struct {
     /// The type of data contained in a value cell.
     /// Currently only fixed-width value types are supported,
     /// no strings or nested types.
-    type: org.apache.arrow.flatbuf.TypeT = @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0)),
+    type: org.apache.arrow.flatbuf.TypeT = @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0))),
     /// The dimensions of the tensor, optionally named.
     shape: std.ArrayList(org.apache.arrow.flatbuf.TensorDimT) = .empty,
     /// The number of non-zero values in a sparse tensor.
     non_zero_length: i64 = 0,
     /// Sparse tensor index
-    sparseIndex: org.apache.arrow.flatbuf.SparseTensorIndexT = @as(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, @enumFromInt(0)),
+    sparseIndex: org.apache.arrow.flatbuf.SparseTensorIndexT = @as(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, @fromBackingInt(@intCast(0))),
     /// The location and size of the tensor's data
     data: ?*org.apache.arrow.flatbuf.BufferT = null,
 
@@ -162,7 +162,7 @@ pub const SparseTensor = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.Type.Tag, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateTypeType(rcv: SparseTensor, n: org.apache.arrow.flatbuf.Type) bool {
@@ -218,7 +218,7 @@ pub const SparseTensor = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateSparseIndexType(rcv: SparseTensor, n: org.apache.arrow.flatbuf.SparseTensorIndex) bool {
@@ -248,7 +248,7 @@ pub const SparseTensor = struct {
         try __builder.startObject(7);
     }
     pub fn AddTypeType(__builder: *Builder, type_type: org.apache.arrow.flatbuf.Type.Tag) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.Type.Tag, 0, type_type, @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.Type.Tag, 0, type_type, @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddType(__builder: *Builder, @"type": u32) !void {
@@ -267,7 +267,7 @@ pub const SparseTensor = struct {
     }
 
     pub fn AddSparseIndexType(__builder: *Builder, sparseIndex_type: org.apache.arrow.flatbuf.SparseTensorIndex.Tag) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, 4, sparseIndex_type, @as(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, 4, sparseIndex_type, @as(org.apache.arrow.flatbuf.SparseTensorIndex.Tag, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddSparseIndex(__builder: *Builder, sparseIndex: u32) !void {

@@ -39,7 +39,9 @@ Each `*.fb.zig` file exports two types following the flatc-zig convention:
 - `FooT` — an unpacked, heap-allocated struct used for construction and mutation.
 - `Foo`  — a zero-copy view into a raw FlatBuffers byte buffer.
 
-The committed bindings use Zig 0.16's `.empty` initialization for `std.ArrayList`.
+The committed bindings use `.empty` initialization for `std.ArrayList` and
+Zig 0.17's `@fromBackingInt` builtin for enum values (`zig fmt` migrates the old
+`@enumFromInt` spelling).
 Preserve these adjustments when regenerating bindings with older generators.
 
 ## Regenerating

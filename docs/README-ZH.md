@@ -74,7 +74,9 @@ Zig 在这个领域有天然优势：显式内存管理、可预测性能、清�
 
 ## 版本要求
 
-`master` 分支当前目标 Zig 版本为 `0.16.x`。
+`master` 分支当前面向 Zig `0.17` 开发版本。Nix 开发环境与 CI 固定使用
+`0.17.0-dev.2267+48abf1a34`（2026-09-22 的 nightly 构建）；Zig 0.17
+尚未发布稳定版本。
 
 由于 Zig 编译器版本间存在较多 breaking changes，`zarrow` 使用带编译器后缀的标签来维护多版本兼容：
 
@@ -90,12 +92,13 @@ Zig 在这个领域有天然优势：显式内存管理、可预测性能、清�
 
 | Zig 版本 | 使用标签 |
 | --- | --- |
+| `0.17.0-dev.2267+48abf1a34` | `master`（开发版本） |
 | `0.16.x` | `v<zarrow-version>-zig0.16` |
 | `0.15.x` | `v<zarrow-version>-zig0.15` |
 | `0.14.x` | `v<zarrow-version>-zig0.14` |
 | `0.13.x` | `v<zarrow-version>-zig0.13` |
 
-IPC 流使用 Zig 0.16 的 `std.Io.Reader` 和 `std.Io.Writer` 接口，参见
+IPC 流使用 Zig 的 `std.Io.Reader` 和 `std.Io.Writer` 接口，参见
 [`examples/ipc_stream.zig`](../examples/ipc_stream.zig)。读取 IPC 文件时，
 向 `IpcFileReader` 传入 `*std.Io.File.Reader` 或 `*zarrow.IpcBufferReader`。
 
@@ -297,7 +300,7 @@ cd zarrow
 ```
 
 可选：使用 Nix 获取 [zig-overlay](https://github.com/mitchellh/zig-overlay)
-提供的 Zig `0.16.0`。安装 Nix 并启用 `nix-command` 和 `flakes` 功能后，
+提供的 Zig `0.17.0-dev.2267+48abf1a34`。安装 Nix 并启用 `nix-command` 和 `flakes` 功能后，
 在仓库根目录进入开发环境：
 
 ```sh

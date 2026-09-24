@@ -30,7 +30,7 @@ const org = struct {
 ///   leap seconds), where the values are evenly divisible by 86400000
 /// * Days (32 bits) since the UNIX epoch
 pub const DateT = struct {
-    unit: org.apache.arrow.flatbuf.DateUnit = @as(org.apache.arrow.flatbuf.DateUnit, @enumFromInt(1)),
+    unit: org.apache.arrow.flatbuf.DateUnit = @as(org.apache.arrow.flatbuf.DateUnit, @fromBackingInt(@intCast(1))),
 
     pub fn Pack(rcv: DateT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
@@ -83,7 +83,7 @@ pub const Date = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.DateUnit, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.DateUnit, @enumFromInt(1));
+        return @as(org.apache.arrow.flatbuf.DateUnit, @fromBackingInt(@intCast(1)));
     }
 
     pub fn MutateUnit(rcv: Date, n: org.apache.arrow.flatbuf.DateUnit) bool {
@@ -94,7 +94,7 @@ pub const Date = struct {
         try __builder.startObject(1);
     }
     pub fn AddUnit(__builder: *Builder, unit: org.apache.arrow.flatbuf.DateUnit) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.DateUnit, 0, unit, @as(org.apache.arrow.flatbuf.DateUnit, @enumFromInt(1)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.DateUnit, 0, unit, @as(org.apache.arrow.flatbuf.DateUnit, @fromBackingInt(@intCast(1))));
     }
 
     pub fn End(__builder: *Builder) !u32 {

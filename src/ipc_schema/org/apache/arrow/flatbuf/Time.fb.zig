@@ -38,7 +38,7 @@ const org = struct {
 /// measurements with leap seconds will need to be corrected when ingesting
 /// into Arrow (for example by replacing the value 86400 with 86399).
 pub const TimeT = struct {
-    unit: org.apache.arrow.flatbuf.TimeUnit = @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(1)),
+    unit: org.apache.arrow.flatbuf.TimeUnit = @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(1))),
     bitWidth: i32 = 32,
 
     pub fn Pack(rcv: TimeT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
@@ -95,7 +95,7 @@ pub const Time = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.TimeUnit, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(1));
+        return @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(1)));
     }
 
     pub fn MutateUnit(rcv: Time, n: org.apache.arrow.flatbuf.TimeUnit) bool {
@@ -118,7 +118,7 @@ pub const Time = struct {
         try __builder.startObject(2);
     }
     pub fn AddUnit(__builder: *Builder, unit: org.apache.arrow.flatbuf.TimeUnit) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.TimeUnit, 0, unit, @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(1)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.TimeUnit, 0, unit, @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(1))));
     }
 
     pub fn AddBitWidth(__builder: *Builder, bitWidth: i32) !void {

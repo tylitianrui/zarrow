@@ -336,7 +336,7 @@ fn writeMessage(allocator: std.mem.Allocator, writer: anytype, msg: fbs.MessageT
     try writer.writeAll(metadata);
     try format.writePadding(writer, format.padLen(metadata.len));
 
-    var pad_bytes: [format.Alignment]u8 = [_]u8{0} ** format.Alignment;
+    var pad_bytes: [format.Alignment]u8 = @splat(0);
     for (body_buffers) |buf| {
         if (buf.len() > 0) try writer.writeAll(buf.data);
         const pad_len = format.padLen(buf.len());

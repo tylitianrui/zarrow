@@ -24,7 +24,7 @@ const org = struct {
 };
 
 pub const FloatingPointT = struct {
-    precision: org.apache.arrow.flatbuf.Precision = @as(org.apache.arrow.flatbuf.Precision, @enumFromInt(0)),
+    precision: org.apache.arrow.flatbuf.Precision = @as(org.apache.arrow.flatbuf.Precision, @fromBackingInt(@intCast(0))),
 
     pub fn Pack(rcv: FloatingPointT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
@@ -77,7 +77,7 @@ pub const FloatingPoint = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.Precision, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.Precision, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.Precision, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutatePrecision(rcv: FloatingPoint, n: org.apache.arrow.flatbuf.Precision) bool {
@@ -88,7 +88,7 @@ pub const FloatingPoint = struct {
         try __builder.startObject(1);
     }
     pub fn AddPrecision(__builder: *Builder, precision: org.apache.arrow.flatbuf.Precision) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.Precision, 0, precision, @as(org.apache.arrow.flatbuf.Precision, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.Precision, 0, precision, @as(org.apache.arrow.flatbuf.Precision, @fromBackingInt(@intCast(0))));
     }
 
     pub fn End(__builder: *Builder) !u32 {

@@ -37,7 +37,7 @@ pub const FieldT = struct {
     /// Whether or not this field can contain nulls. Should be true in general.
     nullable: bool = false,
     /// This is the type of the decoded value if the field is dictionary encoded.
-    type: org.apache.arrow.flatbuf.TypeT = @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0)),
+    type: org.apache.arrow.flatbuf.TypeT = @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0))),
     /// Present only if the field is dictionary encoded.
     dictionary: ?*org.apache.arrow.flatbuf.DictionaryEncodingT = null,
     /// children apply only to nested data types like Struct, List and Union. For
@@ -214,7 +214,7 @@ pub const Field = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.Type.Tag, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateTypeType(rcv: Field, n: org.apache.arrow.flatbuf.Type) bool {
@@ -293,7 +293,7 @@ pub const Field = struct {
     }
 
     pub fn AddTypeType(__builder: *Builder, type_type: org.apache.arrow.flatbuf.Type.Tag) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.Type.Tag, 2, type_type, @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.Type.Tag, 2, type_type, @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddType(__builder: *Builder, @"type": u32) !void {

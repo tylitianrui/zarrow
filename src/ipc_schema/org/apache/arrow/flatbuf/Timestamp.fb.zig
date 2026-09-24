@@ -129,7 +129,7 @@ const org = struct {
 /// was UTC; for example, the naive date-time "January 1st 1970, 00h00" would
 /// be encoded as timestamp value 0.
 pub const TimestampT = struct {
-    unit: org.apache.arrow.flatbuf.TimeUnit = @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(0)),
+    unit: org.apache.arrow.flatbuf.TimeUnit = @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(0))),
     /// The timezone is an optional string indicating the name of a timezone,
     /// one of:
     ///
@@ -200,7 +200,7 @@ pub const Timestamp = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.TimeUnit, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateUnit(rcv: Timestamp, n: org.apache.arrow.flatbuf.TimeUnit) bool {
@@ -229,7 +229,7 @@ pub const Timestamp = struct {
         try __builder.startObject(2);
     }
     pub fn AddUnit(__builder: *Builder, unit: org.apache.arrow.flatbuf.TimeUnit) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.TimeUnit, 0, unit, @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.TimeUnit, 0, unit, @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddTimezone(__builder: *Builder, timezone: u32) !void {

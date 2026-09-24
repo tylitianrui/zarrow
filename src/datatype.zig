@@ -521,9 +521,9 @@ fn unionTypeEql(lhs: UnionType, rhs: UnionType) bool {
 }
 
 comptime {
-    std.debug.assert(@intFromEnum(TypeId.null) == 0);
-    std.debug.assert(@intFromEnum(TypeId.bool) == 1);
-    std.debug.assert(@intFromEnum(TypeId.decimal64) == 44);
+    std.debug.assert(@backingInt(TypeId.null) == 0);
+    std.debug.assert(@backingInt(TypeId.bool) == 1);
+    std.debug.assert(@backingInt(TypeId.decimal64) == 44);
 }
 
 test "data type eql compares nested pointer content" {

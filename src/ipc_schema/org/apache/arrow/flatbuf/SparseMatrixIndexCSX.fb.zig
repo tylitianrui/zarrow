@@ -30,7 +30,7 @@ const org = struct {
 /// Compressed Sparse format, that is matrix-specific.
 pub const SparseMatrixIndexCSXT = struct {
     /// Which axis, row or column, is compressed
-    compressedAxis: org.apache.arrow.flatbuf.SparseMatrixCompressedAxis = @as(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, @enumFromInt(0)),
+    compressedAxis: org.apache.arrow.flatbuf.SparseMatrixCompressedAxis = @as(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, @fromBackingInt(@intCast(0))),
     /// The type of values in indptrBuffer
     indptrType: ?*org.apache.arrow.flatbuf.IntT = null,
     /// indptrBuffer stores the location and size of indptr array that
@@ -180,7 +180,7 @@ pub const SparseMatrixIndexCSX = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateCompressedAxis(rcv: SparseMatrixIndexCSX, n: org.apache.arrow.flatbuf.SparseMatrixCompressedAxis) bool {
@@ -261,7 +261,7 @@ pub const SparseMatrixIndexCSX = struct {
         try __builder.startObject(5);
     }
     pub fn AddCompressedAxis(__builder: *Builder, compressedAxis: org.apache.arrow.flatbuf.SparseMatrixCompressedAxis) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, 0, compressedAxis, @as(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, 0, compressedAxis, @as(org.apache.arrow.flatbuf.SparseMatrixCompressedAxis, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddIndptrType(__builder: *Builder, indptrType: u32) !void {

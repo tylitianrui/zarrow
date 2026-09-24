@@ -34,7 +34,7 @@ pub const __file_ext = "";
 pub const TensorT = struct {
     /// The type of data contained in a value cell. Currently only fixed-width
     /// value types are supported, no strings or nested types
-    type: org.apache.arrow.flatbuf.TypeT = @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0)),
+    type: org.apache.arrow.flatbuf.TypeT = @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0))),
     /// The dimensions of the tensor, optionally named
     shape: std.ArrayList(org.apache.arrow.flatbuf.TensorDimT) = .empty,
     /// Non-negative byte offsets to advance one value cell along each dimension
@@ -171,7 +171,7 @@ pub const Tensor = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.Type.Tag, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateTypeType(rcv: Tensor, n: org.apache.arrow.flatbuf.Type) bool {
@@ -250,7 +250,7 @@ pub const Tensor = struct {
         try __builder.startObject(5);
     }
     pub fn AddTypeType(__builder: *Builder, type_type: org.apache.arrow.flatbuf.Type.Tag) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.Type.Tag, 0, type_type, @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.Type.Tag, 0, type_type, @as(org.apache.arrow.flatbuf.Type.Tag, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddType(__builder: *Builder, @"type": u32) !void {

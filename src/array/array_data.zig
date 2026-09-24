@@ -1598,7 +1598,7 @@ test "array data hasNulls only checks logical slice range" {
 }
 
 test "array data validateLayout accepts string_view with inline and variadic data" {
-    var views: [2 * 16]u8 align(buffer.ALIGNMENT) = [_]u8{0} ** (2 * 16);
+    var views: [2 * 16]u8 align(buffer.ALIGNMENT) = @splat(0);
     const short = "hello";
     views[0] = @intCast(short.len);
     @memcpy(views[4 .. 4 + short.len], short);
@@ -1622,7 +1622,7 @@ test "array data validateLayout accepts string_view with inline and variadic dat
 }
 
 test "array data validateLayout rejects string_view with mismatched prefix" {
-    var views: [16]u8 align(buffer.ALIGNMENT) = [_]u8{0} ** 16;
+    var views: [16]u8 align(buffer.ALIGNMENT) = @splat(0);
     const long = "abcdefghijklmnop"; // 16 bytes
     views[0] = @intCast(long.len);
     @memcpy(views[4..8], "wxyz"); // wrong prefix

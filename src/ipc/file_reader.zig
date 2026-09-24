@@ -577,11 +577,11 @@ const IndexedBlock = struct {
 };
 
 fn messageHeaderFromTypeTag(header_type: u8) MessageHeaderKind {
-    if (header_type == @intFromEnum(fbs.MessageHeader.Schema)) return .schema;
-    if (header_type == @intFromEnum(fbs.MessageHeader.DictionaryBatch)) return .dictionary_batch;
-    if (header_type == @intFromEnum(fbs.MessageHeader.RecordBatch)) return .record_batch;
-    if (header_type == @intFromEnum(fbs.MessageHeader.Tensor)) return .tensor;
-    if (header_type == @intFromEnum(fbs.MessageHeader.SparseTensor)) return .sparse_tensor;
+    if (header_type == @backingInt(fbs.MessageHeader.Schema)) return .schema;
+    if (header_type == @backingInt(fbs.MessageHeader.DictionaryBatch)) return .dictionary_batch;
+    if (header_type == @backingInt(fbs.MessageHeader.RecordBatch)) return .record_batch;
+    if (header_type == @backingInt(fbs.MessageHeader.Tensor)) return .tensor;
+    if (header_type == @backingInt(fbs.MessageHeader.SparseTensor)) return .sparse_tensor;
     return .other;
 }
 

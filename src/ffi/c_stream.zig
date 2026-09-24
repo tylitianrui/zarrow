@@ -51,7 +51,7 @@ const ExportedStreamPrivate = struct {
     batches: []RecordBatch,
     next_batch_index: usize = 0,
     has_last_error: bool = false,
-    last_error_buf: [256]u8 = [_]u8{0} ** 256,
+    last_error_buf: [256]u8 = @splat(0),
 };
 
 const C_OK: c_int = 0;

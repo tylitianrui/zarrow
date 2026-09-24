@@ -24,7 +24,7 @@ const org = struct {
 };
 
 pub const DurationT = struct {
-    unit: org.apache.arrow.flatbuf.TimeUnit = @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(1)),
+    unit: org.apache.arrow.flatbuf.TimeUnit = @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(1))),
 
     pub fn Pack(rcv: DurationT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
@@ -77,7 +77,7 @@ pub const Duration = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.TimeUnit, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(1));
+        return @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(1)));
     }
 
     pub fn MutateUnit(rcv: Duration, n: org.apache.arrow.flatbuf.TimeUnit) bool {
@@ -88,7 +88,7 @@ pub const Duration = struct {
         try __builder.startObject(1);
     }
     pub fn AddUnit(__builder: *Builder, unit: org.apache.arrow.flatbuf.TimeUnit) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.TimeUnit, 0, unit, @as(org.apache.arrow.flatbuf.TimeUnit, @enumFromInt(1)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.TimeUnit, 0, unit, @as(org.apache.arrow.flatbuf.TimeUnit, @fromBackingInt(@intCast(1))));
     }
 
     pub fn End(__builder: *Builder) !u32 {
