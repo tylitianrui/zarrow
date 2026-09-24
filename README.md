@@ -282,12 +282,32 @@ Available examples include builders for primitive, unsigned integer, boolean, st
 
 ## Development
 
-Clone the repository and run tests:
+Clone the repository:
 
 ```sh
 git clone https://github.com/tylitianrui/zarrow.git
 cd zarrow
+```
+
+Optionally, use Nix to provide Zig `0.15.2` from
+[zig-overlay](https://github.com/mitchellh/zig-overlay). With Nix installed and
+the `nix-command` and `flakes` features enabled, enter the development shell
+from the repository root:
+
+```sh
+nix develop
+```
+
+With Zig installed or the Nix shell active, run tests:
+
+```sh
 zig build test
+```
+
+You can also run tests directly through Nix without opening an interactive shell:
+
+```sh
+nix develop --command zig build test
 ```
 
 Run formatting before opening a PR:

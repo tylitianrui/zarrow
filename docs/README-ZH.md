@@ -284,12 +284,31 @@ zig build example-compute_lifecycle
 
 ## 开发
 
-克隆仓库并运行测试：
+克隆仓库：
 
 ```sh
 git clone https://github.com/tylitianrui/zarrow.git
 cd zarrow
+```
+
+可选：使用 Nix 获取 [zig-overlay](https://github.com/mitchellh/zig-overlay)
+提供的 Zig `0.15.2`。安装 Nix 并启用 `nix-command` 和 `flakes` 功能后，
+在仓库根目录进入开发环境：
+
+```sh
+nix develop
+```
+
+已安装 Zig 或进入 Nix 开发环境后，运行测试：
+
+```sh
 zig build test
+```
+
+也可以直接通过 Nix 运行测试，无需进入交互式 shell：
+
+```sh
+nix develop --command zig build test
 ```
 
 提交 PR 前运行格式化：
