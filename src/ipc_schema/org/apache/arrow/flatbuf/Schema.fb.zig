@@ -37,14 +37,14 @@ pub const SchemaT = struct {
     /// it is Little Endian by default
     /// if endianness doesn't match the underlying system then the vectors need to be converted
     endianness: org.apache.arrow.flatbuf.Endianness = @as(org.apache.arrow.flatbuf.Endianness, @enumFromInt(0)),
-    fields: std.ArrayList(org.apache.arrow.flatbuf.FieldT) = .{},
-    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .{},
+    fields: std.ArrayList(org.apache.arrow.flatbuf.FieldT) = .empty,
+    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .empty,
     /// Features used in the stream/file.
-    features: std.ArrayList(i64) = .{},
+    features: std.ArrayList(i64) = .empty,
 
     pub fn Pack(rcv: SchemaT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         var fields_off: u32 = 0;
         if (rcv.fields.items.len != 0) {

@@ -18,7 +18,7 @@
     {
       devShells = forAllSystems (system: {
         default = nixpkgs.legacyPackages.${system}.mkShell {
-          packages = [ zig-overlay.packages.${system}."0.15.2" ];
+          packages = [ zig-overlay.packages.${system}."0.16.0" ];
         };
       });
     };

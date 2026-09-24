@@ -285,7 +285,7 @@ fn buildDatum(allocator: std.mem.Allocator, input: DatumInput) compute.KernelErr
         .chunked => blk: {
             const values = input.values orelse return error.InvalidInput;
             const chunk_sizes = input.chunks orelse return error.InvalidInput;
-            var refs: std.ArrayList(zcore.ArrayRef) = .{};
+            var refs: std.ArrayList(zcore.ArrayRef) = .empty;
             defer refs.deinit(allocator);
             errdefer {
                 for (refs.items) |*chunk| {
@@ -479,12 +479,13 @@ fn runCase(
     }
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var args = std.process.args();
+    var args = try init.minimal.args.iterateAllocator(allocator);
+    defer args.deinit();
     _ = args.next();
     const input_path = args.next() orelse {
         std.debug.print("usage: compute-compat-runner <input.json>\n", .{});
@@ -495,7 +496,7 @@ pub fn main() !void {
         return error.InvalidInput;
     }
 
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, input_path, 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, input_path, allocator, .limited(1024 * 1024));
     defer allocator.free(bytes);
 
     const parsed = try std.json.parseFromSlice(Input, allocator, bytes, .{});
@@ -506,7 +507,7 @@ pub fn main() !void {
     try registerCompatKernels(&registry);
     var ctx = compute.ExecContext.init(allocator, &registry);
 
-    var results: std.ArrayList(CaseOutput) = .{};
+    var results: std.ArrayList(CaseOutput) = .empty;
     defer {
         for (results.items) |item| {
             if (item.values) |vals| allocator.free(vals);
@@ -534,7 +535,7 @@ pub fn main() !void {
     }
 
     var out_buf: [4096]u8 = undefined;
-    var out_writer = std.fs.File.stdout().writer(&out_buf);
+    var out_writer = std.Io.File.stdout().writer(init.io, &out_buf);
     try std.json.Stringify.value(Output{ .results = results.items }, .{}, @constCast(&out_writer.interface));
     try out_writer.interface.writeByte('\n');
     try out_writer.interface.flush();

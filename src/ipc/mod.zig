@@ -21,4 +21,5 @@ pub const SchemaRef = @import("../schema.zig").SchemaRef;
 pub const FileWriter = @import("file_writer.zig").FileWriter;
 pub const FileWriterOptions = @import("file_writer.zig").WriterOptions;
 pub const FileReader = @import("file_reader.zig").FileReader;
+pub const BufferReader = @import("buffer_reader.zig").BufferReader;
 pub const FileReaderOptions = @import("file_reader.zig").ReaderOptions;

@@ -22,8 +22,8 @@ const required_vendor_files = [_]RequiredVendorFile{
     .{ .path = "vendor/lz4/xxhash.h", .sha256_hex = "aefdd236f35130495c18764cabed3f7b216906855fc5e6a9025cd2040bc84444" },
 };
 
-fn fileExists(path: []const u8) bool {
-    std.fs.cwd().access(path, .{}) catch return false;
+fn fileExists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
     return true;
 }
 
@@ -36,7 +36,7 @@ fn digestHex(data: []const u8) [64]u8 {
 }
 
 fn normalizedLfAlloc(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .{};
+    var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.ensureTotalCapacity(allocator, data.len);
     errdefer out.deinit(allocator);
 
@@ -51,9 +51,9 @@ fn normalizedLfAlloc(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn hashMatchesExpected(allocator: std.mem.Allocator, path: []const u8, expected_hex: []const u8) !bool {
-    const file_data = std.fs.cwd().readFileAlloc(allocator, path, 100 * 1024 * 1024) catch |err| switch (err) {
-        error.FileTooBig => return false,
+fn hashMatchesExpected(io: std.Io, allocator: std.mem.Allocator, path: []const u8, expected_hex: []const u8) !bool {
+    const file_data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(100 * 1024 * 1024)) catch |err| switch (err) {
+        error.StreamTooLong => return false,
         else => |e| return e,
     };
     defer allocator.free(file_data);
@@ -69,24 +69,25 @@ fn hashMatchesExpected(allocator: std.mem.Allocator, path: []const u8, expected_
     return std.mem.eql(u8, normalized_hex[0..], expected_hex);
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
     const allocator = std.heap.page_allocator;
 
-    var missing: std.ArrayListUnmanaged([]const u8) = .{};
+    var missing: std.ArrayListUnmanaged([]const u8) = .empty;
     defer missing.deinit(allocator);
-    var mismatched: std.ArrayListUnmanaged([]const u8) = .{};
+    var mismatched: std.ArrayListUnmanaged([]const u8) = .empty;
     defer {
         for (mismatched.items) |line| allocator.free(line);
         mismatched.deinit(allocator);
     }
 
     for (required_vendor_files) |entry| {
-        if (!fileExists(entry.path)) {
+        if (!fileExists(io, entry.path)) {
             try missing.append(allocator, entry.path);
             continue;
         }
 
-        const ok = hashMatchesExpected(allocator, entry.path, entry.sha256_hex) catch |err| {
+        const ok = hashMatchesExpected(io, allocator, entry.path, entry.sha256_hex) catch |err| {
             const line = try std.fmt.allocPrint(allocator, "{s}: hash check failed ({s})", .{
                 entry.path,
                 @errorName(err),

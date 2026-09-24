@@ -74,7 +74,7 @@ pub const SparseTensorIndexCSFT = struct {
     ///                       [0, 2, 4, 5, 8]
     ///                     ].
     /// ```
-    indptrBuffers: std.ArrayList(org.apache.arrow.flatbuf.BufferT) = .{},
+    indptrBuffers: std.ArrayList(org.apache.arrow.flatbuf.BufferT) = .empty,
     /// The type of values in indicesBuffers
     indicesType: ?*org.apache.arrow.flatbuf.IntT = null,
     /// indicesBuffers stores values of nodes.
@@ -88,18 +88,18 @@ pub const SparseTensorIndexCSFT = struct {
     ///                        [1, 2, 0, 2, 0, 0, 1, 2]
     ///                      ].
     /// ```
-    indicesBuffers: std.ArrayList(org.apache.arrow.flatbuf.BufferT) = .{},
+    indicesBuffers: std.ArrayList(org.apache.arrow.flatbuf.BufferT) = .empty,
     /// axisOrder stores the sequence in which dimensions were traversed to
     /// produce the prefix tree.
     /// For example, the axisOrder for the above X is:
     /// ```text
     ///   axisOrder(X) = [0, 1, 2, 3].
     /// ```
-    axisOrder: std.ArrayList(i32) = .{},
+    axisOrder: std.ArrayList(i32) = .empty,
 
     pub fn Pack(rcv: SparseTensorIndexCSFT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         const indptrType_off = if (rcv.indptrType) |x| try x.Pack(__builder, __pack_opts) else 0;
 

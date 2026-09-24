@@ -63,7 +63,7 @@ pub const SparseTensorIndexCOOT = struct {
     indicesType: ?*org.apache.arrow.flatbuf.IntT = null,
     /// Non-negative byte offsets to advance one value cell along each dimension
     /// If omitted, default to row-major order (C-like).
-    indicesStrides: std.ArrayList(i64) = .{},
+    indicesStrides: std.ArrayList(i64) = .empty,
     /// The location and size of the indices matrix's data
     indicesBuffer: ?*org.apache.arrow.flatbuf.BufferT = null,
     /// This flag is true if and only if the indices matrix is sorted in
@@ -75,7 +75,7 @@ pub const SparseTensorIndexCOOT = struct {
 
     pub fn Pack(rcv: SparseTensorIndexCOOT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         const indicesType_off = if (rcv.indicesType) |x| try x.Pack(__builder, __pack_opts) else 0;
 

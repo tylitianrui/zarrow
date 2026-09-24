@@ -36,16 +36,16 @@ pub const TensorT = struct {
     /// value types are supported, no strings or nested types
     type: org.apache.arrow.flatbuf.TypeT = @as(org.apache.arrow.flatbuf.Type.Tag, @enumFromInt(0)),
     /// The dimensions of the tensor, optionally named
-    shape: std.ArrayList(org.apache.arrow.flatbuf.TensorDimT) = .{},
+    shape: std.ArrayList(org.apache.arrow.flatbuf.TensorDimT) = .empty,
     /// Non-negative byte offsets to advance one value cell along each dimension
     /// If omitted, default to row-major order (C-like).
-    strides: std.ArrayList(i64) = .{},
+    strides: std.ArrayList(i64) = .empty,
     /// The location and size of the tensor's data
     data: ?*org.apache.arrow.flatbuf.BufferT = null,
 
     pub fn Pack(rcv: TensorT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         const type_off = try rcv.type.Pack(__builder, __pack_opts);
 

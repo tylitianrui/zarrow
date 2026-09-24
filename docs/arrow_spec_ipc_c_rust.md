@@ -334,17 +334,17 @@ pub fn main() !void {
     var batch = try zarrow.RecordBatch.initBorrowed(allocator, schema, &[_]zarrow.ArrayRef{ id_ref, name_ref });
     defer batch.deinit();
 
-    var out = std.array_list.Managed(u8).init(allocator);
+    var out = std.Io.Writer.Allocating.init(allocator);
     defer out.deinit();
 
-    var writer = zarrow.IpcStreamWriter(@TypeOf(out.writer())).init(allocator, out.writer());
+    var writer = zarrow.IpcStreamWriter(*std.Io.Writer).init(allocator, &out.writer);
     defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
 
-    var in = std.io.fixedBufferStream(out.items);
-    var reader = zarrow.IpcStreamReader(@TypeOf(in.reader())).init(allocator, in.reader());
+    var in = std.Io.Reader.fixed(out.written());
+    var reader = zarrow.IpcStreamReader(*std.Io.Reader).init(allocator, &in);
     defer reader.deinit();
 
     _ = try reader.readSchema();

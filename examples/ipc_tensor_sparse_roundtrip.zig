@@ -94,12 +94,12 @@ pub fn main() !void {
     };
 
     // Stream: write schema + tensor + sparse tensor, then read them back.
-    var out = std.array_list.Managed(u8).init(allocator);
+    var out = std.Io.Writer.Allocating.init(allocator);
     defer out.deinit();
 
-    var stream_writer = zarrow.IpcStreamWriter(@TypeOf(out.writer())).initWithOptions(
+    var stream_writer = zarrow.IpcStreamWriter(@TypeOf(&out.writer)).initWithOptions(
         allocator,
-        out.writer(),
+        &out.writer,
         .{ .endianness_mode = .normalize_to_little },
     );
     defer stream_writer.deinit();
@@ -109,10 +109,10 @@ pub fn main() !void {
     try stream_writer.writeTensorLikeMessage(sparse_meta, sparse_body[0..]);
     try stream_writer.writeEnd();
 
-    std.debug.print("examples/ipc_tensor_sparse_roundtrip.zig | stream wrote {d} bytes\n", .{out.items.len});
+    std.debug.print("examples/ipc_tensor_sparse_roundtrip.zig | stream wrote {d} bytes\n", .{out.written().len});
 
-    var stream = std.io.fixedBufferStream(out.items);
-    var stream_reader = zarrow.IpcStreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    var stream = std.Io.Reader.fixed(out.written());
+    var stream_reader = zarrow.IpcStreamReader(@TypeOf(&stream)).init(allocator, &stream);
     defer stream_reader.deinit();
 
     const out_schema = try stream_reader.readSchema();
@@ -140,12 +140,12 @@ pub fn main() !void {
     std.debug.print("stream tensor-like message count={d}\n", .{tensor_like_count});
 
     // File: write same schema/tensor messages, verify file reader can load schema.
-    var file_out = std.array_list.Managed(u8).init(allocator);
+    var file_out = std.Io.Writer.Allocating.init(allocator);
     defer file_out.deinit();
 
-    var file_writer = try zarrow.IpcFileWriter(@TypeOf(file_out.writer())).initWithOptions(
+    var file_writer = try zarrow.IpcFileWriter(@TypeOf(&file_out.writer)).initWithOptions(
         allocator,
-        file_out.writer(),
+        &file_out.writer,
         .{ .endianness_mode = .normalize_to_little },
     );
     defer file_writer.deinit();
@@ -154,10 +154,10 @@ pub fn main() !void {
     try file_writer.writeTensorLikeMessage(tensor_meta, tensor_body[0..]);
     try file_writer.writeTensorLikeMessage(sparse_meta, sparse_body[0..]);
     try file_writer.writeEnd();
-    std.debug.print("file wrote {d} bytes\n", .{file_out.items.len});
+    std.debug.print("file wrote {d} bytes\n", .{file_out.written().len});
 
-    var file_stream = std.io.fixedBufferStream(file_out.items);
-    var file_reader = zarrow.IpcFileReader(@TypeOf(file_stream.reader())).init(allocator, file_stream.reader());
+    var file_stream = zarrow.IpcBufferReader.init(file_out.written());
+    var file_reader = zarrow.IpcFileReader(@TypeOf(&file_stream)).init(allocator, &file_stream);
     defer file_reader.deinit();
 
     const file_schema = try file_reader.readSchema();

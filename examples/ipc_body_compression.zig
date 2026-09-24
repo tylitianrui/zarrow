@@ -19,12 +19,12 @@ pub fn main() !void {
     var batch = try zarrow.RecordBatch.initBorrowed(allocator, schema, &[_]zarrow.ArrayRef{col});
     defer batch.deinit();
 
-    var out = std.array_list.Managed(u8).init(allocator);
+    var out = std.Io.Writer.Allocating.init(allocator);
     defer out.deinit();
 
-    var writer = zarrow.IpcStreamWriter(@TypeOf(out.writer())).initWithBodyCompression(
+    var writer = zarrow.IpcStreamWriter(@TypeOf(&out.writer)).initWithBodyCompression(
         allocator,
-        out.writer(),
+        &out.writer,
         zarrow.IpcBodyCompressionCodec.zstd,
     );
     defer writer.deinit();
@@ -33,10 +33,10 @@ pub fn main() !void {
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
 
-    std.debug.print("examples/ipc_body_compression.zig | wrote {d} bytes\n", .{out.items.len});
+    std.debug.print("examples/ipc_body_compression.zig | wrote {d} bytes\n", .{out.written().len});
 
-    var stream = std.io.fixedBufferStream(out.items);
-    var reader = zarrow.IpcStreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    var stream = std.Io.Reader.fixed(out.written());
+    var reader = zarrow.IpcStreamReader(@TypeOf(&stream)).init(allocator, &stream);
     defer reader.deinit();
 
     const read_schema = try reader.readSchema();

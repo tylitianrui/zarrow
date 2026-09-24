@@ -42,13 +42,13 @@ pub const FieldT = struct {
     dictionary: ?*org.apache.arrow.flatbuf.DictionaryEncodingT = null,
     /// children apply only to nested data types like Struct, List and Union. For
     /// primitive types children will have length 0.
-    children: std.ArrayList(org.apache.arrow.flatbuf.FieldT) = .{},
+    children: std.ArrayList(org.apache.arrow.flatbuf.FieldT) = .empty,
     /// User-defined metadata
-    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .{},
+    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .empty,
 
     pub fn Pack(rcv: FieldT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         const name_off = if (rcv.name.len != 0) try __builder.createString(rcv.name) else 0;
 

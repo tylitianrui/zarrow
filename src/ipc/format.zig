@@ -1,5 +1,12 @@
 const std = @import("std");
 
+pub fn IoError(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .pointer => |p| p.child.Error,
+        else => T.Error,
+    };
+}
+
 pub const StreamError = error{
     InvalidMessage,
     UnsupportedType,
@@ -53,7 +60,7 @@ pub fn skipPadding(reader: anytype, pad_len: usize) !void {
     var remaining = pad_len;
     while (remaining > 0) {
         const chunk = @min(remaining, buf.len);
-        try reader.readNoEof(buf[0..chunk]);
+        try reader.readSliceAll(buf[0..chunk]);
         remaining -= chunk;
     }
 }
@@ -66,6 +73,6 @@ pub fn writeInt(writer: anytype, comptime T: type, value: T) !void {
 
 pub fn readInt(reader: anytype, comptime T: type) !T {
     var buf: [@sizeOf(T)]u8 = undefined;
-    try reader.readNoEof(&buf);
+    try reader.readSliceAll(&buf);
     return std.mem.readInt(T, &buf, .little);
 }

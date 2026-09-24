@@ -102,7 +102,7 @@ fn datumTakeChunkedNullable(
         return Datum.fromChunked(chunks.slice(allocator, 0, 0) catch |err| return common.mapChunkedError(err));
     }
 
-    var out_chunks: std.ArrayList(ArrayRef) = .{};
+    var out_chunks: std.ArrayList(ArrayRef) = .empty;
     errdefer {
         for (out_chunks.items) |*chunk| chunk.release();
         out_chunks.deinit(allocator);
@@ -202,7 +202,7 @@ fn datumTakeArrayLikeNullable(
 ) KernelError!Datum {
     if (indices.len == 0) return builders.datumBuildEmptyLikeWithAllocator(allocator, out_type);
 
-    var pieces: std.ArrayList(ArrayRef) = .{};
+    var pieces: std.ArrayList(ArrayRef) = .empty;
     defer {
         for (pieces.items) |*piece| piece.release();
         pieces.deinit(allocator);
@@ -257,7 +257,7 @@ pub fn datumFilterSelectionIndices(
     logical_len: usize,
     options: FilterOptions,
 ) KernelError![]?usize {
-    var selections: std.ArrayList(?usize) = .{};
+    var selections: std.ArrayList(?usize) = .empty;
     defer selections.deinit(allocator);
 
     switch (predicate) {
@@ -366,7 +366,7 @@ pub fn datumSelect(indices: []const usize, values: []const Datum) KernelError!Da
     const out_type = values[0].dataType();
     if (indices.len == 0) return builders.datumBuildEmptyLikeWithAllocator(allocator, out_type);
 
-    var pieces: std.ArrayList(ArrayRef) = .{};
+    var pieces: std.ArrayList(ArrayRef) = .empty;
     defer {
         for (pieces.items) |*piece| piece.release();
         pieces.deinit(allocator);
@@ -397,7 +397,7 @@ pub fn datumSelectNullable(indices: []const ?usize, values: []const Datum) Kerne
     const out_type = values[0].dataType();
     if (indices.len == 0) return builders.datumBuildEmptyLikeWithAllocator(allocator, out_type);
 
-    var pieces: std.ArrayList(ArrayRef) = .{};
+    var pieces: std.ArrayList(ArrayRef) = .empty;
     defer {
         for (pieces.items) |*piece| piece.release();
         pieces.deinit(allocator);
@@ -438,7 +438,7 @@ pub fn datumFilter(datum: Datum, predicate: Datum, options: FilterOptions) Kerne
 
     if (output_len == 0) return builders.datumBuildEmptyLikeWithAllocator(allocator, out_type);
 
-    var pieces: std.ArrayList(ArrayRef) = .{};
+    var pieces: std.ArrayList(ArrayRef) = .empty;
     defer {
         for (pieces.items) |*piece| piece.release();
         pieces.deinit(allocator);

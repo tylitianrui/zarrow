@@ -111,7 +111,7 @@ pub const ChunkedArray = struct {
         const end = std.math.add(usize, offset, length) catch return error.SliceOutOfBounds;
         if (end > self.node.total_len) return error.SliceOutOfBounds;
 
-        var out_chunks: std.ArrayList(ArrayRef) = .{};
+        var out_chunks: std.ArrayList(ArrayRef) = .empty;
         defer {
             for (out_chunks.items) |*chunk_ref| {
                 chunk_ref.release();
@@ -143,7 +143,7 @@ pub const ChunkedArray = struct {
 
         const owned = try out_chunks.toOwnedSlice(allocator);
         errdefer releaseOwnedChunks(allocator, owned);
-        out_chunks = .{};
+        out_chunks = .empty;
 
         return fromOwnedChunks(allocator, self.node.data_type, owned, length);
     }

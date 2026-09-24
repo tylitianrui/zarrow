@@ -22,24 +22,24 @@ const Input = struct {
     }
 };
 
-pub fn main() !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa_state = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
-    const bytes = try readInput(allocator);
+    const bytes = try readInput(init, allocator);
     defer allocator.free(bytes);
 
     try runOne(allocator, bytes);
 }
 
-fn readInput(allocator: std.mem.Allocator) ![]u8 {
-    var args = try std.process.argsWithAllocator(allocator);
+fn readInput(init: std.process.Init, allocator: std.mem.Allocator) ![]u8 {
+    var args = try init.minimal.args.iterateAllocator(allocator);
     defer args.deinit();
 
     _ = args.next();
     if (args.next()) |path| {
-        return try std.fs.cwd().readFileAlloc(allocator, path, MAX_INPUT_BYTES);
+        return try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(MAX_INPUT_BYTES));
     }
     return error.MissingInputPath;
 }
