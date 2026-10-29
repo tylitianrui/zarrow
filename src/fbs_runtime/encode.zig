@@ -45,27 +45,18 @@ pub fn read(comptime T: type, buf: []const u8) T {
     const info = @typeInfo(T);
     switch (info) {
         .float => {
-            const I = @Type(.{ .int = .{
-                .signedness = .unsigned,
-                .bits = info.float.bits,
-            } });
+            const I = @Int(.unsigned, info.float.bits);
             return @bitCast(mem.readInt(I, buf[0..@sizeOf(T)], .little));
         },
         .bool => return buf[0] != 0,
         .@"enum" => {
             const Tag = info.@"enum".tag_type;
             const taginfo = @typeInfo(Tag);
-            const I = @Type(.{
-                .int = .{
-                    .signedness = taginfo.int.signedness,
-                    // ceilPowerOfTwo(@max()) is needed here for union(enum)
-                    // Tags which may have odd tag sizes
-                    .bits = comptime std.math.ceilPowerOfTwo(u16, @max(taginfo.int.bits, 8)) catch
-                        unreachable,
-                },
-            });
+            // Union enum tags may have odd bit widths; FlatBuffers stores whole bytes.
+            const I = @Int(taginfo.int.signedness, std.math.ceilPowerOfTwo(u16, @max(taginfo.int.bits, 8)) catch
+                unreachable);
             const i = mem.readInt(I, buf[0..@sizeOf(I)], .little);
-            return std.meta.intToEnum(T, i) catch
+            return std.enums.fromInt(T, i) orelse
                 std.debug.panic(
                     "invalid enum value '{}' for '{s}' with Tag '{s}' and I '{s}'",
                     .{ i, @typeName(T), @typeName(Tag), @typeName(I) },
@@ -80,24 +71,16 @@ pub fn write(comptime T: type, buf: []u8, t: T) void {
     const info = @typeInfo(T);
     switch (info) {
         .float => {
-            const I = @Type(.{ .int = .{
-                .signedness = .unsigned,
-                .bits = info.float.bits,
-            } });
+            const I = @Int(.unsigned, info.float.bits);
             mem.writeInt(I, buf[0..@sizeOf(T)], @as(I, @bitCast(t)), .little);
         },
         .bool => mem.writeInt(u8, buf[0..1], @intFromBool(t), .little),
         .@"enum" => {
             const Tag = info.@"enum".tag_type;
             const taginfo = @typeInfo(Tag);
-            const I = @Type(.{
-                .int = .{
-                    .signedness = taginfo.int.signedness,
-                    .bits = comptime std.math.ceilPowerOfTwo(u16, @max(8, taginfo.int.bits)) catch
-                        unreachable,
-                },
-            });
-            mem.writeInt(I, buf[0..@sizeOf(I)], @intFromEnum(t), .little);
+            const I = @Int(taginfo.int.signedness, std.math.ceilPowerOfTwo(u16, @max(8, taginfo.int.bits)) catch
+                unreachable);
+            mem.writeInt(I, buf[0..@sizeOf(I)], @backingInt(t), .little);
         },
         else => mem.writeInt(T, buf[0..@sizeOf(T)], t, .little),
     }

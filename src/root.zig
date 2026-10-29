@@ -65,6 +65,7 @@ pub const IpcStreamReader = ipc.StreamReader;
 pub const IpcStreamReaderOptions = ipc.StreamReaderOptions;
 pub const IpcFileWriter = ipc.FileWriter;
 pub const IpcFileWriterOptions = ipc.FileWriterOptions;
+pub const IpcBufferReader = ipc.BufferReader;
 pub const IpcFileReader = ipc.FileReader;
 pub const IpcFileReaderOptions = ipc.FileReaderOptions;
 pub const IpcOwnedSchema = ipc.OwnedSchema;

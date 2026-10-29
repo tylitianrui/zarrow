@@ -34,15 +34,15 @@ pub const __file_ext = "";
 
 /// File footer containing schema and block indexes.
 pub const FooterT = struct {
-    version: org.apache.arrow.flatbuf.MetadataVersion = @as(org.apache.arrow.flatbuf.MetadataVersion, @enumFromInt(0)),
+    version: org.apache.arrow.flatbuf.MetadataVersion = @as(org.apache.arrow.flatbuf.MetadataVersion, @fromBackingInt(@intCast(0))),
     schema: ?*org.apache.arrow.flatbuf.SchemaT = null,
-    dictionaries: std.ArrayList(org.apache.arrow.flatbuf.BlockT) = .{},
-    recordBatches: std.ArrayList(org.apache.arrow.flatbuf.BlockT) = .{},
-    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .{},
+    dictionaries: std.ArrayList(org.apache.arrow.flatbuf.BlockT) = .empty,
+    recordBatches: std.ArrayList(org.apache.arrow.flatbuf.BlockT) = .empty,
+    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .empty,
 
     pub fn Pack(rcv: FooterT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         const schema_off = if (rcv.schema) |x| try x.Pack(__builder, __pack_opts) else 0;
 
@@ -192,7 +192,7 @@ pub const Footer = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.MetadataVersion, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.MetadataVersion, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.MetadataVersion, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateVersion(rcv: Footer, n: org.apache.arrow.flatbuf.MetadataVersion) bool {
@@ -267,7 +267,7 @@ pub const Footer = struct {
         try __builder.startObject(5);
     }
     pub fn AddVersion(__builder: *Builder, version: org.apache.arrow.flatbuf.MetadataVersion) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.MetadataVersion, 0, version, @as(org.apache.arrow.flatbuf.MetadataVersion, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.MetadataVersion, 0, version, @as(org.apache.arrow.flatbuf.MetadataVersion, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddSchema(__builder: *Builder, schema: u32) !void {

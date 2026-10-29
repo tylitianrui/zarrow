@@ -24,12 +24,14 @@ const LZ4F_VERSION: c_uint = 100;
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    const payload =
-        ("Arrow IPC BodyCompression C API probe. 0123456789abcdef\n" ** 256) ++
-        ("This verifies vendored zstd/lz4 C functions are linked and working.\n" ** 64);
+    const prefix = "Arrow IPC BodyCompression C API probe. 0123456789abcdef\n";
+    const suffix = "This verifies vendored zstd/lz4 C functions are linked and working.\n";
+    const prefix_repetitions: [256][prefix.len]u8 = @splat(prefix.*);
+    const suffix_repetitions: [64][suffix.len]u8 = @splat(suffix.*);
+    const payload = std.mem.asBytes(&prefix_repetitions).* ++ std.mem.asBytes(&suffix_repetitions).*;
 
-    try verifyZstdRoundTrip(allocator, payload);
-    try verifyLz4FrameRoundTrip(allocator, payload);
+    try verifyZstdRoundTrip(allocator, &payload);
+    try verifyLz4FrameRoundTrip(allocator, &payload);
 
     std.debug.print("examples/ipc_compression_c_api.zig | success (payload={d} bytes)\n", .{payload.len});
 }

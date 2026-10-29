@@ -18,12 +18,12 @@ const ContainerMode = enum {
     file,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = try init.minimal.args.iterateAllocator(allocator);
     defer args.deinit();
     _ = args.next(); // exe
     const in_path = args.next() orelse {
@@ -60,13 +60,13 @@ pub fn main() !void {
         return error.InvalidArgs;
     }
 
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, in_path, std.math.maxInt(usize));
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, in_path, allocator, .limited(std.math.maxInt(usize)));
     defer allocator.free(bytes);
-    var fixed = std.io.fixedBufferStream(bytes);
+    var fixed = zarrow.IpcBufferReader.init(bytes);
 
     switch (container_mode) {
         .stream => {
-            var reader = zarrow.IpcStreamReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+            var reader = zarrow.IpcStreamReader(*std.Io.Reader).init(allocator, &fixed.interface);
             defer reader.deinit();
             if (fixture_case == .tensor) {
                 try checkTensorStream(&reader);
@@ -75,7 +75,7 @@ pub fn main() !void {
             }
         },
         .file => {
-            var reader = zarrow.IpcFileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+            var reader = zarrow.IpcFileReader(@TypeOf(&fixed)).init(allocator, &fixed);
             defer reader.deinit();
             if (fixture_case == .tensor) {
                 try checkTensorFile(&reader);

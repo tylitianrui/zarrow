@@ -2,30 +2,30 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 // Enforce supported Zig version at compile time.
-// master is pinned to Zig 0.15.x.
+// master targets the Zig 0.17 development series.
 comptime {
     const ver = builtin.zig_version;
-    if (ver.major != 0 or ver.minor != 15) {
-        @compileError("zarrow master requires Zig 0.15.x. For Zig 0.14.x use branch release/zig-0.14");
+    if (ver.major != 0 or ver.minor != 17) {
+        @compileError("zarrow master requires Zig 0.17.x. See README.md for the pinned compiler version.");
     }
 }
 
 fn configureIpcCompression(b: *std.Build, step: *std.Build.Step.Compile, deps_check: *std.Build.Step) void {
     step.step.dependOn(deps_check);
 
-    step.addIncludePath(b.path("vendor/zstd"));
-    step.addIncludePath(b.path("vendor/lz4"));
+    step.root_module.addIncludePath(b.path("vendor/zstd"));
+    step.root_module.addIncludePath(b.path("vendor/lz4"));
 
-    step.addCSourceFile(.{
+    step.root_module.addCSourceFile(.{
         .file = b.path("vendor/zstd/zstd.c"),
         .flags = &.{"-DZSTD_LEGACY_SUPPORT=0"},
     });
-    step.addCSourceFile(.{
+    step.root_module.addCSourceFile(.{
         .file = b.path("vendor/lz4/lz4_all.c"),
         .flags = &.{},
     });
 
-    step.linkLibC();
+    step.root_module.link_libc = true;
 }
 
 // Configure the zarrow package as a reusable module plus a dedicated test step.
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }),
     });
-    zarrow_c_lib.linkLibC();
+    zarrow_c_lib.root_module.link_libc = true;
     zarrow_c_lib.installHeader(b.path("include/zarrow_c_api.h"), "zarrow_c_api.h");
     b.installArtifact(zarrow_c_lib);
     const c_api_lib_step = b.step("c-api-lib", "Build and install zarrow C ABI shared library");
@@ -104,12 +104,12 @@ pub fn build(b: *std.Build) !void {
     configureIpcCompression(b, tests, &run_compression_deps_check.step);
 
     // Discover example files in the `examples` directory and wire them into the build.
-    const examples_dir = b.path("examples");
-    var dir = std.fs.cwd().openDir(examples_dir.getPath(b), .{ .iterate = true }) catch |err| {
+    b.dependOnDirectoryContents(b.path("examples"));
+    var dir = b.root.openDir(b.graph.io, "examples", .{ .iterate = true }) catch |err| {
         std.debug.print("warning: failed to open examples directory: {s}\n", .{@errorName(err)});
         return;
     };
-    defer dir.close();
+    defer dir.close(b.graph.io);
 
     // Wire the test artifact into a named build step for `zig build test`.
     const run_tests = b.addRunArtifact(tests);
@@ -129,7 +129,7 @@ pub fn build(b: *std.Build) !void {
     fuzz_layout_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
     const run_fuzz_layout = b.addRunArtifact(fuzz_layout_exe);
-    if (b.args) |args| run_fuzz_layout.addArgs(args);
+    run_fuzz_layout.addPassthruArgs();
     const fuzz_layout_step = b.step("fuzz-array-layout", "Run ArrayData.validateLayout fuzz harness");
     fuzz_layout_step.dependOn(&run_fuzz_layout.step);
 
@@ -145,21 +145,23 @@ pub fn build(b: *std.Build) !void {
     fuzz_ipc_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
     const run_fuzz_ipc = b.addRunArtifact(fuzz_ipc_exe);
-    if (b.args) |args| run_fuzz_ipc.addArgs(args);
+    run_fuzz_ipc.addPassthruArgs();
     const fuzz_ipc_step = b.step("fuzz-ipc-reader", "Run IPC reader fuzz harness");
     fuzz_ipc_step.dependOn(&run_fuzz_ipc.step);
 
     const fuzz_corpus_step = b.step("fuzz-corpus", "Replay built-in fuzz seed corpus");
-    const fuzz_corpus_root = b.pathFromRoot("fuzz/corpus");
+    b.dependOnDirectoryContents(b.path("fuzz/corpus/array-validate-layout"));
+    b.dependOnDirectoryContents(b.path("fuzz/corpus/ipc-reader"));
 
-    var corpus_layout_dir = std.fs.cwd().openDir(
-        b.pathJoin(&.{ fuzz_corpus_root, "array-validate-layout" }),
+    var corpus_layout_dir = b.root.openDir(
+        b.graph.io,
+        "fuzz/corpus/array-validate-layout",
         .{ .iterate = true },
     ) catch null;
     if (corpus_layout_dir) |*dir_handle| {
-        defer dir_handle.close();
+        defer dir_handle.close(b.graph.io);
         var it_corpus_layout = dir_handle.iterate();
-        while (it_corpus_layout.next() catch null) |entry| {
+        while (it_corpus_layout.next(b.graph.io) catch null) |entry| {
             if (entry.kind != .file) continue;
             const run_one = b.addRunArtifact(fuzz_layout_exe);
             run_one.addFileArg(b.path(b.fmt("fuzz/corpus/array-validate-layout/{s}", .{entry.name})));
@@ -169,14 +171,15 @@ pub fn build(b: *std.Build) !void {
         std.debug.print("warning: fuzz corpus missing: fuzz/corpus/array-validate-layout\n", .{});
     }
 
-    var corpus_ipc_dir = std.fs.cwd().openDir(
-        b.pathJoin(&.{ fuzz_corpus_root, "ipc-reader" }),
+    var corpus_ipc_dir = b.root.openDir(
+        b.graph.io,
+        "fuzz/corpus/ipc-reader",
         .{ .iterate = true },
     ) catch null;
     if (corpus_ipc_dir) |*dir_handle| {
-        defer dir_handle.close();
+        defer dir_handle.close(b.graph.io);
         var it_corpus_ipc = dir_handle.iterate();
-        while (it_corpus_ipc.next() catch null) |entry| {
+        while (it_corpus_ipc.next(b.graph.io) catch null) |entry| {
             if (entry.kind != .file) continue;
             const run_one = b.addRunArtifact(fuzz_ipc_exe);
             run_one.addFileArg(b.path(b.fmt("fuzz/corpus/ipc-reader/{s}", .{entry.name})));
@@ -189,7 +192,7 @@ pub fn build(b: *std.Build) !void {
     var run_default: ?*std.Build.Step = null;
     var run_all_step = b.step("examples", "Run all examples");
     var it = dir.iterate();
-    while (it.next() catch null) |entry| {
+    while (it.next(b.graph.io) catch null) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
 
@@ -233,7 +236,7 @@ pub fn build(b: *std.Build) !void {
     interop_writer_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
     const run_interop_writer = b.addRunArtifact(interop_writer_exe);
-    if (b.args) |args| run_interop_writer.addArgs(args);
+    run_interop_writer.addPassthruArgs();
     const interop_writer_step = b.step("interop-fixture-writer", "Write canonical IPC fixture with zarrow");
     interop_writer_step.dependOn(&run_interop_writer.step);
 
@@ -249,7 +252,7 @@ pub fn build(b: *std.Build) !void {
     interop_check_exe.root_module.addImport("zarrow", b.modules.get("zarrow").?);
 
     const run_interop_check = b.addRunArtifact(interop_check_exe);
-    if (b.args) |args| run_interop_check.addArgs(args);
+    run_interop_check.addPassthruArgs();
     const interop_check_step = b.step("interop-fixture-check", "Validate canonical IPC fixture with zarrow");
     interop_check_step.dependOn(&run_interop_check.step);
 
@@ -265,17 +268,17 @@ pub fn build(b: *std.Build) !void {
     compute_compat_exe.root_module.addImport("zarrow-core", b.modules.get("zarrow-core").?);
 
     const run_compute_compat = b.addRunArtifact(compute_compat_exe);
-    if (b.args) |args| run_compute_compat.addArgs(args);
+    run_compute_compat.addPassthruArgs();
     const compute_compat_step = b.step("compute-compat-check", "Run compute compatibility check cases");
     compute_compat_step.dependOn(&run_compute_compat.step);
 
     // Discover benchmark files in `benchmarks` and wire dedicated run steps.
-    const benches_dir = b.path("benchmarks");
-    var benches = std.fs.cwd().openDir(benches_dir.getPath(b), .{ .iterate = true }) catch |err| {
+    b.dependOnDirectoryContents(b.path("benchmarks"));
+    var benches = b.root.openDir(b.graph.io, "benchmarks", .{ .iterate = true }) catch |err| {
         std.debug.print("warning: failed to open benchmarks directory: {s}\n", .{@errorName(err)});
         return;
     };
-    defer benches.close();
+    defer benches.close(b.graph.io);
 
     var bench_all_step = b.step("benchmark", "Run all benchmarks (default mode)");
     var bench_smoke_step = b.step("benchmark-smoke", "Run all benchmarks in smoke mode");
@@ -287,7 +290,7 @@ pub fn build(b: *std.Build) !void {
     var prev_matrix_run: ?*std.Build.Step = null;
     var prev_ci_run: ?*std.Build.Step = null;
     var bench_it = benches.iterate();
-    while (bench_it.next() catch null) |entry| {
+    while (bench_it.next(b.graph.io) catch null) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
         if (!std.mem.endsWith(u8, entry.name, "_benchmark.zig")) continue;

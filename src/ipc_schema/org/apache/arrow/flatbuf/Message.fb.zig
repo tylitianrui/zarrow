@@ -31,14 +31,14 @@ pub const __file_ident: fb.Builder.Fid = "ARRO".*;
 pub const __file_ext = "";
 
 pub const MessageT = struct {
-    version: org.apache.arrow.flatbuf.MetadataVersion = @as(org.apache.arrow.flatbuf.MetadataVersion, @enumFromInt(0)),
-    header: org.apache.arrow.flatbuf.MessageHeaderT = @as(org.apache.arrow.flatbuf.MessageHeader.Tag, @enumFromInt(0)),
+    version: org.apache.arrow.flatbuf.MetadataVersion = @as(org.apache.arrow.flatbuf.MetadataVersion, @fromBackingInt(@intCast(0))),
+    header: org.apache.arrow.flatbuf.MessageHeaderT = @as(org.apache.arrow.flatbuf.MessageHeader.Tag, @fromBackingInt(@intCast(0))),
     bodyLength: i64 = 0,
-    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .{},
+    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .empty,
 
     pub fn Pack(rcv: MessageT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         const header_off = try rcv.header.Pack(__builder, __pack_opts);
 
@@ -131,7 +131,7 @@ pub const Message = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.MetadataVersion, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.MetadataVersion, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.MetadataVersion, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateVersion(rcv: Message, n: org.apache.arrow.flatbuf.MetadataVersion) bool {
@@ -143,7 +143,7 @@ pub const Message = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.MessageHeader.Tag, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.MessageHeader.Tag, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.MessageHeader.Tag, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateHeaderType(rcv: Message, n: org.apache.arrow.flatbuf.MessageHeader) bool {
@@ -193,11 +193,11 @@ pub const Message = struct {
         try __builder.startObject(5);
     }
     pub fn AddVersion(__builder: *Builder, version: org.apache.arrow.flatbuf.MetadataVersion) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.MetadataVersion, 0, version, @as(org.apache.arrow.flatbuf.MetadataVersion, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.MetadataVersion, 0, version, @as(org.apache.arrow.flatbuf.MetadataVersion, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddHeaderType(__builder: *Builder, header_type: org.apache.arrow.flatbuf.MessageHeader.Tag) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.MessageHeader.Tag, 1, header_type, @as(org.apache.arrow.flatbuf.MessageHeader.Tag, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.MessageHeader.Tag, 1, header_type, @as(org.apache.arrow.flatbuf.MessageHeader.Tag, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddHeader(__builder: *Builder, header: u32) !void {

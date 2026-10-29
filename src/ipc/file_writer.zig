@@ -75,7 +75,7 @@ pub fn FileWriter(comptime WriterType: type) type {
 
         pub fn initWithOptions(allocator: std.mem.Allocator, writer: WriterType, options: WriterOptions) FileError!Self {
             const stream_bytes = try allocator.create(std.ArrayList(u8));
-            stream_bytes.* = std.ArrayList(u8){};
+            stream_bytes.* = std.ArrayList(u8).empty;
 
             const collect_writer = CollectWriter{
                 .allocator = allocator,
@@ -108,25 +108,25 @@ pub fn FileWriter(comptime WriterType: type) type {
             self.allocator.destroy(self.stream_bytes);
         }
 
-        pub fn writeSchema(self: *Self, schema: Schema) (FileError || @TypeOf(self.writer).Error)!void {
+        pub fn writeSchema(self: *Self, schema: Schema) (FileError || format.IoError(@TypeOf(self.writer)))!void {
             if (self.finished) return FileError.AlreadyFinished;
             try self.stream.writeSchema(schema);
             try self.flushPendingMessages(false);
         }
 
-        pub fn writeRecordBatch(self: *Self, batch: RecordBatch) (FileError || @TypeOf(self.writer).Error)!void {
+        pub fn writeRecordBatch(self: *Self, batch: RecordBatch) (FileError || format.IoError(@TypeOf(self.writer)))!void {
             if (self.finished) return FileError.AlreadyFinished;
             try self.stream.writeRecordBatch(batch);
             try self.flushPendingMessages(false);
         }
 
-        pub fn writeTensorLikeMessage(self: *Self, metadata: TensorLikeMetadata, body: []const u8) (FileError || @TypeOf(self.writer).Error)!void {
+        pub fn writeTensorLikeMessage(self: *Self, metadata: TensorLikeMetadata, body: []const u8) (FileError || format.IoError(@TypeOf(self.writer)))!void {
             if (self.finished) return FileError.AlreadyFinished;
             try self.stream.writeTensorLikeMessage(metadata, body);
             try self.flushPendingMessages(false);
         }
 
-        pub fn writeEnd(self: *Self) (FileError || @TypeOf(self.writer).Error)!void {
+        pub fn writeEnd(self: *Self) (FileError || format.IoError(@TypeOf(self.writer)))!void {
             if (self.finished) return FileError.AlreadyFinished;
             try self.stream.writeEnd();
             try self.flushPendingMessages(true);
@@ -155,7 +155,7 @@ pub fn FileWriter(comptime WriterType: type) type {
             self.finished = true;
         }
 
-        fn ensureHeaderWritten(self: *Self) (@TypeOf(self.writer).Error || FileError)!void {
+        fn ensureHeaderWritten(self: *Self) (format.IoError(@TypeOf(self.writer)) || FileError)!void {
             if (self.header_written) return;
             try self.writer.writeAll(FileMagic);
             try self.writer.writeAll("\x00\x00");
@@ -172,7 +172,7 @@ pub fn FileWriter(comptime WriterType: type) type {
             self.stream_bytes.items.len = remain;
         }
 
-        fn flushPendingMessages(self: *Self, final: bool) (FileError || @TypeOf(self.writer).Error)!void {
+        fn flushPendingMessages(self: *Self, final: bool) (FileError || format.IoError(@TypeOf(self.writer)))!void {
             while (self.stream_bytes.items.len > 0) {
                 if (self.stream_bytes.items.len < 4) {
                     if (final) return error.InvalidMessage;
@@ -291,7 +291,7 @@ fn writeU32Le(writer: anytype, value: u32) !void {
 }
 
 fn encodeBlocksToString(allocator: std.mem.Allocator, blocks: []const fbs.BlockT) error{OutOfMemory}![]u8 {
-    var buf = std.ArrayList(u8){};
+    var buf = std.ArrayList(u8).empty;
     defer buf.deinit(allocator);
     for (blocks, 0..) |blk, i| {
         if (i > 0) try buf.append(allocator, ',');
@@ -315,7 +315,7 @@ fn buildFooterBytes(
     defer arena.deinit();
     const aa = arena.allocator();
 
-    var custom_metadata = std.ArrayList(fbs.KeyValueT){};
+    var custom_metadata = std.ArrayList(fbs.KeyValueT).empty;
 
     if (tensor_blocks.items.len > 0) {
         const encoded = try encodeBlocksToString(aa, tensor_blocks.items);
@@ -380,7 +380,7 @@ test "ipc file writer emits arrow file magic and footer" {
     var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]@import("../array/array_ref.zig").ArrayRef{id_ref});
     defer batch.deinit();
 
-    var out = std.ArrayList(u8){};
+    var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -415,7 +415,7 @@ test "ipc file writer can emit footer metadata version V4" {
     };
     const schema = Schema{ .fields = fields[0..] };
 
-    var out = std.ArrayList(u8){};
+    var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -490,7 +490,7 @@ test "ipc file writer streams incrementally and accepts tensor-like messages" {
         },
     };
 
-    var out = std.ArrayList(u8){};
+    var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -512,8 +512,8 @@ test "ipc file writer streams incrementally and accepts tensor-like messages" {
     try writer.writeEnd();
     try std.testing.expectEqual(@as(usize, 0), writer.stream_bytes.items.len);
 
-    var file_stream = std.io.fixedBufferStream(out.items);
-    var reader = @import("file_reader.zig").FileReader(@TypeOf(file_stream.reader())).init(allocator, file_stream.reader());
+    var file_stream = @import("buffer_reader.zig").BufferReader.init(out.items);
+    var reader = @import("file_reader.zig").FileReader(@TypeOf(&file_stream)).init(allocator, &file_stream);
     defer reader.deinit();
 
     const out_schema = try reader.readSchema();
@@ -536,7 +536,7 @@ test "ipc file writer rejects damaged metadata root offset" {
     };
     const schema = Schema{ .fields = fields[0..] };
 
-    var out = std.ArrayList(u8){};
+    var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -566,7 +566,7 @@ test "ipc file writer rejects damaged metadata header type" {
     };
     const schema = Schema{ .fields = fields[0..] };
 
-    var out = std.ArrayList(u8){};
+    var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,

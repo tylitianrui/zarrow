@@ -34,20 +34,20 @@ pub fn main() !void {
     defer batch.deinit();
 
     // ── Write IPC stream to an in-memory buffer ───────────────────────────────
-    var buf = std.array_list.Managed(u8).init(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
     defer buf.deinit();
 
-    var writer = zarrow.IpcStreamWriter(@TypeOf(buf.writer())).init(allocator, buf.writer());
+    var writer = zarrow.IpcStreamWriter(@TypeOf(&buf.writer)).init(allocator, &buf.writer);
     defer writer.deinit();
     try writer.writeSchema(schema);
     try writer.writeRecordBatch(batch);
     try writer.writeEnd();
 
-    std.debug.print("examples/ipc_stream.zig | wrote {d} bytes\n", .{buf.items.len});
+    std.debug.print("examples/ipc_stream.zig | wrote {d} bytes\n", .{buf.written().len});
 
     // ── Read back from the buffer ─────────────────────────────────────────────
-    var stream = std.io.fixedBufferStream(buf.items);
-    var reader = zarrow.IpcStreamReader(@TypeOf(stream.reader())).init(allocator, stream.reader());
+    var stream = std.Io.Reader.fixed(buf.written());
+    var reader = zarrow.IpcStreamReader(@TypeOf(&stream)).init(allocator, &stream);
     defer reader.deinit();
 
     const owned_schema = try reader.readSchema();

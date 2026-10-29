@@ -72,27 +72,35 @@ The project favors correctness, explicit ownership, interop testing, and spec-al
 
 ## Requirements
 
-`master` currently targets Zig `0.15.x`.
+`master` currently targets the Zig `0.17` development series. The Nix shell and CI
+pin `0.17.0-dev.2267+48abf1a34` (nightly from 2026-09-22); Zig 0.17 has not
+yet had a stable release.
 
 Because Zig has frequent breaking changes between compiler versions, `zarrow` maintains versioned tags that encode both:
 
 - `v<zarrow-version>` = zarrow release version
-- `zig0.15` = Zig compiler major/minor compatibility target
+- `zig0.16` = Zig compiler major/minor compatibility target
 
-For example, `v0.0.2-zig0.15` means:
+For example, `v0.0.2-zig0.16` means:
 
 - zarrow release version `0.0.2`
-- Zig compatibility target `0.15.x`
+- Zig compatibility target `0.16.x`
 
 Recommended tag mapping:
 
 | Zig version | Use tag |
 | --- | --- |
+| `0.17.0-dev.2267+48abf1a34` | `master` (development) |
+| `0.16.x` | `v<zarrow-version>-zig0.16` |
 | `0.15.x` | `v<zarrow-version>-zig0.15` |
 | `0.14.x` | `v<zarrow-version>-zig0.14` |
 | `0.13.x` | `v<zarrow-version>-zig0.13` |
 
 If you are using older Zig versions, use the matching `-zig0.xx` tag instead of `master`.
+
+IPC streams use Zig's `std.Io.Reader` and `std.Io.Writer` interfaces; see
+[`examples/ipc_stream.zig`](examples/ipc_stream.zig). For IPC files, pass a
+`*std.Io.File.Reader` or `*zarrow.IpcBufferReader` to `IpcFileReader`.
 
 ---
 
@@ -107,7 +115,7 @@ zig fetch --save "git+https://github.com/tylitianrui/zarrow#master"
 For release-pinned usage, prefer a release tag:
 
 ```sh
-zig fetch --save "git+https://github.com/tylitianrui/zarrow#v<zarrow-version>-zig0.15"
+zig fetch --save "git+https://github.com/tylitianrui/zarrow#v<zarrow-version>-zig0.16"
 ```
 
 Then wire the module in your `build.zig`:
@@ -282,12 +290,32 @@ Available examples include builders for primitive, unsigned integer, boolean, st
 
 ## Development
 
-Clone the repository and run tests:
+Clone the repository:
 
 ```sh
 git clone https://github.com/tylitianrui/zarrow.git
 cd zarrow
+```
+
+Optionally, use Nix to provide Zig `0.17.0-dev.2267+48abf1a34` from
+[zig-overlay](https://github.com/mitchellh/zig-overlay). With Nix installed and
+the `nix-command` and `flakes` features enabled, enter the development shell
+from the repository root:
+
+```sh
+nix develop
+```
+
+With Zig installed or the Nix shell active, run tests:
+
+```sh
 zig build test
+```
+
+You can also run tests directly through Nix without opening an interactive shell:
+
+```sh
+nix develop --command zig build test
 ```
 
 Run formatting before opening a PR:

@@ -51,7 +51,7 @@ const ExportedStreamPrivate = struct {
     batches: []RecordBatch,
     next_batch_index: usize = 0,
     has_last_error: bool = false,
-    last_error_buf: [256]u8 = [_]u8{0} ** 256,
+    last_error_buf: [256]u8 = @splat(0),
 };
 
 const C_OK: c_int = 0;
@@ -112,7 +112,7 @@ pub fn importRecordBatchStreamOwned(allocator: std.mem.Allocator, c_stream: *Arr
 
     const top_level_type = DataType{ .struct_ = .{ .fields = schema_owned.schema.fields } };
 
-    var out_batches = std.ArrayList(RecordBatch){};
+    var out_batches = std.ArrayList(RecordBatch).empty;
     errdefer {
         for (out_batches.items) |*batch| {
             batch.deinit();

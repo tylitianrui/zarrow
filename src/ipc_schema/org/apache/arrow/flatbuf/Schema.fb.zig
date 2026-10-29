@@ -36,15 +36,15 @@ pub const SchemaT = struct {
     /// endianness of the buffer
     /// it is Little Endian by default
     /// if endianness doesn't match the underlying system then the vectors need to be converted
-    endianness: org.apache.arrow.flatbuf.Endianness = @as(org.apache.arrow.flatbuf.Endianness, @enumFromInt(0)),
-    fields: std.ArrayList(org.apache.arrow.flatbuf.FieldT) = .{},
-    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .{},
+    endianness: org.apache.arrow.flatbuf.Endianness = @as(org.apache.arrow.flatbuf.Endianness, @fromBackingInt(@intCast(0))),
+    fields: std.ArrayList(org.apache.arrow.flatbuf.FieldT) = .empty,
+    custom_metadata: std.ArrayList(org.apache.arrow.flatbuf.KeyValueT) = .empty,
     /// Features used in the stream/file.
-    features: std.ArrayList(i64) = .{},
+    features: std.ArrayList(i64) = .empty,
 
     pub fn Pack(rcv: SchemaT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         var fields_off: u32 = 0;
         if (rcv.fields.items.len != 0) {
@@ -185,7 +185,7 @@ pub const Schema = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.Endianness, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.Endianness, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.Endianness, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateEndianness(rcv: Schema, n: org.apache.arrow.flatbuf.Endianness) bool {
@@ -261,7 +261,7 @@ pub const Schema = struct {
         try __builder.startObject(4);
     }
     pub fn AddEndianness(__builder: *Builder, endianness: org.apache.arrow.flatbuf.Endianness) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.Endianness, 0, endianness, @as(org.apache.arrow.flatbuf.Endianness, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.Endianness, 0, endianness, @as(org.apache.arrow.flatbuf.Endianness, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddFields(__builder: *Builder, fields: u32) !void {

@@ -19,11 +19,11 @@ const todo = common.todo;
 const Builder = @This();
 
 alloc: mem.Allocator,
-bytes: std.ArrayList(u8) = .{},
+bytes: std.ArrayList(u8) = .empty,
 minalign: u32,
-vtable: std.ArrayList(u32) = .{},
+vtable: std.ArrayList(u32) = .empty,
 object_end: u32,
-vtables: std.ArrayList(u32) = .{},
+vtables: std.ArrayList(u32) = .empty,
 head: u32,
 nested: bool,
 finished: bool,

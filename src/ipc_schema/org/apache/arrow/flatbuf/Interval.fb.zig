@@ -24,11 +24,11 @@ const org = struct {
 };
 
 pub const IntervalT = struct {
-    unit: org.apache.arrow.flatbuf.IntervalUnit = @as(org.apache.arrow.flatbuf.IntervalUnit, @enumFromInt(0)),
+    unit: org.apache.arrow.flatbuf.IntervalUnit = @as(org.apache.arrow.flatbuf.IntervalUnit, @fromBackingInt(@intCast(0))),
 
     pub fn Pack(rcv: IntervalT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         try Interval.Start(__builder);
         try Interval.AddUnit(__builder, rcv.unit);
@@ -77,7 +77,7 @@ pub const Interval = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.IntervalUnit, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.IntervalUnit, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.IntervalUnit, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateUnit(rcv: Interval, n: org.apache.arrow.flatbuf.IntervalUnit) bool {
@@ -88,7 +88,7 @@ pub const Interval = struct {
         try __builder.startObject(1);
     }
     pub fn AddUnit(__builder: *Builder, unit: org.apache.arrow.flatbuf.IntervalUnit) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.IntervalUnit, 0, unit, @as(org.apache.arrow.flatbuf.IntervalUnit, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.IntervalUnit, 0, unit, @as(org.apache.arrow.flatbuf.IntervalUnit, @fromBackingInt(@intCast(0))));
     }
 
     pub fn End(__builder: *Builder) !u32 {

@@ -28,12 +28,12 @@ const org = struct {
 /// optionally typeIds provides an indirection between the child offset and the type id
 /// for each child `typeIds[offset]` is the id used in the type vector
 pub const UnionT = struct {
-    mode: org.apache.arrow.flatbuf.UnionMode = @as(org.apache.arrow.flatbuf.UnionMode, @enumFromInt(0)),
-    typeIds: std.ArrayList(i32) = .{},
+    mode: org.apache.arrow.flatbuf.UnionMode = @as(org.apache.arrow.flatbuf.UnionMode, @fromBackingInt(@intCast(0))),
+    typeIds: std.ArrayList(i32) = .empty,
 
     pub fn Pack(rcv: UnionT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         var typeIds_off: u32 = 0;
         if (rcv.typeIds.items.len != 0) {
@@ -107,7 +107,7 @@ pub const Union = struct {
         if (o != 0) {
             return rcv._tab.read(org.apache.arrow.flatbuf.UnionMode, o + rcv._tab.pos);
         }
-        return @as(org.apache.arrow.flatbuf.UnionMode, @enumFromInt(0));
+        return @as(org.apache.arrow.flatbuf.UnionMode, @fromBackingInt(@intCast(0)));
     }
 
     pub fn MutateMode(rcv: Union, n: org.apache.arrow.flatbuf.UnionMode) bool {
@@ -144,7 +144,7 @@ pub const Union = struct {
         try __builder.startObject(2);
     }
     pub fn AddMode(__builder: *Builder, mode: org.apache.arrow.flatbuf.UnionMode) !void {
-        try __builder.prependSlot(org.apache.arrow.flatbuf.UnionMode, 0, mode, @as(org.apache.arrow.flatbuf.UnionMode, @enumFromInt(0)));
+        try __builder.prependSlot(org.apache.arrow.flatbuf.UnionMode, 0, mode, @as(org.apache.arrow.flatbuf.UnionMode, @fromBackingInt(@intCast(0))));
     }
 
     pub fn AddTypeIds(__builder: *Builder, typeIds: u32) !void {

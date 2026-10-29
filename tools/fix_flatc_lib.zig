@@ -1,8 +1,8 @@
 const std = @import("std");
 
-fn patchBackslashes(allocator: std.mem.Allocator, path: []const u8) !void {
+fn patchBackslashes(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
     const max_bytes: usize = 16 * 1024 * 1024;
-    const original = try std.fs.cwd().readFileAlloc(allocator, path, max_bytes);
+    const original = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_bytes));
     defer allocator.free(original);
 
     const fixed = try allocator.dupe(u8, original);
@@ -16,12 +16,12 @@ fn patchBackslashes(allocator: std.mem.Allocator, path: []const u8) !void {
         }
     }
     if (!changed) return;
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = fixed });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = fixed });
 }
 
-fn patchUnionMissingSemicolon(allocator: std.mem.Allocator, path: []const u8) !void {
+fn patchUnionMissingSemicolon(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
     const max_bytes: usize = 16 * 1024 * 1024;
-    const original = std.fs.cwd().readFileAlloc(allocator, path, max_bytes) catch |err| switch (err) {
+    const original = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_bytes)) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
@@ -33,24 +33,24 @@ fn patchUnionMissingSemicolon(allocator: std.mem.Allocator, path: []const u8) !v
     defer allocator.free(fixed);
 
     if (std.mem.eql(u8, original, fixed)) return;
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = fixed });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = fixed });
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = try init.minimal.args.iterateAllocator(allocator);
     defer args.deinit();
 
     _ = args.next(); // executable name
     const path = args.next() orelse return error.MissingPathArgument;
 
-    try patchBackslashes(allocator, path);
+    try patchBackslashes(init.io, allocator, path);
 
     const dir = std.fs.path.dirname(path) orelse return;
     const union_path = try std.fs.path.join(allocator, &.{ dir, "org", "apache", "arrow", "flatbuf", "Union.fb.zig" });
     defer allocator.free(union_path);
-    try patchUnionMissingSemicolon(allocator, union_path);
+    try patchUnionMissingSemicolon(init.io, allocator, union_path);
 }

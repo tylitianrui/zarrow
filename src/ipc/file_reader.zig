@@ -52,18 +52,15 @@ const IndexedFile = struct {
     }
 };
 
+/// ReaderType is a pointer to a seekable reader with an std.Io.Reader interface,
+/// such as std.Io.File.Reader or BufferReader. The caller owns the reader.
 pub fn FileReader(comptime ReaderType: type) type {
-    const ReaderReadError = @TypeOf(@as(ReaderType, undefined)).Error;
-    const ReaderContextPtr = @TypeOf(@as(ReaderType, undefined).context);
-    const ReaderContext = switch (@typeInfo(ReaderContextPtr)) {
-        .pointer => |p| p.child,
-        else => ReaderContextPtr,
-    };
+    const ReaderContext = @typeInfo(ReaderType).pointer.child;
     const ReaderSeekToReturn = @typeInfo(@TypeOf(ReaderContext.seekTo)).@"fn".return_type.?;
     const ReaderSeekError = @typeInfo(ReaderSeekToReturn).error_union.error_set;
-    const ReaderGetEndPosReturn = @typeInfo(@TypeOf(ReaderContext.getEndPos)).@"fn".return_type.?;
-    const ReaderGetEndPosError = @typeInfo(ReaderGetEndPosReturn).error_union.error_set;
-    const ReaderIoError = ReaderReadError || ReaderSeekError || ReaderGetEndPosError || error{EndOfStream};
+    const ReaderGetSizeReturn = @typeInfo(@TypeOf(ReaderContext.getSize)).@"fn".return_type.?;
+    const ReaderGetSizeError = @typeInfo(ReaderGetSizeReturn).error_union.error_set;
+    const ReaderIoError = std.Io.Reader.Error || ReaderSeekError || ReaderGetSizeError;
 
     return struct {
         allocator: std.mem.Allocator,
@@ -206,7 +203,7 @@ pub fn FileReader(comptime ReaderType: type) type {
 
             const header_len = FileMagic.len + 2;
             const trailer_len = 4 + FileMagic.len;
-            const end_pos = try self.reader.context.getEndPos();
+            const end_pos = try self.reader.getSize();
             const file_len = std.math.cast(usize, end_pos) orelse return error.FooterTooLarge;
             if (file_len < header_len + trailer_len) return error.InvalidFile;
 
@@ -322,9 +319,9 @@ pub fn FileReader(comptime ReaderType: type) type {
         }
 
         fn readAtNoEof(self: *Self, offset: usize, out: []u8) ReaderIoError!void {
-            try self.reader.context.seekTo(@intCast(offset));
+            try self.reader.seekTo(@intCast(offset));
             if (out.len == 0) return;
-            try self.reader.readNoEof(out);
+            try self.reader.interface.readSliceAll(out);
         }
 
         fn buildIndexedFromFooter(
@@ -409,7 +406,7 @@ pub fn FileReader(comptime ReaderType: type) type {
             expected_header: MessageHeaderKind,
             meta_key: []const u8,
         ) (FileError || ReaderIoError)![]IndexedBlock {
-            var blocks = std.ArrayList(IndexedBlock){};
+            var blocks = std.ArrayList(IndexedBlock).empty;
             errdefer blocks.deinit(self.allocator);
 
             for (footer_t.custom_metadata.items) |kv| {
@@ -580,11 +577,11 @@ const IndexedBlock = struct {
 };
 
 fn messageHeaderFromTypeTag(header_type: u8) MessageHeaderKind {
-    if (header_type == @intFromEnum(fbs.MessageHeader.Schema)) return .schema;
-    if (header_type == @intFromEnum(fbs.MessageHeader.DictionaryBatch)) return .dictionary_batch;
-    if (header_type == @intFromEnum(fbs.MessageHeader.RecordBatch)) return .record_batch;
-    if (header_type == @intFromEnum(fbs.MessageHeader.Tensor)) return .tensor;
-    if (header_type == @intFromEnum(fbs.MessageHeader.SparseTensor)) return .sparse_tensor;
+    if (header_type == @backingInt(fbs.MessageHeader.Schema)) return .schema;
+    if (header_type == @backingInt(fbs.MessageHeader.DictionaryBatch)) return .dictionary_batch;
+    if (header_type == @backingInt(fbs.MessageHeader.RecordBatch)) return .record_batch;
+    if (header_type == @backingInt(fbs.MessageHeader.Tensor)) return .tensor;
+    if (header_type == @backingInt(fbs.MessageHeader.SparseTensor)) return .sparse_tensor;
     return .other;
 }
 
@@ -630,7 +627,7 @@ test "ipc file reader roundtrips batches via stream reader" {
     var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{ ids, names });
     defer batch.deinit();
 
-    var file_bytes = std.ArrayList(u8){};
+    var file_bytes = std.ArrayList(u8).empty;
     defer file_bytes.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -647,8 +644,8 @@ test "ipc file reader roundtrips batches via stream reader" {
     try fw.writeRecordBatch(batch);
     try fw.writeEnd();
 
-    var fixed = std.io.fixedBufferStream(file_bytes.items);
-    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    var fixed = @import("buffer_reader.zig").BufferReader.init(file_bytes.items);
+    var fr = FileReader(@TypeOf(&fixed)).init(allocator, &fixed);
     defer fr.deinit();
 
     const out_schema = try fr.readSchema();
@@ -672,6 +669,27 @@ test "ipc file reader roundtrips batches via stream reader" {
     try std.testing.expectEqualStrings("cc", try name_arr.value(2));
 
     try std.testing.expect((try fr.nextRecordBatch()) == null);
+
+    // Exercise buffered file I/O as well as the in-memory seekable reader.
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "batch.arrow", .data = file_bytes.items });
+    const file = try tmp.dir.openFile(io, "batch.arrow", .{});
+    defer file.close(io);
+    var read_buffer: [17]u8 = undefined;
+    var file_input = file.reader(io, &read_buffer);
+    var disk_reader = FileReader(*std.Io.File.Reader).init(allocator, &file_input);
+    defer disk_reader.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), try disk_reader.recordBatchCount());
+    var disk_batch = try disk_reader.readRecordBatchAt(0);
+    defer disk_batch.deinit();
+    const disk_ids = prim.PrimitiveArray(i32){ .data = disk_batch.columns[0].data() };
+    try std.testing.expectEqual(@as(i32, 30), try disk_ids.value(2));
+    var reread_batch = try disk_reader.readRecordBatchAt(0);
+    defer reread_batch.deinit();
+    try std.testing.expectEqual(@as(usize, 3), reread_batch.numRows());
 }
 
 test "ipc file reader supports indexed record batch access" {
@@ -706,7 +724,7 @@ test "ipc file reader supports indexed record batch access" {
     var batch2 = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{b2_ids});
     defer batch2.deinit();
 
-    var file_bytes = std.ArrayList(u8){};
+    var file_bytes = std.ArrayList(u8).empty;
     defer file_bytes.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -724,8 +742,8 @@ test "ipc file reader supports indexed record batch access" {
     try fw.writeRecordBatch(batch2);
     try fw.writeEnd();
 
-    var fixed = std.io.fixedBufferStream(file_bytes.items);
-    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    var fixed = @import("buffer_reader.zig").BufferReader.init(file_bytes.items);
+    var fr = FileReader(@TypeOf(&fixed)).init(allocator, &fixed);
     defer fr.deinit();
 
     _ = try fr.readSchema();
@@ -810,7 +828,7 @@ test "ipc file reader rebuilds dictionary state for indexed reads" {
     var batch_2 = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{dict_col_2});
     defer batch_2.deinit();
 
-    var file_bytes = std.ArrayList(u8){};
+    var file_bytes = std.ArrayList(u8).empty;
     defer file_bytes.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -828,8 +846,8 @@ test "ipc file reader rebuilds dictionary state for indexed reads" {
     try fw.writeRecordBatch(batch_2);
     try fw.writeEnd();
 
-    var fixed = std.io.fixedBufferStream(file_bytes.items);
-    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    var fixed = @import("buffer_reader.zig").BufferReader.init(file_bytes.items);
+    var fr = FileReader(@TypeOf(&fixed)).init(allocator, &fixed);
     defer fr.deinit();
 
     _ = try fr.readSchema();
@@ -875,7 +893,7 @@ test "ipc file reader rejects footer with out-of-bounds block offset" {
     var batch = try record_batch.RecordBatch.initBorrowed(allocator, schema, &[_]@import("../array/array_ref.zig").ArrayRef{ids});
     defer batch.deinit();
 
-    var file_bytes = std.ArrayList(u8){};
+    var file_bytes = std.ArrayList(u8).empty;
     defer file_bytes.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -911,7 +929,7 @@ test "ipc file reader rejects footer with out-of-bounds block offset" {
     defer allocator.free(new_footer_bytes);
 
     // Rebuild file bytes with the corrupted footer.
-    var corrupted = std.ArrayList(u8){};
+    var corrupted = std.ArrayList(u8).empty;
     defer corrupted.deinit(allocator);
     try corrupted.appendSlice(allocator, file_bytes.items[0..footer_start]);
     try corrupted.appendSlice(allocator, new_footer_bytes);
@@ -920,8 +938,8 @@ test "ipc file reader rejects footer with out-of-bounds block offset" {
     try corrupted.appendSlice(allocator, new_footer_len[0..]);
     try corrupted.appendSlice(allocator, FileMagic);
 
-    var fixed = std.io.fixedBufferStream(corrupted.items);
-    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    var fixed = @import("buffer_reader.zig").BufferReader.init(corrupted.items);
+    var fr = FileReader(@TypeOf(&fixed)).init(allocator, &fixed);
     defer fr.deinit();
     try std.testing.expectError(error.InvalidFile, fr.readSchema());
 }
@@ -951,7 +969,7 @@ test "ipc file reader decodes using footer block index without stream reconstruc
     var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{ids});
     defer batch.deinit();
 
-    var file_bytes = std.ArrayList(u8){};
+    var file_bytes = std.ArrayList(u8).empty;
     defer file_bytes.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -990,7 +1008,7 @@ test "ipc file reader decodes using footer block index without stream reconstruc
         if (blk.offset >= @as(i64, @intCast(insert_pos))) blk.offset += junk.len;
     }
 
-    var shifted_prefix = std.ArrayList(u8){};
+    var shifted_prefix = std.ArrayList(u8).empty;
     defer shifted_prefix.deinit(allocator);
     try shifted_prefix.appendSlice(allocator, file_bytes.items[0..insert_pos]);
     try shifted_prefix.appendSlice(allocator, junk[0..]);
@@ -999,7 +1017,7 @@ test "ipc file reader decodes using footer block index without stream reconstruc
     const footer_bytes_new = try fbs_lite_builder.packFooterBytes(allocator, footer_t);
     defer allocator.free(footer_bytes_new);
 
-    var rewritten = std.ArrayList(u8){};
+    var rewritten = std.ArrayList(u8).empty;
     defer rewritten.deinit(allocator);
     try rewritten.appendSlice(allocator, shifted_prefix.items);
     try rewritten.appendSlice(allocator, footer_bytes_new);
@@ -1009,8 +1027,8 @@ test "ipc file reader decodes using footer block index without stream reconstruc
     try rewritten.appendSlice(allocator, FileMagic);
 
     // Reader should succeed because it decodes directly from footer-indexed blocks.
-    var fixed = std.io.fixedBufferStream(rewritten.items);
-    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    var fixed = @import("buffer_reader.zig").BufferReader.init(rewritten.items);
+    var fr = FileReader(@TypeOf(&fixed)).init(allocator, &fixed);
     defer fr.deinit();
 
     const out_schema = try fr.readSchema();
@@ -1049,7 +1067,7 @@ test "ipc file reader accepts file with leading padding before schema message" {
     var batch = try RecordBatch.initBorrowed(allocator, schema, &[_]zarray.ArrayRef{ids});
     defer batch.deinit();
 
-    var file_bytes = std.ArrayList(u8){};
+    var file_bytes = std.ArrayList(u8).empty;
     defer file_bytes.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -1083,7 +1101,7 @@ test "ipc file reader accepts file with leading padding before schema message" {
     const footer_bytes_new = try fbs_lite_builder.packFooterBytes(allocator, footer_t);
     defer allocator.free(footer_bytes_new);
 
-    var rewritten = std.ArrayList(u8){};
+    var rewritten = std.ArrayList(u8).empty;
     defer rewritten.deinit(allocator);
     try rewritten.appendSlice(allocator, file_bytes.items[0..header_len]);
     try rewritten.appendNTimes(allocator, 0, @intCast(lead_pad_len));
@@ -1094,8 +1112,8 @@ test "ipc file reader accepts file with leading padding before schema message" {
     try rewritten.appendSlice(allocator, new_footer_len[0..]);
     try rewritten.appendSlice(allocator, FileMagic);
 
-    var fixed = std.io.fixedBufferStream(rewritten.items);
-    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    var fixed = @import("buffer_reader.zig").BufferReader.init(rewritten.items);
+    var fr = FileReader(@TypeOf(&fixed)).init(allocator, &fixed);
     defer fr.deinit();
 
     const out_schema = try fr.readSchema();
@@ -1165,7 +1183,7 @@ test "ipc file roundtrips tensor and sparse tensor messages" {
     const schema_val = Schema{ .fields = fields[0..] };
 
     // Write file.
-    var file_bytes = std.ArrayList(u8){};
+    var file_bytes = std.ArrayList(u8).empty;
     defer file_bytes.deinit(allocator);
     const Sink = struct {
         allocator: std.mem.Allocator,
@@ -1184,8 +1202,8 @@ test "ipc file roundtrips tensor and sparse tensor messages" {
     try fw.writeEnd();
 
     // Read back.
-    var fixed = std.io.fixedBufferStream(file_bytes.items);
-    var fr = FileReader(@TypeOf(fixed.reader())).init(allocator, fixed.reader());
+    var fixed = @import("buffer_reader.zig").BufferReader.init(file_bytes.items);
+    var fr = FileReader(@TypeOf(&fixed)).init(allocator, &fixed);
     defer fr.deinit();
 
     _ = try fr.readSchema();

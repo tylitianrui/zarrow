@@ -67,7 +67,7 @@ pub const AggregateSession = struct {
     }
 };
 
-const function_kind_count = @typeInfo(FunctionKind).@"enum".fields.len;
+const function_kind_count = @typeInfo(FunctionKind).@"enum".field_names.len;
 const FunctionIndexMap = std.StringHashMap(usize);
 
 pub const Function = struct {
@@ -98,7 +98,7 @@ pub const FunctionRegistry = struct {
     pub fn init(allocator: std.mem.Allocator) FunctionRegistry {
         return .{
             .allocator = allocator,
-            .functions = .{},
+            .functions = .empty,
             .function_index_by_kind = initFunctionIndexMaps(allocator),
         };
     }
@@ -129,7 +129,7 @@ pub const FunctionRegistry = struct {
             .allocator = self.allocator,
             .name = try self.allocator.dupe(u8, name),
             .kind = kind,
-            .kernels = .{},
+            .kernels = .empty,
         };
         errdefer self.allocator.free(entry.name);
         try entry.kernels.append(self.allocator, kernel);
@@ -364,11 +364,11 @@ pub const FunctionRegistry = struct {
     }
 
     fn getIndexMap(self: *FunctionRegistry, kind: FunctionKind) *FunctionIndexMap {
-        return &self.function_index_by_kind[@intFromEnum(kind)];
+        return &self.function_index_by_kind[@backingInt(kind)];
     }
 
     fn getIndexMapConst(self: *const FunctionRegistry, kind: FunctionKind) *const FunctionIndexMap {
-        return &self.function_index_by_kind[@intFromEnum(kind)];
+        return &self.function_index_by_kind[@backingInt(kind)];
     }
 };
 

@@ -36,14 +36,14 @@ pub const RecordBatchT = struct {
     /// length
     length: i64 = 0,
     /// Nodes correspond to the pre-ordered flattened logical schema
-    nodes: std.ArrayList(org.apache.arrow.flatbuf.FieldNodeT) = .{},
+    nodes: std.ArrayList(org.apache.arrow.flatbuf.FieldNodeT) = .empty,
     /// Buffers correspond to the pre-ordered flattened buffer tree
     ///
     /// The number of buffers appended to this list depends on the schema. For
     /// example, most primitive arrays will have 2 buffers, 1 for the validity
     /// bitmap and 1 for the values. For struct arrays, there will only be a
     /// single buffer for the validity (nulls) bitmap
-    buffers: std.ArrayList(org.apache.arrow.flatbuf.BufferT) = .{},
+    buffers: std.ArrayList(org.apache.arrow.flatbuf.BufferT) = .empty,
     /// Optional compression of the message body
     compression: ?*org.apache.arrow.flatbuf.BodyCompressionT = null,
     /// Some types such as Utf8View are represented using a variable number of buffers.
@@ -60,11 +60,11 @@ pub const RecordBatchT = struct {
     ///
     /// This field may be omitted if and only if the schema contains no Fields with
     /// a variable number of buffers, such as BinaryView and Utf8View.
-    variadicBufferCounts: std.ArrayList(i64) = .{},
+    variadicBufferCounts: std.ArrayList(i64) = .empty,
 
     pub fn Pack(rcv: RecordBatchT, __builder: *Builder, __pack_opts: fb.common.PackOptions) fb.common.PackError!u32 {
         _ = .{__pack_opts};
-        var __tmp_offsets = std.ArrayList(u32){};
+        var __tmp_offsets = std.ArrayList(u32).empty;
         defer if (__pack_opts.allocator) |alloc| __tmp_offsets.deinit(alloc);
         var nodes_off: u32 = 0;
         if (rcv.nodes.items.len != 0) {
